@@ -33,8 +33,14 @@ order (each ``<name>.md`` or ``<name>``):
 3. the installation (the tree Hermes runs from) — ``.agents/``, ``agents/``,
    ``skills/*/agents/`` (bundled skills), ``plugins/*/agents/`` (bundled plugins).
 
-A leading YAML front-matter block is metadata and is stripped. ``model`` pins the route as
-``provider:model``.
+A leading YAML front-matter block is an enforced contract (``tools/agent_definitions.py``): it may
+pin ``model`` (``provider:model`` or a bare name), ``toolsets``, ``read_only``,
+``max_iterations``, ``reasoning_effort``, ``worktree`` and the skip flags. Precedence per call is
+caller argument, then definition, then host default; the block itself is never sent to the model.
+The body is scanned with the same context-scope threat patterns a context file gets: a project
+definition that matches is blocked (an operator-owned profile or installation definition only
+warns). ``worktree: true`` (or the call argument) runs the agent in its own git worktree, which
+is inspected, pruned or archived after the run.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ from typing import Any, Optional
 from agent import agent_loop_service, agent_run, run_transcript
 from agent.skill_utils import find_project_root
 from hermes_constants import get_hermes_home
+from tools import agent_definitions
 from tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
@@ -84,8 +91,8 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _flag(args: dict[str, Any], name: str, default: bool) -> bool:
-    """A boolean argument; a string that is neither true nor false is an error."""
+def _flag(args: dict[str, Any], name: str, default: Optional[bool] = None) -> Optional[bool]:
+    """A boolean argument; omitted stays ``None`` so a definition's value can apply."""
     value = (args or {}).get(name)
     if value is None:
         return default
@@ -121,25 +128,25 @@ def _skill_name(args: dict[str, Any]) -> str:
     return _segment(args.get("skill_name"), "skill_name")
 
 
-def _model_route(args: dict[str, Any]) -> tuple[str, str]:
+def _split_model(raw: Any, label: str = "model") -> tuple[str, str]:
     """``(provider, model)`` from ``"provider:model"``; a bare value pins only the model."""
-    raw = _text(args.get("model"))
-    if not raw:
+    text = _text(raw)
+    if not text:
         return "", ""
-    provider, sep, model = raw.partition(":")
+    provider, sep, model = text.partition(":")
     if not sep:
-        return "", raw
+        return "", text
     provider, model = provider.strip(), model.strip()
     if not provider or not model:
-        raise ValueError(f"model must be 'provider:model' or a bare model name, got {raw!r}")
+        raise ValueError(f"{label} must be 'provider:model' or a bare model name, got {text!r}")
     return provider, model
 
 
-def _tool_sets(args: dict[str, Any]) -> tuple[list[str], bool]:
-    """``([], True)`` for every tool; ``(names, False)`` for an explicit surface."""
+def _tool_sets(args: dict[str, Any]) -> tuple[Optional[list[str]], bool]:
+    """``(None, False)`` when omitted (a definition may supply toolsets); ``([], True)`` means all."""
     raw = args.get("tool_sets")
     if raw is None:
-        return [], True
+        return None, False
     if isinstance(raw, str):
         raw = [raw]
     if not isinstance(raw, (list, tuple)):
@@ -201,52 +208,75 @@ def _skill_agent_dirs(skills_root: Path, skill_name: str) -> list[Path]:
     return [child / "agents" for child in names]
 
 
-def _prompt_dirs(project: Optional[Path], skill_name: str) -> list[Path]:
-    """Agent-definition directories in scan order, deduplicated.
+def _base_agent_dirs(base: Path, skill_name: str, plugins_rel: str) -> list[Path]:
+    """The definition directories one root contributes, in scan order."""
+    return ([base / ".agents", base / "agents"]
+            + _skill_agent_dirs(base / "skills", skill_name)
+            + _plugin_agent_dirs(base / plugins_rel))
+
+
+def _prompt_scopes(project: Optional[Path],
+                   skill_name: str) -> list[tuple[Path, str]]:
+    """``(directory, trust scope)`` in scan order, deduplicated.
 
     Project first, then the operator's profile, then the installation and its bundled skills and
-    plugins: a definition the project owns always beats a shipped one with the same name.
+    plugins: a definition the project owns always beats a shipped one with the same name. The
+    scope decides how a poisoned definition body is handled (project blocks, operator warns).
     """
-    dirs: list[Path] = []
+    scopes: list[tuple[Path, str]] = []
     for base in [base for base in (project, Path.cwd()) if base is not None]:
-        dirs += [base / ".agents", base / "agents"]
-        dirs += _skill_agent_dirs(base / "skills", skill_name)
-        dirs += _plugin_agent_dirs(base / ".hermes" / "plugins")
+        scopes += [(directory, "project")
+                   for directory in _base_agent_dirs(base, skill_name, ".hermes/plugins")]
     home = get_hermes_home()
-    dirs += [home / ".agents", home / "agents"]
-    dirs += _skill_agent_dirs(home / "skills", skill_name)
-    dirs += _plugin_agent_dirs(home / "plugins")
+    scopes += [(directory, "profile")
+               for directory in _base_agent_dirs(home, skill_name, "plugins")]
     root, bundled_skills, bundled_plugins = _install_roots()
-    dirs += [root / ".agents", root / "agents"]
-    dirs += _skill_agent_dirs(bundled_skills, skill_name)
-    dirs += _plugin_agent_dirs(bundled_plugins)
-    ordered: list[Path] = []
+    scopes += [(root / ".agents", "installation"), (root / "agents", "installation")]
+    scopes += [(directory, "installation")
+               for directory in _skill_agent_dirs(bundled_skills, skill_name)]
+    scopes += [(directory, "installation")
+               for directory in _plugin_agent_dirs(bundled_plugins)]
+    ordered: list[tuple[Path, str]] = []
     seen: set[str] = set()
-    for directory in dirs:
+    for directory, scope in scopes:
         key = os.path.normcase(str(directory))
         if key in seen:
             continue
         seen.add(key)
-        ordered.append(directory)
+        ordered.append((directory, scope))
     return ordered
 
 
-def _front_matter(text: str) -> str:
-    """*text* without a leading YAML front-matter block (metadata, not instructions)."""
-    if not text.startswith("---"):
-        return text
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return text
-    for index, line in enumerate(lines[1:], start=1):
-        if line.strip() != "---":
-            continue
-        block = lines[1:index]
-        if block and all(not row.strip() or row[:1].isspace() or ":" in row.split()[0]
-                         for row in block):
-            return "\n".join(lines[index + 1:])
-        return text
-    return text
+def _prompt_dirs(project: Optional[Path], skill_name: str) -> list[Path]:
+    """Agent-definition directories in scan order (see :func:`_prompt_scopes`)."""
+    return [directory for directory, _scope in _prompt_scopes(project, skill_name)]
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))
+    except OSError:
+        return False
+
+
+def _bundled_definition_paths(agent_name: str, skill_name: str) -> list[Path]:
+    """Definition files the shipped installation provides under *agent_name*."""
+    root, bundled_skills, bundled_plugins = _install_roots()
+    dirs = ([root / ".agents", root / "agents"]
+            + _skill_agent_dirs(bundled_skills, skill_name)
+            + _plugin_agent_dirs(bundled_plugins))
+    return [path for directory in dirs if (path := _prompt_path(directory, agent_name))]
+
+
+@dataclass(frozen=True)
+class _Definition:
+    """The resolved definition: its prompt body, where it came from, and its metadata."""
+
+    body: str
+    source: str
+    shadowed: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
 
 
 def _prompt_path(directory: Path, agent_name: str) -> Optional[Path]:
@@ -257,20 +287,46 @@ def _prompt_path(directory: Path, agent_name: str) -> Optional[Path]:
 
 
 def _system_prompt(project: Optional[Path], agent_name: str, skill_name: str,
-                   argument: str) -> tuple[str, str]:
-    """The agent's system prompt and where it came from: first prompt file, then the argument."""
-    for directory in _prompt_dirs(project, skill_name):
+                   argument: str) -> _Definition:
+    """The first usable definition; the argument is the last fallback.
+
+    Trust follows the directory: a *project* definition is cloned code, so a context-scope
+    injection match blocks that file and the scan continues; a *profile* or *installation*
+    definition is operator-owned, so a match only warns. A definition that shadows a shipped
+    persona is reported (``shadowed``), because the fixed name makes it a worthwhile target.
+    """
+    blocked: list[str] = []
+    bundled = _bundled_definition_paths(agent_name, skill_name)
+    for directory, scope in _prompt_scopes(project, skill_name):
         path = _prompt_path(directory, agent_name)
         if path is None:
             continue
         try:
-            body = _front_matter(path.read_text(encoding="utf-8-sig")).strip()
+            text = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError) as exc:
             logger.warning("agent: prompt %s unreadable: %s", path, exc)
             continue
-        if body:
-            return body, str(path)
-    return argument, ("argument" if argument else "")
+        metadata, body = agent_definitions.parse_definition(text, source=str(path))
+        if not body:
+            continue
+        findings = agent_definitions.body_threats(body)
+        if findings:
+            detail = ", ".join(findings)
+            if scope == "project":
+                logger.warning("agent: project definition %s blocked: %s", path, detail)
+                blocked.append(f"{path} ({detail})")
+                continue
+            logger.warning("agent: definition %s matched injection pattern(s) %s; loaded "
+                           "anyway because it is operator-owned — review it if you did not "
+                           "write it", path, detail)
+        shadowed = bool(bundled) and not any(_same_path(path, shipped) for shipped in bundled)
+        if shadowed:
+            logger.warning("agent: definition %s shadows bundled %s", path, bundled[0])
+        return _Definition(body=body, source=str(path), shadowed=shadowed, metadata=metadata)
+    if blocked and not argument:
+        raise agent_definitions.DefinitionError(
+            "agent definition blocked (prompt-injection patterns): " + "; ".join(blocked))
+    return _Definition(body=argument, source=("argument" if argument else ""))
 
 
 def _allowed_roots(project: Optional[Path]) -> list[Path]:
@@ -371,6 +427,11 @@ class _Run:
     path: Path
     goal: str
     depth: int
+    read_only: bool
+    max_iterations: int
+    reasoning_effort: str
+    worktree: bool
+    shadowed: bool
     flags: dict[str, bool] = field(default_factory=dict)
 
 
@@ -406,6 +467,10 @@ def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
         "role": "agent",
         "toolsets": list(payload.get("toolsets") or run.toolsets),
     }
+    if run.shadowed:
+        event["definition_shadowed"] = True
+    if payload.get("worktree"):
+        event["worktree"] = payload["worktree"]
     if error is not None:
         event["error"] = body
     try:
@@ -437,6 +502,10 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "skip_context_files": flags.get("skip_context_files", False),
         "skip_background_review": flags.get("skip_background_review", True),
         "load_soul_identity": flags.get("load_soul_identity", True),
+        "read_only": run.read_only,
+        "max_iterations": run.max_iterations,
+        "reasoning_effort": run.reasoning_effort,
+        "worktree": run.worktree,
     }
 
 
@@ -449,49 +518,117 @@ def _payload(result: agent_run.AgentRunResult, run: _Run) -> dict[str, Any]:
         "context_files": run.context_count,
         "transcript_path": str(run.path),
     })
+    if run.shadowed:
+        payload["definition_shadowed"] = True
     return payload
 
 
-def _validate(args: dict[str, Any]) -> tuple[str, str, str, str, str, list[str], bool, bool,
-                                           dict[str, bool], Optional[Path]]:
-    """Parse every argument once; ``ValueError`` carries the caller-facing message."""
+@dataclass(frozen=True)
+class _Call:
+    """One validated call: caller arguments merged with the definition and host defaults."""
+
+    agent: str
+    user_prompt: str
+    definition: _Definition
+    provider_name: str
+    model_name: str
+    toolsets: list[str]
+    all_tools: bool
+    background: bool
+    read_only: bool
+    max_iterations: int
+    reasoning_effort: str
+    worktree: bool
+    flags: dict[str, bool]
+    project: Optional[Path]
+
+
+#: Host defaults per knob; a definition overrides them, a caller argument overrides both.
+_KNOB_DEFAULTS: dict[str, Any] = {
+    "background": True,
+    "skip_memory": False,
+    "skip_context_files": False,
+    "skip_background_review": True,
+    "load_soul_identity": True,
+    "read_only": False,
+    "max_iterations": agent_run.MAX_ITERATIONS,
+    "reasoning_effort": "",
+    "worktree": False,
+    "toolsets": None,
+    "model": "",
+}
+
+
+def _caller_knobs(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """``(caller values, all_tools)``: ``None`` wherever the caller omitted the argument."""
+    toolsets, all_tools = _tool_sets(args)
+    if toolsets:
+        from toolsets import validate_toolset
+
+        unknown = [name for name in toolsets if not validate_toolset(name)]
+        if unknown:
+            raise ValueError(f"unknown toolset(s): {', '.join(unknown)}")
+    model = _text(args.get("model"))
+    if model:
+        _split_model(model)  # validate the caller's route before it can outrank a definition
+    knobs: dict[str, Any] = {
+        name: _flag(args, name) for name in (
+            "background", "skip_memory", "skip_context_files", "skip_background_review",
+            "load_soul_identity", "worktree")}
+    knobs["toolsets"] = toolsets
+    knobs["model"] = model or None
+    return knobs, all_tools
+
+
+def _validate(args: dict[str, Any]) -> _Call:
+    """Parse the call once: arguments, then the definition, then the merged knobs.
+
+    ``ValueError`` carries the caller-facing message; it is raised before any run or background
+    dispatch, so a refused call constructs no agent.
+    """
     name = _agent_name(args)
     user_prompt = _text(args.get("user_prompts"))
     if not user_prompt:
         raise ValueError("user_prompts is required")
     skill_name = _skill_name(args)
-    provider_name, model_name = _model_route(args)
     project = _project(args.get("project_dir"))
-    toolsets, all_tools = _tool_sets(args)
-    background = _flag(args, "background", True)
-    flags = {
-        "skip_memory": _flag(args, "skip_memory", False),
-        "skip_context_files": _flag(args, "skip_context_files", False),
-        "skip_background_review": _flag(args, "skip_background_review", True),
-        "load_soul_identity": _flag(args, "load_soul_identity", True),
-    }
-    return (name, user_prompt, skill_name, provider_name, model_name, toolsets, all_tools,
-            background, flags, project)
+    definition = _system_prompt(project, name, skill_name, _text(args.get("system_prompts")))
+    caller, all_tools = _caller_knobs(args)
+    knobs = agent_definitions.resolve(caller, definition.metadata, _KNOB_DEFAULTS)
+    provider_name, model_name = _split_model(knobs["model"])
+    toolsets = [str(name) for name in (knobs["toolsets"] or [])]
+    if not toolsets or "*" in toolsets or "all" in toolsets:
+        all_tools, toolsets = True, []
+    return _Call(
+        agent=name, user_prompt=user_prompt, definition=definition,
+        provider_name=provider_name, model_name=model_name, toolsets=toolsets,
+        all_tools=all_tools, background=bool(knobs["background"]),
+        read_only=bool(knobs["read_only"]),
+        max_iterations=max(1, int(knobs["max_iterations"])),
+        reasoning_effort=str(knobs["reasoning_effort"]), worktree=bool(knobs["worktree"]),
+        flags={key: bool(knobs[key]) for key in
+               ("skip_memory", "skip_context_files", "skip_background_review",
+                "load_soul_identity")},
+        project=project)
+
 
 
 def agent_tool(args: dict[str, Any], *, session_id: str = "",
                task_id: Optional[str] = None, **_: Any) -> str:
     """Run one named agent (background by default) and return a JSON payload."""
     try:
-        (name, user_prompt, skill_name, provider_name, model_name, toolsets, all_tools,
-         background, flags, project) = _validate(args)
+        call = _validate(args)
     except ValueError as exc:
         return tool_error(str(exc))
     depth = _DEPTH.get()
     if depth >= MAX_DEPTH:
         return tool_error(f"agent recursion limit ({MAX_DEPTH}) reached")
-    system_prompt, prompt_source = _system_prompt(project, name, skill_name,
-                                                  _text(args.get("system_prompts")))
     try:
-        context, context_count = _context_files(args, project)
+        context, context_count = _context_files(args, call.project)
     except ValueError as exc:
         return tool_error(str(exc))
 
+    name = call.agent
     parent_session = str(session_id or "").strip()
     history_key = parent_session or f"{name}-{int(time.time() * 1000)}"
     path = run_transcript.path_for(name, history_key)
@@ -501,17 +638,20 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
             history = run_transcript.read_history(name, parent_session)
         except Exception:  # health: allow BLE001 -- a history read must not stop the run
             logger.debug("agent: history read failed", exc_info=True)
-    run = _Run(agent=name, session_key=parent_session, user_prompt=user_prompt,
-               system_prompt=system_prompt, prompt_source=prompt_source, context=context,
-               context_count=context_count, provider_name=provider_name,
-               model_name=model_name, toolsets=toolsets, all_tools=all_tools,
-               project_dir=str(project) if project else "", path=path,
-               goal=_goal(user_prompt), depth=depth + 1, flags=flags)
+    run = _Run(agent=name, session_key=parent_session, user_prompt=call.user_prompt,
+               system_prompt=call.definition.body, prompt_source=call.definition.source,
+               context=context, context_count=context_count,
+               provider_name=call.provider_name, model_name=call.model_name,
+               toolsets=call.toolsets, all_tools=call.all_tools,
+               project_dir=str(call.project) if call.project else "", path=path,
+               goal=_goal(call.user_prompt), depth=depth + 1, read_only=call.read_only,
+               max_iterations=call.max_iterations, reasoning_effort=call.reasoning_effort,
+               worktree=call.worktree, shadowed=call.definition.shadowed, flags=call.flags)
 
-    if not background:
+    if not call.background:
         token = _DEPTH.set(depth + 1)
         try:
-            result = agent_run.run(user_prompt, **_params(run, history or None))
+            result = agent_run.run(call.user_prompt, **_params(run, history or None))
         except Exception as exc:  # the tool loop gets a message, not a traceback
             logger.warning("agent %s failed: %s", name, exc, exc_info=True)
             return tool_error(f"agent run failed: {exc}")
@@ -527,7 +667,7 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
     token = _DEPTH.set(depth + 1)
     try:
         job = agent_loop_service.service().submit(
-            lambda: agent_run.run(user_prompt, **_params(run, history or None)),
+            lambda: agent_run.run(call.user_prompt, **_params(run, history or None)),
             label=name, session_key=parent_session,
             on_settle=lambda settled, value, error: _notify(run, settled, value, error))
     except agent_loop_service.AgentLoopQueueFull as exc:
@@ -551,7 +691,9 @@ AGENT_SCHEMA: dict[str, Any] = {
         "Run one named agent with its own prompt, tools and on-disk history. "
         "The agent definition is <agent_name>.md (or <agent_name>) searched in the project, "
         "profile and installation .agents//agents/ directories, plugin agents/ directories and "
-        "skills/<skill_name>/agents/; agent_name and user_prompts are required. By default the "
+        "skills/<skill_name>/agents/; agent_name and user_prompts are required. The definition's "
+        "front matter may pin model, toolsets, read_only, max_iterations, reasoning_effort, "
+        "worktree and the skip flags; a caller argument overrides it. By default the "
         "run is background and the answer arrives as a completion; background=false blocks and "
         "returns the answer. Each agent keeps its own history at "
         "sessions/<agent_name>/<session_id>.jsonl under the profile home, so a later run with "
@@ -605,6 +747,14 @@ AGENT_SCHEMA: dict[str, Any] = {
             "background": {
                 "type": "boolean",
                 "description": "true (default) returns a job and delivers the answer later; false blocks.",
+            },
+            "worktree": {
+                "type": "boolean",
+                "description": (
+                    "Run in an isolated git worktree off HEAD; the run's edits land on its own "
+                    "branch. Off by default; degrades to the shared workspace outside git or on a "
+                    "non-local terminal backend, and the payload says which happened."
+                ),
             },
             "skip_memory": {"type": "boolean", "description": "Run without host memory context."},
             "skip_context_files": {

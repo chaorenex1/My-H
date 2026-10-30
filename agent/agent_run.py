@@ -31,9 +31,11 @@ import asyncio
 import contextlib
 import itertools
 import logging
+import os
 import time
+import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from . import run_transcript
@@ -79,13 +81,19 @@ class AgentRunResult:
     usage: dict[str, Any] = field(default_factory=dict)
     transcript_path: str = ""
     transcript_written: bool = False
+    #: Worktree isolation outcome: the inspected payload when it engaged, a ``requested``/
+    #: ``created: false`` note when it was asked for and could not be set up. Empty when off.
+    worktree: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         """The tool/plugin JSON face: ``messages`` stay out (they are history, not an answer)."""
-        return {"answer": self.answer, "api_calls": self.api_calls, "model": self.model,
+        data = {"answer": self.answer, "api_calls": self.api_calls, "model": self.model,
                 "provider": self.provider, "toolsets": list(self.toolsets),
                 "usage": dict(self.usage), "transcript_path": self.transcript_path,
                 "transcript_written": self.transcript_written}
+        if self.worktree:
+            data["worktree"] = dict(self.worktree)
+        return data
 
 
 def _config() -> dict[str, Any]:
@@ -209,6 +217,56 @@ def _configure_tool_guardrails(agent: Any, settings: Mapping[str, Any]) -> None:
         logger.debug("agent_run: tool guardrails not applied", exc_info=True)
 
 
+def _attach_worktree(project_dir: str, agent_name: str) -> Optional[dict[str, str]]:
+    """Opt-in git worktree for one named run; ``None`` when isolation cannot engage.
+
+    Reuses the delegation worktree helper: git-only, local-backend-only, and a failure degrades
+    to the shared workspace instead of failing the run.
+    """
+    try:
+        from tools import subagent_worktree
+
+        if not subagent_worktree.local_backend_active():
+            logger.debug("agent_run: worktree isolation skipped (non-local terminal backend)")
+            return None
+        return subagent_worktree.create_subagent_worktree(
+            project_dir or os.getcwd(),
+            subagent_id=f"agent-{agent_name}-{uuid.uuid4().hex[:8]}")
+    except Exception:  # health: allow BLE001 -- isolation is opt-in, never a run precondition
+        logger.warning("agent_run: worktree isolation setup failed", exc_info=True)
+        return None
+
+
+def _finalize_worktree(info: dict[str, str]) -> dict[str, Any]:
+    """Inspect/prune/archive after the run; an inspection failure is reported, never raised."""
+    from tools import subagent_worktree
+
+    try:
+        return subagent_worktree.finalize_subagent_worktree(info)
+    except Exception as exc:  # health: allow BLE001 -- the answer stands; the tree is kept
+        logger.warning("agent_run: worktree finalize failed: %s", exc, exc_info=True)
+        return subagent_worktree.unproven_worktree_payload(info, f"finalize raised: {exc}")
+
+
+def _seed_task_cwd(task_id: str, cwd: str) -> None:
+    """Point this run's tool calls at *cwd*: terminal/file tools read the task's cwd record."""
+    try:
+        from tools.terminal_tool import record_session_cwd
+
+        record_session_cwd(task_id, cwd)
+    except Exception:  # health: allow BLE001 -- a host without terminal state still runs
+        logger.debug("agent_run: cwd seed failed", exc_info=True)
+
+
+def _clear_task_cwd(task_id: str) -> None:
+    try:
+        from tools.terminal_tool import clear_session_cwd
+
+        clear_session_cwd(task_id)
+    except Exception:  # health: allow BLE001 -- cleanup is best-effort
+        logger.debug("agent_run: cwd clear failed", exc_info=True)
+
+
 def _account(session_id: str, task: str, result: AgentRunResult) -> None:
     """Bill the run to the conversation its caller scoped, under the caller's task name."""
     if not session_id or not task or not result.usage:
@@ -262,6 +320,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         skip_background_review: bool = True, load_soul_identity: bool = False,
         extra_tools: Optional[Sequence[Mapping[str, Any]]] = None, cache_scope: str = "",
         tool_guardrails: Optional[Mapping[str, Any]] = None,
+        reasoning_effort: str = "", worktree: bool = False,
         meta: Optional[Mapping[str, Any]] = None, record_history: bool = True) -> AgentRunResult:
     """Run one agent loop on *message* and return its answer. Never leaves an agent open.
 
@@ -269,7 +328,9 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
     host owns the system prompt). ``session_id`` keeps this run's host session distinct from the
     caller's; an empty value lets the host mint one. ``layer`` names the run for history and
     ``meta`` carries identifiers only. ``all_tools`` passes every host tool; otherwise
-    ``toolsets`` is the exact surface (an empty list is "no tools").
+    ``toolsets`` is the exact surface (an empty list is "no tools"). ``reasoning_effort`` pins a
+    level when given (it outranks config for this run). ``worktree`` runs in a fresh git worktree
+    off HEAD: the run's tools start there, and the tree is inspected, pruned or archived after.
     """
     from run_agent import AIAgent  # first: the managed-environment bootstrap replaces sys.path
 
@@ -277,6 +338,15 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
     knobs = _agent_kwargs(runtime, final_model)
     if str(api_mode or "").strip():
         knobs["api_mode"] = str(api_mode).strip()
+    if reasoning_effort:
+        from hermes_constants import parse_reasoning_effort
+
+        parsed_effort = parse_reasoning_effort(reasoning_effort)
+        if parsed_effort is None:
+            raise ValueError(f"unknown reasoning_effort: {reasoning_effort!r}")
+        # After the host resolution on purpose: an explicit level wins over config.yaml, while a
+        # caller-pinned model still resolves its own route and credentials.
+        knobs["reasoning_config"] = parsed_effort
     final_provider = str(knobs.get("provider") or provider or runtime.get("provider") or "")
     tools = [str(tool) for tool in (toolsets or [])]
     conversation = [dict(row) for row in (history or ())
@@ -286,6 +356,22 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
     agent_name = str(layer or (meta or {}).get("agent") or "agent").strip() or "agent"
     history_key = str(history_session or session_id or "").strip()
     run_id = f"{agent_name}-{int(time.time() * 1000)}-{next(_SEQUENCE)}"
+    task_id = run_id
+    cwd = str(project_dir) if project_dir else None
+    worktree_info = _attach_worktree(cwd or "", agent_name) if worktree else None
+    if worktree_info is not None:
+        cwd = worktree_info["path"]
+        _seed_task_cwd(task_id, cwd)
+        from tools.subagent_worktree import build_worktree_context_note
+
+        context = (context + build_worktree_context_note(worktree_info)).strip()
+    worktree_result: Optional[dict[str, Any]] = None
+    if worktree and worktree_info is None:
+        worktree_result = {
+            "requested": True, "created": False,
+            "note": "worktree isolation unavailable (not a git work tree, non-local terminal "
+                    "backend, or creation failed); the run used the shared workspace.",
+        }
     agent = AIAgent(
         model=final_model,
         **knobs,
@@ -294,7 +380,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         max_iterations=max(1, int(max_iterations or MAX_ITERATIONS)),
         quiet_mode=True,
         platform="subagent",
-        cwd=str(project_dir) if project_dir else None,
+        cwd=cwd,
         skip_context_files=bool(skip_context_files),
         skip_memory=bool(skip_memory),
         skip_background_review=bool(skip_background_review),
@@ -303,6 +389,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
                      if isinstance(tool, Mapping)],
         cache_scope=str(cache_scope or "").strip(),
     )
+    finalized = False
     try:
         if tool_guardrails:
             _configure_tool_guardrails(agent, tool_guardrails)
@@ -310,7 +397,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
             apply_read_only(agent)
         result = agent.run_conversation(
             _prompt(message, context), system_message=system or None,
-            conversation_history=conversation or None)
+            conversation_history=conversation or None, task_id=task_id)
         messages = _with_reasoning(
             _transcript(result), result.get("reasoning_content") or result.get("reasoning"))
         if not messages:
@@ -333,13 +420,20 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
             path, written = _record_history(agent_name, history_key, messages, run_id=run_id,
                                             model=final_model, provider=final_provider,
                                             system=system, usage=usage)
-            peer = AgentRunResult(
-                answer=peer.answer, api_calls=peer.api_calls, model=peer.model,
-                provider=peer.provider, toolsets=peer.toolsets, messages=peer.messages,
-                usage=peer.usage, transcript_path=path, transcript_written=written)
+            peer = replace(peer, transcript_path=path, transcript_written=written)
+        if worktree_info is not None:
+            worktree_result = _finalize_worktree(worktree_info)
+            finalized = True
+        if worktree_result is not None:
+            peer = replace(peer, worktree=worktree_result)
         _account(history_key, account_task, peer)
         return peer
     finally:
+        if worktree_info is not None:
+            # A failed run still leaves a tree behind: inspect it before the cwd record goes.
+            if not finalized:
+                _finalize_worktree(worktree_info)
+            _clear_task_cwd(task_id)
         # One agent per run in a long-lived host: close() releases tool subprocesses and HTTP
         # clients, otherwise every run leaks them.
         with contextlib.suppress(Exception):

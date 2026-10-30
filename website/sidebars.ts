@@ -168,6 +168,15 @@ const sidebars: SidebarsConfig = {
               items: [
                 {
                   type: 'category',
+                  label: 'agent-presets',
+                  key: 'skills-bundled-agent-presets',
+                  collapsed: true,
+                  items: [
+                    'user-guide/skills/bundled/agent-presets/agent-presets-agent-presets',
+                  ],
+                },
+                {
+                  type: 'category',
                   label: 'apple',
                   key: 'skills-bundled-apple',
                   collapsed: true,
