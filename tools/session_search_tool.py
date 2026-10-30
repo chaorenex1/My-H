@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Session Search Tool - long-term conversation recall over the SQLite session DB.
 
-Single-shape tool; the mode is inferred from the args: DISCOVERY (``query``;
-FTS5 deduped by lineage, adaptive detail hydrates only the top result),
-SCROLL (``session_id`` + ``around_message_id``; ±window around the anchor),
-READ (``session_id`` alone; whole session or head/tail), BROWSE (no args).
-No LLM calls — every shape returns actual DB messages.
+Single-shape tool; the mode is inferred from the args (or named explicitly with
+``mode``): DISCOVERY (``query``; FTS5 deduped by lineage, adaptive detail hydrates
+only the top result, with ``match``/``source``/time filters), SCROLL
+(``session_id`` + ``around_message_id``; ±window around the anchor), READ
+(``session_id`` alone; whole session or head/tail, optionally including inactive or
+compaction-archived rows), BROWSE (no args), STATS (``mode='stats'``; counts,
+role/source breakdown, time span, index health). No LLM calls — every shape returns
+actual DB messages.
 """
 
 import json
 import logging
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone, UTC
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from hermes_state_common import _BOUNDARY_END_REASONS
@@ -46,6 +51,12 @@ _EXCLUDE_SESSION_IDS_CAP = 20
 # Relative time bounds: "7d" / "24h" / "2w" = now minus N hours/days/weeks.
 _RELATIVE_BOUND_RE = re.compile(r"^(\d+)\s*(h|d|w)$", re.IGNORECASE)
 _RELATIVE_UNIT_SECONDS = {"h": 3600, "d": 86400, "w": 604800}
+# Explicit shape selection (stats has no inferred form; the others may stay inferred).
+_MODES = ("auto", "search", "read", "scroll", "browse", "stats")
+# How the query terms combine. "all" is FTS5's implicit AND (the historical behaviour).
+_MATCH_MODES = ("all", "any", "phrase", "raw")
+_TERM_RE = re.compile(r'"[^"]*"|\S+')
+_BOOLEAN_RE = re.compile(r"(?i)\b(?:AND|OR|NOT)\b")
 # Raw FTS rows are only a plan input; the response hydrates its own window/bookends.
 _DISCOVER_SEARCH_FIELDS = ("id", "session_id", "role", "snippet", "source", "model", "session_started")
 # Compaction handoff summaries (agent/context_compressor.py); excluded from bookends.
@@ -189,6 +200,83 @@ def _normalize_exclude_session_ids(raw: Any) -> list[str]:
     return out
 
 
+def _normalize_sources(raw: Any) -> Optional[list[str]]:
+    """Comma-separated ``sessions.source`` filter -> list; ``"*"`` (all sources) -> None."""
+    if not isinstance(raw, str):
+        return None
+    values = [part.strip() for part in raw.split(",") if part.strip()]
+    if not values or values == ["*"]:
+        return None
+    return values
+
+
+def _apply_match(query: str, match: Optional[str]) -> str:
+    """Combine query terms per ``match``: all (AND, default), any (OR), phrase, raw.
+
+    ``raw`` and any query carrying explicit FTS5 booleans are passed through; the DB
+    sanitizer still bounds and quotes them. ``phrase`` wraps the whole query once.
+    """
+    mode = match.strip().lower() if isinstance(match, str) else "all"
+    text = query.strip()
+    if mode not in _MATCH_MODES or mode == "raw" or not text:
+        return text
+    if mode == "phrase":
+        if len(text) > 1 and text.startswith('"') and text.endswith('"'):
+            return text
+        return f'"{text}"'
+    if mode == "any" and not _BOOLEAN_RE.search(text):
+        terms = _TERM_RE.findall(text)
+        return " OR ".join(terms) if len(terms) > 1 else text
+    return text
+
+
+def _store_distributions(path: Path) -> dict[str, Any]:
+    """Role/source counts and message time span; each field degrades to None/{} on error."""
+    out: dict[str, Any] = {"roles": {}, "sources": {}, "oldest_message_at": None, "newest_message_at": None}
+    try:
+        conn = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=2.0)
+    except (sqlite3.Error, OSError, ValueError) as e:
+        logging.debug("session_search stats: cannot open %s: %s", path, e)
+        return out
+    try:
+        def _rows(sql: str) -> list[Any]:
+            try:
+                return conn.execute(sql).fetchall()
+            except sqlite3.Error:
+                return []
+        out["roles"] = {str(role): int(count) for role, count in _rows(
+            "SELECT role, COUNT(*) FROM messages GROUP BY role") if role is not None}
+        out["sources"] = {str(source): int(count) for source, count in _rows(
+            "SELECT source, COUNT(*) FROM sessions GROUP BY source") if source is not None}
+        span = _rows("SELECT MIN(timestamp), MAX(timestamp) FROM messages")
+        if span:
+            out["oldest_message_at"], out["newest_message_at"] = span[0]
+    finally:
+        _quiet(conn.close, None, "session_search stats: close failed")
+    return out
+
+
+def _stats(db, profile: Optional[str] = None) -> str:
+    """Store aggregate shape: counts, role/source distributions, time span, FTS/file state."""
+    path = _quiet(lambda: Path(db.db_path), None, "stats: database has no db_path")
+    if path is None:
+        return tool_error("stats requires a session database backed by a file", success=False)
+    from hermes_state_dbfile import collect_state_db_stats
+    file_stats = _quiet(lambda: collect_state_db_stats(path), {}, "stats: collect_state_db_stats failed")
+    dist = _store_distributions(path)
+    return _ok(
+        mode="stats", db_path=str(path), profile=profile or None,
+        messages=file_stats.get("messages"), sessions=file_stats.get("sessions"),
+        logical_size_bytes=file_stats.get("logical_size_bytes"), wal_size_bytes=file_stats.get("wal_size_bytes"),
+        journal_mode=file_stats.get("journal_mode"), fts_tables=file_stats.get("fts_tables"),
+        fts_rebuild_pending=file_stats.get("fts_rebuild_pending"),
+        roles=dist["roles"], sources=dist["sources"],
+        oldest_message_at=_format_timestamp(dist["oldest_message_at"]),
+        newest_message_at=_format_timestamp(dist["newest_message_at"]),
+    )
+
+
+
 def _excluded_lineage_roots(db, exclude_session_ids: list[str]) -> set[str]:
     """The excluded ids plus their lineage roots, so a child id also hides its parent chain."""
     roots: set[str] = set()
@@ -273,7 +361,9 @@ def _discovery_entry(lineage_root: Optional[str], **fields) -> dict[str, Any]:
     return entry
 
 
-def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> Optional[dict[str, Any]]:
+def _title_match_result(db, query: str, current_lineage_root: Optional[str],
+                        sources: Optional[list[str]] = None,
+                        include_hidden: bool = False) -> Optional[dict[str, Any]]:
     """Discovery-shaped result when the query matches a session title, else None."""
     title_query = query.strip().strip("`'\"")  # models often quote a remembered title
     session_id = title_query and _quiet(lambda: db.resolve_session_by_title(title_query), None,
@@ -287,7 +377,10 @@ def _title_match_result(db, query: str, current_lineage_root: Optional[str]) -> 
         return None
     session_meta = _quiet(lambda: db.get_session(lineage_root) or db.get_session(session_id), None,
                           "get_session failed for title match %s", session_id) or {}
-    if session_meta.get("source") in _HIDDEN_SESSION_SOURCES:
+    source_name = session_meta.get("source")
+    if sources is not None and source_name not in sources:
+        return None
+    if sources is None and not include_hidden and source_name in _HIDDEN_SESSION_SOURCES:
         return None
     messages = _quiet(lambda: db.get_messages(session_id), [], "get_messages failed for title match %s", session_id)
     anchor_id = messages[0].get("id") if messages else None
@@ -354,11 +447,15 @@ def _hydrate_hit(db, lineage_root: str, match_info: dict[str, Any], result_detai
 def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort: Optional[str],
               detail: str, current_session_id: str | None = None, link_profile: str | None = None,
               after_ts: Optional[int] = None, before_ts: Optional[int] = None,
-              exclude_session_ids: Optional[list[str]] = None) -> str:
+              exclude_session_ids: Optional[list[str]] = None, match: Optional[str] = None,
+              source: Optional[str] = None, include_inactive: bool = False) -> str:
     """Discovery shape: FTS5 plus adaptive or full result hydration."""
     current_lineage_root = _resolve_lineage(db, current_session_id) if current_session_id else None
     excluded_roots = _excluded_lineage_roots(db, exclude_session_ids or [])
-    title_result = _title_match_result(db, query, current_lineage_root)
+    source_text = source.strip() if isinstance(source, str) else ""
+    include_hidden = source_text == "*"
+    sources = None if include_hidden else _normalize_sources(source)
+    title_result = _title_match_result(db, query, current_lineage_root, sources, include_hidden)
     # FTS rows are time-bounded in SQL (_search_filter_clauses); the title match bypasses that
     # query, so it is the one place the window is re-checked in Python.
     if title_result:
@@ -367,9 +464,11 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
         if {title_sid, title_root} & excluded_roots or not _in_time_window(title_started, after_ts, before_ts):
             title_result = None
     raw_results, err = _loud(lambda: db.search_messages(
-        query=query, role_filter=role_filter or ["user", "assistant"],
-        exclude_sources=list(_HIDDEN_SESSION_SOURCES), limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
-        fields=_DISCOVER_SEARCH_FIELDS, after_ts=after_ts, before_ts=before_ts), "FTS5 search failed: %s", "Search failed")
+        query=_apply_match(query, match), role_filter=role_filter or ["user", "assistant"],
+        source_filter=sources, exclude_sources=None if sources or include_hidden else list(_HIDDEN_SESSION_SOURCES),
+        include_inactive=include_inactive, limit=_DISCOVER_SCAN_LIMIT, offset=0, sort=sort,
+        fields=_DISCOVER_SEARCH_FIELDS, after_ts=after_ts, before_ts=before_ts),
+        "FTS5 search failed: %s", "Search failed")
     if err:
         return err
     # Demote cron rows below interactive ones BEFORE dedup so a high-volume cron corpus
@@ -378,7 +477,10 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
     raw_results = sorted(raw_results, key=lambda r: (r.get("source") or "") in _DEMOTED_SESSION_SOURCES)
     # See #19434.
     if not raw_results and not title_result:
-        return _discover_payload(db, query, detail, [], message=(
+        return _discover_payload(db, query, detail, [], filters={
+            "match": (match or "all").strip().lower() if isinstance(match, str) else "all",
+            "source": None if include_hidden else sources,
+            "include_inactive": bool(include_inactive)}, message=(
             "No matching sessions found. FTS5 ANDs all terms by default — "
             "broaden with OR (`alpha OR beta`), exact-match with quoted "
             "phrases, exclude with NOT, or prefix-match with `deploy*`."))
@@ -423,7 +525,9 @@ def _discover(db, query: str, role_filter: Optional[list[str]], limit: int, sort
             results.append(entry)
     for entry in results:
         entry["link"] = _session_link(entry["session_id"], link_profile)
-    return _discover_payload(db, query, detail, results, sessions_searched=len(seen_sessions), link_hint=(
+    return _discover_payload(db, query, detail, results, sessions_searched=len(seen_sessions), filters={
+        "match": (match or "all").strip().lower() if isinstance(match, str) else "all",
+        "source": None if include_hidden else sources, "include_inactive": bool(include_inactive)}, link_hint=(
         "When referring the user to a session, write its `link` value "
         "verbatim inline mid-sentence (it renders as a titled link) — never "
         "as markdown, in backticks, on its own line, or next to the "
@@ -444,25 +548,29 @@ def _resolve_profile_db(profile: str):
     return SessionDB(db_path=profiles_mod.get_profile_dir(canon) / "state.db", read_only=True)
 
 
-def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str | None = None) -> str:
+def _read_session(db, session_id: str, head: int = 20, tail: int = 10, link_profile: str | None = None,
+                  include_inactive: bool = False, include_compacted: bool = False) -> str:
     """Read shape: whole session, or ``head`` + ``tail`` messages with a scroll pointer."""
     meta = _get_session_meta(db, session_id)
     if not meta:
         return tool_error(f"session_id not found: {session_id}", success=False)
-    rows, err = _loud(lambda: db.get_messages(session_id), "get_messages failed for %s: %s", "failed to load session",
-                      session_id)
+    rows, err = _loud(lambda: db.get_messages(
+        session_id, include_inactive=include_inactive, include_compacted=include_compacted),
+        "get_messages failed for %s: %s", "failed to load session", session_id)
     if err:
         return err
     shaped = [_shape_message(m, max_content_len=_READ_MAX_CONTENT) for m in rows]
     total, truncated = len(shaped), len(shaped) > head + tail
     return _ok(mode="read", session_id=session_id, link=_session_link(session_id, link_profile),
                session_meta=_session_meta_block(meta), message_count=total, truncated=truncated,
+               include_inactive=bool(include_inactive), include_compacted=bool(include_compacted),
                messages=shaped[:head] + shaped[-tail:] if truncated else shaped,
                **({"message": (f"Session has {total} messages; showing first {head} + last {tail}. "
                                "Pass around_message_id (any id above) to scroll the middle.")} if truncated else {}))
 
 
-def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
+def _read_scoped(db, sid: str, profile: Optional[str], include_inactive: bool = False,
+                 include_compacted: bool = False) -> str:
     """Read shape scoped to ONE store: the caller's profile, or the profile it named.
 
     A miss is a miss. Profiles are isolated islands, so a bare id never falls through to
@@ -470,7 +578,8 @@ def _read_scoped(db, sid: str, profile: Optional[str]) -> str:
     transcript to any caller holding the id (#106761). The hint tells the model how to
     ask properly: ``@session:<profile>/<id>`` or ``profile=``.
     """
-    result = _read_session(db, sid, link_profile=profile)
+    result = _read_session(db, sid, link_profile=profile, include_inactive=include_inactive,
+                           include_compacted=include_compacted)
     if json.loads(result).get("success") is not False or profile:
         return result
     return tool_error(f"session_id not found in this profile: {sid}. If it belongs to another "
@@ -576,14 +685,28 @@ def _scroll(db, session_id: str, around_message_id: int, window: int = 5,
 
 def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
               around_message_id, window, sort, profile, detail,
-              after=None, before=None, exclude_session_ids=None) -> str:
-    """Mode dispatch (see module docstring); scroll wins when an anchor is set."""
-    if isinstance(session_id, str) and session_id.strip():
-        if around_message_id is not None:
-            return _scroll(db, session_id.strip(), around_message_id, window, current_session_id)
-        return _read_scoped(db, session_id.strip(), profile)
+              after=None, before=None, exclude_session_ids=None, mode=None, match=None,
+              source=None, include_inactive=False, include_compacted=False) -> str:
+    """Mode dispatch (see module docstring); explicit ``mode`` wins, else shapes are inferred."""
+    shape = mode.strip().lower() if isinstance(mode, str) and mode.strip() else "auto"
+    if shape not in _MODES:
+        return tool_error(f"mode must be one of {', '.join(_MODES)}", success=False)
+    if shape == "stats":
+        return _stats(db, profile)
+    sid = session_id.strip() if isinstance(session_id, str) and session_id.strip() else None
+    if shape == "scroll" or (shape == "auto" and sid and around_message_id is not None):
+        if not sid or around_message_id is None:
+            return tool_error("scroll requires session_id and around_message_id", success=False)
+        return _scroll(db, sid, around_message_id, window, current_session_id)
+    if shape == "read" or (shape == "auto" and sid):
+        if not sid:
+            return tool_error("read requires session_id", success=False)
+        return _read_scoped(db, sid, profile, include_inactive=include_inactive,
+                            include_compacted=include_compacted)
+    if shape == "search" and (not query or not isinstance(query, str) or not query.strip()):
+        return tool_error("search requires a query", success=False)
     limit = _clamp_int(limit, 3, 1, 10)
-    if not query or not isinstance(query, str) or not query.strip():
+    if shape == "browse" or not query or not isinstance(query, str) or not query.strip():
         return _list_recent_sessions(db, limit, current_session_id, link_profile=profile)
     sort_norm = sort.strip().lower() if isinstance(sort, str) else None
     try:
@@ -595,15 +718,18 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
         role_filter=([r.strip() for r in role_filter.split(",") if r.strip()] or None) if isinstance(role_filter, str) else None,
         detail="full" if isinstance(detail, str) and detail.strip().lower() == "full" else "adaptive",
         current_session_id=current_session_id, link_profile=profile, after_ts=after_ts, before_ts=before_ts,
-        exclude_session_ids=_normalize_exclude_session_ids(exclude_session_ids))
+        exclude_session_ids=_normalize_exclude_session_ids(exclude_session_ids),
+        match=match, source=source, include_inactive=include_inactive)
 
 
 def session_search(query: str = "", role_filter: str | None = None, limit: int = 3, db=None,
                    current_session_id: str | None = None, session_id: str | None = None, around_message_id: int | None = None,
                    window: int = 5, sort: str | None = None, profile: str | None = None, detail: str = "adaptive",
-                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None) -> str:
+                   after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None,
+                   mode: str | None = None, match: str | None = None, source: str | None = None,
+                   include_inactive: bool = False, include_compacted: bool = False) -> str:
     """Run session search, closing DBs opened here. Positional order is frozen for old callers;
-    new parameters are appended after ``detail``."""
+    new parameters are appended after ``exclude_session_ids``."""
     from hermes_constants import get_hermes_home
     from hermes_state import SessionDB, format_session_db_unavailable
     from hermes_state_registry import release_or_close
@@ -644,7 +770,9 @@ def session_search(query: str = "", role_filter: str | None = None, limit: int =
     try:
         return _dispatch(query, role_filter, limit, db, current_session_id, session_id,
                          around_message_id, window, sort, profile, detail,
-                         after=after, before=before, exclude_session_ids=exclude_session_ids)
+                         after=after, before=before, exclude_session_ids=exclude_session_ids,
+                         mode=mode, match=match, source=source,
+                         include_inactive=include_inactive, include_compacted=include_compacted)
     finally:
         for owned_db in reversed(owned_dbs):
             _quiet(lambda: release_or_close(owned_db), None, "Failed to close session_search SessionDB")
@@ -662,12 +790,13 @@ def check_session_search_requirements() -> bool:
 SESSION_SEARCH_SCHEMA = {
     "name": "session_search",
     "description": (
-        "Search or read past Hermes conversations (FTS5), or scroll inside one. Four shapes, picked by args: `query` = discovery "
+        "Search or read past Hermes conversations (FTS5), or inspect the store. Five shapes, picked by `mode` or by args: `query` = discovery "
         "(top-N matching sessions, top result fully hydrated); `session_id` + "
         "`around_message_id` = scroll (window of messages around an anchor); "
         "`session_id` alone = read a whole session — how you resolve an "
         "`@session:<profile>/<id>` link (split on '/' into profile + id); no "
-        "args = browse recent sessions. Results are actual DB messages, no LLM. "
+        "args = browse recent sessions; `mode='stats'` = counts, role/source "
+        "breakdown, time span and index health. Results are actual DB messages, no LLM. "
         "Searches conversation history ONLY — when the user gave a direct "
         "source (URL, file, contact, live system), inspect that first; never "
         "conclude 'not found' from history alone. Use for questions about past "
@@ -678,6 +807,51 @@ SESSION_SEARCH_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
+            "mode": {
+                "type": "string",
+                "enum": list(_MODES),
+                "description": (
+                    "Explicit shape. 'auto' (default) infers it from the args. "
+                    "'stats' reports store aggregates (messages, sessions, roles, "
+                    "sources, time span, index state); 'read'/'scroll' require "
+                    "session_id and, for scroll, around_message_id."
+                ),
+            },
+            "match": {
+                "type": "string",
+                "enum": list(_MATCH_MODES),
+                "description": (
+                    "Discovery shape only. How terms combine: 'all' (default, AND), "
+                    "'any' (OR), 'phrase' (the whole query as one exact phrase), "
+                    "'raw' (pass FTS5 syntax through: deploy* OR staging)."
+                ),
+                "default": "all",
+            },
+            "source": {
+                "type": "string",
+                "description": (
+                    "Discovery shape only. Comma-separated sessions.source values "
+                    "(cli, gateway, cron, ...). '*' searches every source, including "
+                    "the kanban/subagent/tool rows normally hidden."
+                ),
+            },
+            "include_inactive": {
+                "type": "boolean",
+                "description": (
+                    "Discovery and read shapes. Include rewound/undone rows too "
+                    "(active=0, compacted=0); searches include compaction-archived "
+                    "rows by default, reads do not."
+                ),
+                "default": False,
+            },
+            "include_compacted": {
+                "type": "boolean",
+                "description": (
+                    "Read shape only. Include compaction-archived display history "
+                    "(full pre-compaction transcript), not rewind rows."
+                ),
+                "default": False,
+            },
             "query": {
                 "type": "string",
                 "description": (
@@ -746,9 +920,9 @@ SESSION_SEARCH_SCHEMA = {
             "session_id": {
                 "type": "string",
                 "description": (
-                    "Scroll shape. Session to read inside. Use the session_id returned "
-                    "from a prior discovery call. Must be paired with "
-                    "around_message_id."
+                    "Session to read inside. Use the session_id returned "
+                    "from a prior discovery call. Pair with "
+                    "around_message_id for scroll, or pass mode='read' to read."
                 ),
             },
             "around_message_id": {
@@ -801,6 +975,7 @@ registry.register(
         query=args.get("query") or "", limit=args.get("limit", 3), window=args.get("window", 5),
         detail=args.get("detail", "adaptive"), db=kw.get("db"), current_session_id=kw.get("current_session_id"),
         **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
-                                    "after", "before", "exclude_session_ids")}),
+                                    "after", "before", "exclude_session_ids", "mode", "match", "source",
+                                    "include_inactive", "include_compacted")}),
     check_fn=check_session_search_requirements,
     emoji="🔍")

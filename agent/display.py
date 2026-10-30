@@ -397,10 +397,13 @@ def _preview_process_manage(args: dict, _max_len: int) -> str | None:
     return " ".join(p for p in parts if p) or None
 
 
-def _preview_todo_list(args: dict, _max_len: int) -> str:
-    todos_arg = args.get("todos")
+def _preview_todo_list(args: dict, _max_len: int) -> str | None:
+    phases_arg = args.get("phases")
     verb = t("display.preview.todo_verb_updating" if args.get("merge", False) else "display.preview.todo_verb_planning")
-    return t("display.preview.todo_reading") if todos_arg is None else t("display.preview.todo_tasks", verb=verb, count=len(todos_arg))
+    if phases_arg is None:
+        return t("display.preview.todo_reading")
+    count = sum(len(p.get("items") or []) for p in phases_arg if isinstance(p, dict))
+    return t("display.preview.todo_tasks", verb=verb, count=count)
 
 
 def _preview_shell(key: str):
@@ -1155,7 +1158,8 @@ def _cute_web_extract(a: dict, _r) -> str:
 
 
 def _cute_todo_list(a: dict, result) -> str:
-    todos_arg = a.get("todos")
+    phases_arg = a.get("phases")
+    count = sum(len(p.get("items") or []) for p in phases_arg if isinstance(p, dict)) if isinstance(phases_arg, list) else 0
     total = done = 0
     try:
         summary = (safe_json_loads(result) or {}).get("summary", {}) if result else {}
@@ -1163,13 +1167,13 @@ def _cute_todo_list(a: dict, result) -> str:
     except Exception:
         pass
     progress = t("display.cute.todo_progress", done=done, total=total)
-    if todos_arg is None:
+    if phases_arg is None:
         detail = progress if total > 0 else t("display.cute.todo_reading")
     elif a.get("merge", False):
         detail = (t("display.cute.todo_update_progress", done=done, total=total) if total > 0 and done > 0
-                  else t("display.cute.todo_update_count", count=len(todos_arg)))
+                  else t("display.cute.todo_update_count", count=count))
     else:
-        detail = progress if total > 0 and done > 0 else t("display.cute.todo_count", count=len(todos_arg))
+        detail = progress if total > 0 and done > 0 else t("display.cute.todo_count", count=count)
     return _cute_row("📋", "plan", detail)
 
 

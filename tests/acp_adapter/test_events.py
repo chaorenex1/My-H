@@ -127,11 +127,11 @@ class TestStepCallback:
         loop = event_loop_fixture
         cb = make_step_cb(mock_conn, "session-1", loop, tool_call_ids, {})
         todo_result = (
-            '{"todos":['
+            '{"phases":[{"phase":"Implement","items":['
             '{"id":"inspect","content":"Inspect ACP","status":"completed"},'
             '{"id":"patch","content":"Patch renderer","status":"in_progress"},'
             '{"id":"old","content":"Drop stale task","status":"cancelled"}'
-            '],"summary":{"total":3}}'
+            ']}],"summary":{"total":3}}'
         )
 
         with patch("acp_adapter.events._send_update") as mock_send:

@@ -10,7 +10,7 @@ from agent.display import get_cute_tool_message
 def _todo_result(total: int, completed: int) -> str:
     """Build a fake todo_tool return value."""
     return json.dumps({
-        "todos": [],
+        "phases": [],
         "summary": {
             "total": total,
             "pending": total - completed,
@@ -26,10 +26,10 @@ class TestTodoCreate:
     def test_create_with_result_zero_done(self):
         """New plan with 0 done — plain count, no progress fraction."""
         msg = get_cute_tool_message("todo_list",
-                                    {"todos": [
+                                    {"phases": [{"phase": "Build", "items": [
                                         {"id": "a", "content": "x", "status": "pending"},
                                         {"id": "b", "content": "y", "status": "pending"},
-                                    ]},
+                                    ]}]},
                                     0.3,
                                     result=_todo_result(2, 0))
         assert "2 task(s)" in msg
@@ -41,7 +41,8 @@ class TestTodoUpdate:
     def test_update_halfway(self):
         """2/4 — midpoint progress."""
         msg = get_cute_tool_message("todo_list",
-                                    {"todos": [{"id": "b", "status": "in_progress"}],
+                                    {"phases": [{"phase": "Build", "items": [
+                                        {"id": "b", "status": "in_progress"}]}],
                                      "merge": True},
                                     0.7,
                                     result=_todo_result(4, 2))
@@ -51,7 +52,8 @@ class TestTodoUpdate:
     def test_update_total_not_in_summary(self):
         """Result summary missing total key."""
         msg = get_cute_tool_message("todo_list",
-                                    {"todos": [{"id": "a", "status": "completed"}],
+                                    {"phases": [{"phase": "Build", "items": [
+                                        {"id": "a", "status": "completed"}]}],
                                      "merge": True},
                                     0.3,
                                     result=json.dumps({"summary": {"completed": 2}}))

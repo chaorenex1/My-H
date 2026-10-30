@@ -391,6 +391,12 @@ class TestCoerceToolArgsNested:
     def test_real_todo_schema_element_strings(self):
         """Against the real todo schema from the registry."""
         import json as _json
-        args = {"todos": [_json.dumps({"id": "1", "content": "x", "status": "pending"})]}
+        args = {"phases": [_json.dumps({
+            "phase": "Research",
+            "items": [{"id": "1", "content": "x", "status": "pending"}],
+        })]}
         result = coerce_tool_args("todo_list", args)
-        assert result["todos"][0] == {"id": "1", "content": "x", "status": "pending"}
+        assert result["phases"][0] == {
+            "phase": "Research",
+            "items": [{"id": "1", "content": "x", "status": "pending"}],
+        }

@@ -202,24 +202,22 @@ def build_tool_title(tool_name: str, args: Args) -> str:
 
 @_structured()
 def _format_todo_result(tool_name: str, data: Args, args: Args) -> Optional[str]:
-    if not isinstance(data.get("todos"), list):
+    if not (isinstance(data.get("phases"), list) or isinstance(data.get("todos"), list)):
         return None
+    from tools.todo_tool import LEGACY_PHASE_NAME, flatten_phases
     icon = {"completed": "✅", "in_progress": "🔄", "pending": "⏳", "cancelled": "✗"}
-    todos = [t for t in data["todos"] if isinstance(t, dict)]
-    by_id = {str(t.get("id") or ""): t for t in todos}
-
-    def _depth(item: Args) -> int:
-        depth, seen = 0, set()
-        while (parent := str(item.get("parent") or "")) and parent in by_id and parent not in seen:
-            seen.add(parent)
-            depth += 1
-            item = by_id[parent]
-        return min(depth, 4)
-
+    todos = flatten_phases(data)
     lines = ["**Todo list**", ""]
+    last_phase = None
     for item in todos:
         if content := str(item.get("content") or item.get("id") or "").strip():
-            lines.append(f"{'  ' * _depth(item)}- {icon.get(str(item.get('status') or 'pending'), '•')} {content}")
+            phase = str(item.get("phase") or LEGACY_PHASE_NAME)
+            if phase != last_phase:
+                if lines[-1] != "":
+                    lines.append("")
+                lines.append(f"**{phase}**")
+                last_phase = phase
+            lines.append(f"- {icon.get(str(item.get('status') or 'pending'), '•')} {content}")
     if isinstance(summary := data.get("summary"), dict) and summary:
         cancelled = summary.get("cancelled", 0)
         progress = f"{summary.get('completed', 0)} completed, {summary.get('in_progress', 0)} in progress, "
@@ -703,10 +701,13 @@ def _more(items: list, shown: int, unit: str = "") -> list[str]:
 
 
 def _start_todo(args: Args) -> str:
-    if not isinstance(items := args.get("todos"), list):
+    phases = args.get("phases")
+    if not isinstance(phases, list):
         return "Reading todo list"
+    items = [item for phase in phases if isinstance(phase, dict) for item in (phase.get("items") or [])
+             if isinstance(item, dict)]
     lines = ["Updating todo list", ""]
-    lines.extend(f"- {i.get('status', 'pending')}: {i.get('content', i.get('id', ''))}" for i in items[:8] if isinstance(i, dict))
+    lines.extend(f"- {i.get('status', 'pending')}: {i.get('content', i.get('id', ''))}" for i in items[:8])
     return "\n".join(lines + _more(items, 8))
 
 

@@ -1,7 +1,13 @@
-"""Todo tool: in-memory, revisioned task list for multi-step work. State lives on the
-AIAgent (one per session), is re-injected after context compression, and every write bumps
-a monotonic revision so UI clients can reject stale updates. One ``todo_list`` tool: pass
-``todos`` to write, omit to read; every call returns the full list. No system-prompt mutation."""
+"""Todo tool: in-memory, revisioned two-level plan for multi-step work.
+
+State lives on the ``TodoStore`` and is written with ``phases`` — each phase names a
+stage of the work and holds its checklist items, so ordering is visible at a glance
+instead of encoded in ``parent`` chains. Items are stored flat (``id, content, status,
+phase``) so snapshots, the TUI wire format and every transcript-replay consumer keep a
+stable shape; ``phases()`` groups them for the tool payload.
+
+Every call returns the full plan. No system-prompt mutation.
+"""
 
 import json
 from typing import Any, Dict, List, Optional
@@ -12,10 +18,13 @@ VALID_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 # model-authored items and caller-replayed API history.
 MAX_TODO_CONTENT_CHARS = 4000
 MAX_TODO_ITEMS = 256
+MAX_TODO_PHASES = 32
 # Max single todo tool-result payload accepted during history hydration, so a forged
 # oversized result is dropped before parsing (AIAgent._hydrate_todo_store).
 MAX_TODO_RESULT_CHARS = 512_000
 _TRUNCATION_MARKER = "… [truncated]"
+# Adopted by flat item lists written before the two-level schema (replay/hydration).
+LEGACY_PHASE_NAME = "Tasks"
 # Persisted as ordinary message content; ContextCompressor keys on this stable header to
 # tell the synthetic post-compaction row from a real user message.
 TODO_INJECTION_HEADER = "[Your active task list was preserved across context compression]"
@@ -23,76 +32,145 @@ _STATUS_MARKERS = {"completed": "[x]", "in_progress": "[>]", "pending": "[ ]", "
 _ACTIVE_STATUSES = {"pending", "in_progress"}
 
 
+def _normalize_phases(raw: Any) -> list[dict[str, Any]]:
+    """Validate a ``[{phase, items}]`` list, or wrap a legacy flat item list in one phase.
+
+    Raises ``ValueError`` for a shape that is neither; item validation happens later so
+    a rejected write leaves the store untouched.
+    """
+    if not isinstance(raw, list):
+        raise ValueError(f"phases must be a list of {{phase, items}} objects, got {type(raw).__name__}")
+    if raw and all(isinstance(entry, dict) and "items" not in entry
+                   and ("content" in entry or "status" in entry) for entry in raw):
+        return [{"phase": None, "items": raw}]
+    phases: list[dict[str, Any]] = []
+    for entry in raw[:MAX_TODO_PHASES]:
+        if not isinstance(entry, dict):
+            raise ValueError("each phase must be an object with 'phase' and 'items'")
+        name = str(entry.get("phase", "")).strip()
+        if not name:
+            raise ValueError("each phase needs a non-empty 'phase' name")
+        items = entry.get("items")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            raise ValueError(f"phase '{name}': 'items' must be a list")
+        phases.append({"phase": name, "items": items})
+    return phases
+
+
+def flatten_phases(value: Any) -> list[dict[str, Any]]:
+    """Flat item list from a two-level payload (``phases``) or a legacy ``todos`` list.
+
+    Shared by every consumer that reads a Todo tool result (hydration, TUI/ACP, gateway)
+    so the tool payload has exactly one shape while old transcripts still replay.
+    """
+    if isinstance(value, dict):
+        phases = value.get("phases")
+        if isinstance(phases, list):
+            return [item for phase in phases if isinstance(phase, dict)
+                    for item in (phase.get("items") or []) if isinstance(item, dict)]
+        value = value.get("todos")
+    if not isinstance(value, list):
+        return []
+    if value and all(isinstance(entry, dict) and "items" not in entry for entry in value):
+        return [entry for entry in value if isinstance(entry, dict)]
+    return [item for phase in value if isinstance(phase, dict)
+            for item in (phase.get("items") or []) if isinstance(item, dict)]
+
+
 class TodoStore:
-    """In-memory todo list, one per AIAgent. List position is priority; items are
-    ``{id, content, status, parent?}`` — ``parent`` nests a subtask."""
+    """In-memory two-level plan, one per AIAgent: phases hold items.
+
+    Items are ``{id, content, status, phase}``; list position is priority within a
+    phase. Phase order is first appearance.
+    """
 
     def __init__(self):
         self._items: list[dict[str, str]] = []
         self._revision = 0
 
-    def _fresh_items(self, todos: list[dict[str, Any]]) -> list[dict[str, str]]:
-        """Validate, dedupe and order a whole new list (replace / restore)."""
-        return self._normalize_order([self._validate(t) for t in self._dedupe_by_id(todos)])
+    def _fresh_items(self, phases: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Validate, dedupe and order a whole new plan (replace / restore)."""
+        items = [self._validate(item, phase["phase"])
+                 for phase in _normalize_phases(phases) for item in phase["items"]]
+        items = self._dedupe_by_id(items)[:MAX_TODO_ITEMS]
+        self._assign_ids(items)
+        return self._normalize_order(items)
 
-    def write(self, todos: list[dict[str, Any]], merge: bool = False) -> list[dict[str, str]]:
-        """Replace the list (default) or merge by id; returns the full list after writing.
-        Raises ValueError (leaving the list untouched) if any item is invalid."""
+    def write(self, phases: list[dict[str, Any]], merge: bool = False) -> list[dict[str, str]]:
+        """Replace the plan (default) or merge by id; returns the full item list after writing.
+        Raises ValueError (leaving the plan untouched) if any item is invalid."""
         before = self.read()
         try:
             if merge:
-                self._merge(todos)
+                self._merge(phases)
             else:
-                self._items = self._fresh_items(todos)
+                self._items = self._fresh_items(phases)
         except ValueError:
             self._items = before  # rejected write must not leave a partial list behind
             raise
         del self._items[MAX_TODO_ITEMS:]  # keep the priority head; replays can't grow unbounded
-        self._sanitize_parents(self._items)
         if self._items != before:
             self._revision += 1
         return self.read()
 
-    def _merge(self, todos: list[dict[str, Any]]) -> None:
-        """Update existing items only in the fields provided; append new ones (validated)."""
+    def _merge(self, phases: list[dict[str, Any]]) -> None:
+        """Update existing items by id (content/status/phase), append new ones.
+
+        A new item without an id gets a fresh one; an explicit id that matches nothing
+        is kept so the model's own short handles survive.
+        """
         existing = {item["id"]: item for item in self._items}
-        for t in self._dedupe_by_id(todos):
-            item_id = str(t.get("id", "")).strip()
-            if not item_id:
-                continue  # can't merge without an id
-            cur = existing.get(item_id)
-            if cur is None:
-                validated = self._validate(t)
-                existing[validated["id"]] = validated
-                self._items.append(validated)
-                continue
-            if t.get("content"):
-                cur["content"] = self._cap_content(str(t["content"]).strip())
-            if t.get("status") and str(t["status"]).strip().lower() in VALID_STATUSES:
-                cur["status"] = str(t["status"]).strip().lower()
-            if "parent" in t:
-                parent = str(t["parent"] or "").strip()
-                if parent:
-                    cur["parent"] = parent
-                else:
-                    cur.pop("parent", None)
-        # Rebuild preserving original order for existing items (first occurrence wins).
-        rebuilt = {item["id"]: existing.get(item["id"], item) for item in self._items}
-        self._items = self._normalize_order(list(rebuilt.values()))
+        appended: list[dict[str, str]] = []
+        for phase in _normalize_phases(phases):
+            for raw in phase["items"]:
+                item_id = str(raw.get("id", "")).strip() if isinstance(raw, dict) else ""
+                cur = existing.get(item_id) if item_id else None
+                if cur is None:
+                    appended.append(self._validate(raw, phase["phase"]))
+                    continue
+                # Partial update: absent/empty content keeps the existing text; a valid
+                # status wins; the item moves to the phase named by this write.
+                if isinstance(raw, dict) and str(raw.get("content", "")).strip():
+                    cur["content"] = self._cap_content(str(raw["content"]).strip())
+                status = str(raw.get("status", "")).strip().lower() if isinstance(raw, dict) else ""
+                if status in VALID_STATUSES:
+                    cur["status"] = status
+                cur["phase"] = self._phase_for(raw, phase["phase"])
+        self._items = list(existing.values()) + self._dedupe_by_id(appended)
+        self._assign_ids(self._items)
+        self._items = self._normalize_order(self._items)
 
     def read(self) -> list[dict[str, str]]:
         return [item.copy() for item in self._items]
+
+    def phases(self) -> list[dict[str, Any]]:
+        """Items grouped under their phase, in first-appearance order (tool payload shape)."""
+        order: list[str] = []
+        groups: dict[str, list[dict[str, str]]] = {}
+        for item in self._items:
+            name = item.get("phase") or LEGACY_PHASE_NAME
+            if name not in groups:
+                groups[name] = []
+                order.append(name)
+            groups[name].append(item.copy())
+        return [{"phase": name, "items": groups[name]} for name in order]
 
     def has_items(self) -> bool:
         return bool(self._items)
 
     def snapshot(self) -> dict[str, Any]:
-        """Full state clients can reconcile atomically."""
+        """Full state clients can reconcile atomically (flat items carry their ``phase``)."""
         return {"todos": self.read(), "revision": self._revision}
 
-    def restore(self, todos: list[dict[str, Any]], *, revision: Any = 0) -> list[dict[str, str]]:
-        """Restore a trusted snapshot without manufacturing a new revision."""
-        self._items = self._fresh_items(todos)[:MAX_TODO_ITEMS]
+    def restore(self, phases: Any, *, revision: Any = 0) -> list[dict[str, str]]:
+        """Restore a trusted snapshot without manufacturing a new revision.
+
+        Accepts both the current phase payload and the flat ``todos`` list that older
+        transcripts/replays carry; flat items land in :data:`LEGACY_PHASE_NAME`.
+        """
+        self._items = self._fresh_items(phases)[:MAX_TODO_ITEMS]
         try:
             self._revision = max(0, int(revision or 0))
         except (TypeError, ValueError):
@@ -100,34 +178,20 @@ class TodoStore:
         return self.read()
 
     def format_for_injection(self) -> Optional[str]:
-        """Render the list for post-compression injection, or None if nothing active. Only
+        """Render the plan for post-compression injection, or None if nothing active. Only
         pending/in_progress items are injected — finished ones make the model re-do work after
-        compression. A parent is kept (with its real status marker) when any descendant is
-        active so subtasks keep context."""
+        compression; a phase heading is kept only while it still has active work."""
         if not self._items:
             return None
-        children: dict[str, list[dict[str, str]]] = {}
-        for item in self._items:
-            if item.get("parent"):
-                children.setdefault(item["parent"], []).append(item)
-
-        def render(item: dict[str, str], depth: int, out: list[str]) -> bool:
-            kid_lines: list[str] = []
-            has_active_kid = False
-            for kid in children.get(item["id"], []):
-                has_active_kid |= render(kid, depth + 1, kid_lines)
-            keep = item["status"] in _ACTIVE_STATUSES or has_active_kid
-            if keep:
-                marker = _STATUS_MARKERS.get(item["status"], "[?]")
-                out.append(f"{'  ' * depth}- {marker} {item['id']}. "
-                           f"{item['content']} ({item['status']})")
-                out.extend(kid_lines)
-            return keep
-
         lines = [TODO_INJECTION_HEADER]
-        for item in self._items:
-            if not item.get("parent"):
-                render(item, 0, lines)
+        for group in self.phases():
+            active = [item for item in group["items"] if item["status"] in _ACTIVE_STATUSES]
+            if not active:
+                continue
+            lines.append(f"## {group['phase']}")
+            for item in active:
+                marker = _STATUS_MARKERS.get(item["status"], "[?]")
+                lines.append(f"- {marker} {item['id']}. {item['content']} ({item['status']})")
         return "\n".join(lines) if len(lines) > 1 else None
 
     @staticmethod
@@ -138,84 +202,99 @@ class TodoStore:
         return content
 
     @staticmethod
-    def _validate(item: dict[str, Any]) -> dict[str, str]:
-        """Normalize one item to ``{id, content, status, parent?}`` (placeholders when missing)."""
+    def _phase_for(item: Any, phase: Optional[str]) -> str:
+        """Phase named by the enclosing phase entry, else the item's own, else the legacy default."""
+        return phase or (str(item.get("phase") or "").strip() if isinstance(item, dict) else "") or LEGACY_PHASE_NAME
+
+    @staticmethod
+    def _validate(item: dict[str, Any], phase: Optional[str]) -> dict[str, str]:
+        """Normalize one item to ``{id, content, status, phase}`` (no id when omitted).
+
+        ``phase=None`` marks a legacy flat item list: each item keeps its own phase when
+        it carries one, and otherwise lands in :data:`LEGACY_PHASE_NAME`.
+        """
         if not isinstance(item, dict):
-            return {"id": "?", "content": "(invalid item)", "status": "pending"}
-        item_id = str(item.get("id", "")).strip() or "?"
+            return {"id": "", "content": "(invalid item)", "status": "pending",
+                    "phase": TodoStore._phase_for(item, phase)}
+        item_id = str(item.get("id", "")).strip()
         content = str(item.get("content", "")).strip()
         if not content:
             raise ValueError(
-                f"Todo item '{item_id}' has empty or missing content. "
+                f"Todo item '{item_id or '(no id)'}' in phase '{TodoStore._phase_for(item, phase)}' has empty or missing content. "
                 "Each item must have a non-empty description."
             )
         status = str(item.get("status", "pending")).strip().lower()
-        result = {"id": item_id,
-                  "content": TodoStore._cap_content(content),
-                  "status": status if status in VALID_STATUSES else "pending"}
-        parent = str(item.get("parent") or "").strip()
-        if parent and parent != item_id:
-            result["parent"] = parent
-        return result
+        name = TodoStore._phase_for(item, phase)
+        return {"id": item_id,
+                "content": TodoStore._cap_content(content),
+                "status": status if status in VALID_STATUSES else "pending",
+                "phase": name}
 
     @staticmethod
-    def _sanitize_parents(items: list[dict[str, str]]) -> None:
-        """Drop dangling parent refs and break cycles in place (such items become roots)."""
-        by_id = {item["id"]: item for item in items}
+    def _assign_ids(items: list[dict[str, str]]) -> None:
+        """Give every id-less item the next free numeric id (in place)."""
+        used = {item["id"] for item in items if item.get("id")}
+        next_id = 1
         for item in items:
-            if item.get("parent") and item["parent"] not in by_id:
-                item.pop("parent", None)
-        for item in items:
-            seen, node = {item["id"]}, item
-            while node.get("parent"):
-                if node["parent"] in seen:
-                    item.pop("parent", None)
-                    break
-                seen.add(node["parent"])
-                node = by_id[node["parent"]]
+            if item.get("id"):
+                continue
+            while str(next_id) in used:
+                next_id += 1
+            item["id"] = str(next_id)
+            used.add(item["id"])
 
     @staticmethod
-    def _dedupe_by_id(todos: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Collapse duplicate ids, keeping the last occurrence in its position."""
-        last_index: dict[str, int] = {}
-        for i, item in enumerate(todos):  # non-dicts get a synthetic key; _validate handles them
-            key = str(item.get("id", "")).strip() if isinstance(item, dict) else f"__invalid_{i}"
-            last_index[key or "?"] = i
-        return [todos[i] for i in sorted(last_index.values())]
+    def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Collapse duplicate explicit ids, keeping the last occurrence in its position."""
+        seen: set[str] = set()
+        kept: list[dict[str, Any]] = []
+        for item in reversed(items):
+            key = str(item.get("id", "")).strip() if isinstance(item, dict) else ""
+            if key:
+                if key in seen:
+                    continue
+                seen.add(key)
+            kept.append(item)
+        kept.reverse()
+        return kept
 
     @staticmethod
     def _normalize_order(items: list[dict[str, str]]) -> list[dict[str, str]]:
-        """Lift the in_progress step ahead of any earlier pending placeholder. Nested lists
-        keep authored order — reordering would tear a subtask from its siblings."""
-        statuses = [item["status"] for item in items]
-        if any(item.get("parent") for item in items) or "in_progress" not in statuses:
-            return items
-        active_index = statuses.index("in_progress")
-        if "pending" not in statuses[:active_index]:
-            return items
-        normalized = items.copy()
-        normalized.insert(statuses.index("pending"), normalized.pop(active_index))
-        return normalized
+        """Group by phase (first-appearance order) and lift the in_progress item ahead of an
+        earlier pending placeholder inside its phase. Item order is otherwise authored order."""
+        groups: dict[str, list[dict[str, str]]] = {}
+        for item in items:
+            groups.setdefault(item.get("phase") or LEGACY_PHASE_NAME, []).append(item)
+        ordered: list[dict[str, str]] = []
+        for group in groups.values():
+            statuses = [item["status"] for item in group]
+            if "in_progress" in statuses and "pending" in statuses[:statuses.index("in_progress")]:
+                active_index = statuses.index("in_progress")
+                group = group.copy()
+                group.insert(statuses.index("pending"), group.pop(active_index))
+            ordered.extend(group)
+        return ordered
 
 
-def todo_tool(todos: Optional[list[dict[str, Any]]] = None, merge: bool = False,
+def todo_tool(phases: Optional[list[dict[str, Any]]] = None, merge: bool = False,
               store: Optional[TodoStore] = None) -> str:
-    """Write ``todos`` (replace, or ``merge`` by id) or read when None -> list + summary JSON."""
+    """Write ``phases`` (replace, or ``merge`` by item id) or read when None -> plan + summary JSON."""
     if store is None:
         return tool_error("TodoStore not initialized")
-    if todos is None:
+    if phases is None:
         items = store.read()
     else:
-        if not isinstance(todos, list):
-            return tool_error(f"todos must be a list, got {type(todos).__name__}")
+        if not isinstance(phases, list):
+            return tool_error(f"phases must be a list, got {type(phases).__name__}")
         try:
-            items = store.write(todos, merge)
+            items = store.write(phases, merge)
         except ValueError as e:
             return tool_error(str(e))
-    summary = {"total": len(items)}
+    grouped = store.phases()
+    summary = {"total": len(items), "phases": len(grouped)}
     for status in ("pending", "in_progress", "completed", "cancelled"):
         summary[status] = sum(1 for i in items if i["status"] == status)
-    return json.dumps({"todos": items, "revision": store.snapshot()["revision"],
+    return json.dumps({"phases": grouped, "revision": store.snapshot()["revision"],
                        "summary": summary}, ensure_ascii=False)
 
 
@@ -224,56 +303,67 @@ def check_todo_requirements() -> bool:
     return True
 
 
-# Behavioral guidance is baked into the (static, cached) description; item shape and merge
+# Behavioral guidance is baked into the (static, cached) description; plan shape and merge
 # semantics live ONLY in the parameter schema.
 TODO_SCHEMA = {
     "name": "todo_list",
     "description": (
         # See #95681.
-        "Track a task list for multi-step work (3+ steps). Use for complex tasks "
-        "with 3+ steps or when the user provides multiple tasks. "
-        "For 'all N items' tasks, enumerate every instance as its own checklist "
-        "item so none are silently dropped. "
-        "Call with no parameters to read the current list.\n"
-        "List order is priority. Only ONE item in_progress at a time. "
-        "Break large phases into subtasks via parent. "
-        "Mark an item completed only after the work is verified done, never "
-        "based on intent. If something fails, cancel it and add a revised "
-        "item. Always returns the full current list."
+        "Track a phase-by-phase task plan for multi-step work (3+ steps). "
+        "Two levels: ordered phases, each holding ordered checklist items. "
+        "Use for complex tasks with 3+ steps or when the user provides multiple "
+        "tasks. For 'all N items' tasks, enumerate every instance as its own item "
+        "so none are silently dropped. Call with no parameters to read the current plan.\n"
+        "Phase order is execution order; item order is priority within its phase. Only ONE "
+        "item in_progress at a time across the whole plan. Put the current stage's work in "
+        "its own phase instead of inventing subtasks. Mark an item completed only after "
+        "the work is verified done, never based on intent. If something fails, cancel it "
+        "and add a revised item. Always returns the full current plan."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "todos": {
+            "phases": {
                 "type": "array",
-                "description": "Task items to write.",
+                "description": "Plan to write: ordered phases, each with its ordered items.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {
-                            "type": "string"
-                        },
-                        "content": {
+                        "phase": {
                             "type": "string",
-                            "description": "Task description"
+                            "description": "Stage name, e.g. 'Research', 'Implement', 'Verify'."
                         },
-                        "status": {
-                            "type": "string",
-                            "enum": ["pending", "in_progress", "completed", "cancelled"]
-                        },
-                        "parent": {
-                            "type": "string",
-                            "description": "Optional id of another item, making this a nested subtask. Omit for top-level."
+                        "items": {
+                            "type": "array",
+                            "description": "Checklist items for this phase.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {
+                                        "type": "string",
+                                        "description": "Stable item id (assigned when omitted). Required to update an item with merge=true."
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "Task description"
+                                    },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["pending", "in_progress", "completed", "cancelled"]
+                                    }
+                                },
+                                "required": ["content"]
+                            }
                         }
                     },
-                    "required": ["id", "content", "status"]
+                    "required": ["phase", "items"]
                 }
             },
             "merge": {
                 "type": "boolean",
                 "description": (
-                    "true: update existing items by id, add new ones. "
-                    "false (default): replace the entire list with a fresh plan."
+                    "true: update existing items by id (content/status/phase), add new ones. "
+                    "false (default): replace the entire plan with a fresh one."
                 ),
                 "default": False
             }
@@ -332,5 +422,5 @@ from tools.registry import registry, tool_error
 registry.register(
     name="todo_list", toolset="todo", schema=TODO_SCHEMA, check_fn=check_todo_requirements,
     handler=lambda args, **kw: todo_tool(
-        todos=args.get("todos"), merge=args.get("merge", False), store=kw.get("store")),
+        phases=args.get("phases"), merge=args.get("merge", False), store=kw.get("store")),
     emoji="📋")

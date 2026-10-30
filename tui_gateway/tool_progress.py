@@ -114,14 +114,21 @@ def _tool_summary(name: str, result: str, duration_s: float | None) -> str | Non
 
 
 def _normalize_todo_state(value: object) -> dict | None:
-    """Return a client-safe full todo snapshot or ``None`` when malformed."""
-    if not isinstance(value, dict) or not isinstance(value.get("todos"), list):
+    """Return a client-safe full todo snapshot or ``None`` when malformed.
+
+    Accepts the tool's two-level ``phases`` payload (flattened here) and the flat
+    ``todos`` snapshot the store emits, so the TUI wire stays ``{todos, revision}``.
+    """
+    if not isinstance(value, dict):
+        return None
+    from tools.todo_tool import flatten_phases
+    todos = flatten_phases(value)
+    if not isinstance(value.get("todos"), list) and not isinstance(value.get("phases"), list):
         return None
     try:
         revision = max(0, int(value.get("revision") or 0))
     except (TypeError, ValueError):
         return None
-    todos = list(value["todos"])
     # Unused TodoStore snapshot() is {todos: [], revision: 0}: attaching it on resume stamps a client
     # watermark and blocks unversioned tool.start merges. Empty at revision >= 1 is a real clear.
     if not todos and revision == 0:
@@ -199,7 +206,8 @@ def _todo_state_from_history(history) -> dict | None:
             if not isinstance(msg, dict) or msg.get("role") != "tool" or msg.get("tool_call_id") not in todo_call_ids:
                 continue
             content = msg.get("content", "")
-            if not isinstance(content, str) or len(content) > MAX_TODO_RESULT_CHARS or '"todos"' not in content:
+            if not isinstance(content, str) or len(content) > MAX_TODO_RESULT_CHARS \
+                    or ('"todos"' not in content and '"phases"' not in content):
                 continue
             try:
                 return _normalize_todo_state(json.loads(content))

@@ -133,7 +133,9 @@ def _session_search(agent, args: dict, ctx: InlineToolContext) -> Any:
             ("session_id", "session_id"), ("around_message_id", "around_message_id"),
             ("window", "window", 5), ("sort", "sort"), ("profile", "profile"),
             ("detail", "detail", "adaptive"), ("after", "after"), ("before", "before"),
-            ("exclude_session_ids", "exclude_session_ids"),
+            ("exclude_session_ids", "exclude_session_ids"), ("mode", "mode"), ("match", "match"),
+            ("source", "source"), ("include_inactive", "include_inactive", False),
+            ("include_compacted", "include_compacted", False),
         ),
         db=session_db, current_session_id=agent.session_id,
     )
@@ -252,7 +254,7 @@ def _setup_mcp_shim(agent, args: dict, ctx: InlineToolContext) -> Any:
 # Order is the historical if/elif order of ``execute_tool_calls_sequential``.
 _RAW_INLINE_TOOL_EXECUTORS: dict[str, InlineToolExecutor] = {
     "todo_list": _tool(
-        "tools.todo_tool", "todo_tool", ("todos", "todos"), ("merge", "merge", False),
+        "tools.todo_tool", "todo_tool", ("phases", "phases"), ("merge", "merge", False),
         store=lambda agent, ctx: agent._todo_store,
     ),
     # Bot Mode teammate DM is injected, not registered: only a canonical Bot

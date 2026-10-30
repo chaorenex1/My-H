@@ -35,11 +35,12 @@ def _build_plan_update_from_todo_result(result: Any) -> AgentPlanUpdate | None:
     if not isinstance(result, str) or not result.strip():
         return None
     data = _json_loads_maybe(result)
-    if not isinstance(data, dict) or not isinstance(data.get("todos"), list):
+    if not isinstance(data, dict) or not (
+            isinstance(data.get("phases"), list) or isinstance(data.get("todos"), list)):
         return None
-
+    from tools.todo_tool import flatten_phases
     entries: list[PlanEntry] = []
-    for item in data["todos"]:
+    for item in flatten_phases(data):
         if not isinstance(item, dict):
             continue
         content = str(item.get("content") or item.get("id") or "").strip()

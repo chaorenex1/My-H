@@ -80,7 +80,8 @@ class SessionTodoResultMixin:
                             if not paired:
                                 continue
                             data = json.loads(row["content"])
-                            if not isinstance(data, dict) or not isinstance(data.get("todos"), list):
+                            if not isinstance(data, dict) or not (
+                                    isinstance(data.get("phases"), list) or isinstance(data.get("todos"), list)):
                                 continue
                             int(data.get("revision") or 0)
                         except (ValueError, TypeError):

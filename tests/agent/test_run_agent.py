@@ -753,9 +753,34 @@ class TestHydrateTodoStore:
         with patch("run_agent._set_interrupt"), patch("agent.interrupt_control._set_interrupt"):
             agent._hydrate_todo_store(history)
 
-        assert agent._todo_store.snapshot() == {"todos": todos, "revision": 3}
+        # Legacy flat results replay into the default phase.
+        assert agent._todo_store.snapshot() == {
+            "todos": [{**todos[0], "phase": "Tasks"}], "revision": 3}
         # The TUI resume path (no AIAgent yet) must pair the same call via the same predicate.
         assert tui_server._todo_state_from_history(history)["todos"] == todos
+
+    def test_phase_payload_hydrates(self, agent):
+        """The current two-level payload restores flattened with each item's phase."""
+        phases = [
+            {"phase": "Research", "items": [{"id": "r", "content": "Read", "status": "completed"}]},
+            {"phase": "Build", "items": [{"id": "b", "content": "Write", "status": "in_progress"}]},
+        ]
+        history = [
+            self._assistant_todo_call(name="todo_list", arguments="{}"),
+            {"role": "tool", "tool_call_id": "c1",
+             "content": json.dumps({"phases": phases, "revision": 4})},
+        ]
+
+        with patch("run_agent._set_interrupt"), patch("agent.interrupt_control._set_interrupt"):
+            agent._hydrate_todo_store(history)
+
+        assert agent._todo_store.snapshot() == {
+            "todos": [
+                {"id": "r", "content": "Read", "status": "completed", "phase": "Research"},
+                {"id": "b", "content": "Write", "status": "in_progress", "phase": "Build"},
+            ],
+            "revision": 4,
+        }
 
     def test_no_todo_in_history(self, agent):
         history = [

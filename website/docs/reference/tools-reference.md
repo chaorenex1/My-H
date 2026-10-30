@@ -174,7 +174,7 @@ Enabled for sessions whose source is the desktop app, whichever backend it's con
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
-| `session_search` | Search past sessions stored in the local session DB, or scroll inside one. FTS5-backed retrieval; returns actual messages from the DB (no LLM calls). Four shapes: discovery (pass `query`), scroll (pass `session_id` + `around_message_id`), read (pass `session_id` only), browse (no args). Discovery supports time bounds (`after`/`before` — ISO dates or relative durations like `7d`, `24h`, `2w`) and `exclude_session_ids` for iterative re-finding. | — |
+| `session_search` | Search past sessions stored in the local session DB, or scroll inside one. FTS5-backed retrieval; returns actual messages from the DB (no LLM calls). Five shapes (explicit `mode` or inferred): discovery (pass `query`), scroll (pass `session_id` + `around_message_id`), read (pass `session_id` only), browse (no args), stats (`mode='stats'` — counts, role/source breakdown, time span, index health). Discovery supports time bounds (`after`/`before` — ISO dates or relative durations like `7d`, `24h`, `2w`), `exclude_session_ids` for iterative re-finding, `match` (all/any/phrase/raw), and a `source` filter (`*` includes normally hidden sources). Reads can include rewound (`include_inactive`) or compaction-archived (`include_compacted`) rows. | — |
 
 ## `skills` toolset
 
@@ -291,7 +291,7 @@ the meantime.
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
-| `todo_list` | Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list. Items may nest: an item's optional `parent` field points at another item's id, making it a subtask — surfaces render the tree indented. | — |
+| `todo_list` | Manage a two-level task plan for the current session: ordered phases, each with ordered items. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current plan; `merge` updates items by id. Only one item is in progress across the plan. | — |
 
 ## `vision` toolset
 

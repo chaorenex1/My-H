@@ -70,7 +70,7 @@ def test_single_local_unwrap_keeps_session_db_todo_store_and_setup_callback(tmp_
     )
     calls = [
         {"name": "session_search", "arguments": {"session_id": "past-session"}},
-        {"name": "todo_list", "arguments": {"todos": [{"id": "a", "content": "live-store-proof", "status": "pending"}]}},
+        {"name": "todo_list", "arguments": {"phases": [{"phase": "Probe", "items": [{"id": "a", "content": "live-store-proof", "status": "pending"}]}]}},
         {"name": "manage_connections", "arguments": {
             "action": "install", "connectors": [{"name": "linear", "mcp": True}]}},
     ]

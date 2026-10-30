@@ -1114,7 +1114,7 @@ def test_todo_updates_after_a_session_switch_reach_the_cli_todo_store(make_agent
     from types import SimpleNamespace
 
     from hermes_cli.cli_commands_mixin import _sync_agent_to_session
-    todos = [{"id": "1", "content": "ship it", "status": "completed"}]
+    todos = [{"id": "1", "content": "ship it", "status": "completed", "phase": "Tasks"}]
     agent, _ = make_agent([frame("todo.updated", {"todos": todos, "revision": 1}),
                            frame("message.complete", {"text": "x", "outcome": "completed"})])
     cli = SimpleNamespace(agent=agent, conversation_history=[])
@@ -1143,7 +1143,7 @@ def test_resume_restores_the_sessions_todos_into_the_cli_todo_store(make_agent):
 
     from hermes_cli.cli_commands_mixin import _sync_agent_to_session
     from hermes_cli.gateway_session_store import GatewaySessionStore
-    todos = [{"id": "1", "content": "ship it", "status": "in_progress"}]
+    todos = [{"id": "1", "content": "ship it", "status": "in_progress", "phase": "Tasks"}]
     agent, client = make_agent([])
     _resume_with_todos(client, todos, 4)
     agent._session_db = GatewaySessionStore(agent.connection)
@@ -1157,7 +1157,7 @@ def test_startup_resume_builds_the_agent_with_the_sessions_todos(make_agent):
     snapshot; a later ``todo.updated`` of that session is what the next swapped-in store starts with."""
     from hermes_cli.gateway_session_store import GatewaySessionStore
     from tools.todo_tool import TodoStore
-    todos = [{"id": "1", "content": "ship it", "status": "completed"}]
+    todos = [{"id": "1", "content": "ship it", "status": "completed", "phase": "Tasks"}]
     agent, client = make_agent([])
     _resume_with_todos(client, todos, 2)
     store = GatewaySessionStore(agent.connection)

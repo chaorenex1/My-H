@@ -1064,14 +1064,15 @@ class AIAgent(
                 logger.warning("Skipping oversized todo tool response during hydration: "
                                "session=%s chars=%d", self.session_id or "none", len(content))
                 continue
-            if '"todos"' not in content:  # cheap pre-filter before json.loads
+            # cheap pre-filter before json.loads; "phases" is the current payload, "todos" replays old ones
+            if '"phases"' not in content and '"todos"' not in content:
                 continue
             try:
                 data = json.loads(content)
             except (json.JSONDecodeError, TypeError):
                 continue
-            if "todos" in data and isinstance(data["todos"], list):
-                return data["todos"], data.get("revision", 1)
+            if isinstance(data.get("phases"), list) or isinstance(data.get("todos"), list):
+                return data.get("phases", data.get("todos")), data.get("revision", 1)
         return None
 
     @classmethod
