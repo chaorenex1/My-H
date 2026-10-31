@@ -1,0 +1,23 @@
+{
+  "name": "hermes-omp-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hermes' terminal UI rendered with omp's (@oh-my-pi/pi-tui) components.",
+  "scripts": {
+    "ui": "bun app/main.ts",
+    "smoke": "bun app/smoke.ts",
+    "render": "bun app/render.ts",
+    "preview": "bun app/preview.ts",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "native": "bun coding-agent/hermes/main.ts",
+    "smoke:native": "bun coding-agent/hermes/smoke.ts"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-tui": ">=18.14.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}

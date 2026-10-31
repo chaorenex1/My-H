@@ -776,6 +776,23 @@ CREATE TABLE IF NOT EXISTS state_meta (
     value TEXT
 );
 
+-- Per-agent (role) custom configuration, profile-scoped: the Agent Hub writes model/provider,
+-- adviser/prewalk toggles, reasoning effort and pattern here; no config.yaml or WATCHDOG.yml
+-- round-trip. NULL means "not set" (inherit the delegation route / adviser default).
+CREATE TABLE IF NOT EXISTS agent_config (
+    agent_id TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    model TEXT,
+    provider TEXT,
+    advisor INTEGER,
+    prewalk INTEGER,
+    reasoning_effort TEXT,
+    pattern TEXT,
+    prompt_path TEXT,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (agent_id, source)
+);
+
 CREATE TABLE IF NOT EXISTS gateway_routing (
     scope TEXT NOT NULL DEFAULT '',
     session_key TEXT NOT NULL,

@@ -800,6 +800,21 @@ def revoke(command: str) -> int:
         return before - len(data["approvals"])
 
 
+def set_approval(event: str, command: str, enabled: bool) -> bool:
+    """Approve or revoke ONE ``(event, command)`` pair; returns the resulting enabled state.
+
+    The extensions panel drives this from ``hooks.toggle`` — an allowlist entry is the enabled
+    state, so enabling records a fresh approval (its script mtime included) and disabling removes
+    only this pair, leaving another event's approval of the same command alone.
+    """
+    if enabled:
+        _record_approval(event, command)
+        return True
+    with _locked_update_approvals() as data:
+        data["approvals"] = [e for e in data.get("approvals", []) if not _entry_matches(e, event, command)]
+    return False
+
+
 _SCRIPT_EXTENSIONS: tuple[str, ...] = (".sh", ".bash", ".zsh", ".fish", ".py", ".pyw", ".rb", ".pl", ".lua", ".js", ".mjs", ".cjs", ".ts")
 
 

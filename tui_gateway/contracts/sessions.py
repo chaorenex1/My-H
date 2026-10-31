@@ -490,16 +490,32 @@ method("session.status", params=SessionStatusParams, result=SessionStatusResult,
 
 
 class SessionHistoryParams(SessionParams):
-    pass
+    since: int | None = None  # rows after this durable row id
+    cursor: int | None = None  # alias of ``since`` (``since`` wins when both are set)
+    limit: int | None = None  # page size, clamped to 1..500 by the handler
+
+
+class HistoryEntry(Result):
+    """One paged transcript entry (a projected message carrying a durable ``row_id``)."""
+
+    entry_id: int
+    role: str
+    text: str | None = None
+    timestamp: float | None = None
+    display_kind: str | None = None
 
 
 class SessionHistoryResult(Result):
     count: int
     messages: list[TranscriptMessage]
+    entries: list[HistoryEntry] = []
+    leaf_id: int | None = None  # largest row id in the full transcript
+    next_cursor: int | None = None  # last returned entry id while rows follow
+    total_messages: int = 0  # full transcript length before paging
 
 
 method("session.history", params=SessionHistoryParams, result=SessionHistoryResult,
-       doc="The durable display transcript (ancestors included, row ids attached).")
+       doc="The durable display transcript (ancestors included, row ids attached), paged by row id.")
 
 
 class SessionUsageParams(SessionParams):

@@ -185,6 +185,12 @@ def _rewind_or_err(rid, session, keep: int, value_err: tuple, fail_prefix: str, 
         return None, _err(rid, 5008, f"{fail_prefix}{exc}")
 
 
+def _emit_command_output(sid: str | None, name: str, text: object) -> None:
+    """Publish the text a slash command printed, for clients that render it out of band."""
+    if sid and isinstance(text, str) and text.strip():
+        _emit("command.output", sid, {"text": text, "name": name})
+
+
 def _exec_out(rid, output: str) -> dict:
     """command.dispatch display-only result."""
     return _ok(rid, {"type": "exec", "output": output})
@@ -1022,6 +1028,9 @@ def _(rid, params: dict) -> dict:
             if res is not None:
                 if name in _SESSION_CONTROL_SLASHES and "error" not in res:
                     _publish_session_control_snapshot(params.get("session_id", ""), session)
+                result = res.get("result")
+                if isinstance(result, dict):
+                    _emit_command_output(params.get("session_id"), name, result.get("output"))
                 return res
     return _err(rid, 4018, f"not a quick/plugin/bundle/skill command: {name}")
 
@@ -1042,6 +1051,7 @@ def _(rid, params: dict) -> dict:
     sid = params.get("session_id", "")
     live_output = _live_slash_command_output(sid, session, base, arg)
     if live_output is not None:
+        _emit_command_output(sid, base, live_output)
         return _ok(rid, {"output": live_output or "(no output)"})
     if base in _WORKER_BLOCKED_COMMANDS and _is_snapshot_restore(arg):
         return _err(rid, 4018, "snapshot restore mutates live config/state; use command.dispatch for /snapshot restore")
@@ -1093,6 +1103,7 @@ def _(rid, params: dict) -> dict:
             # send dispatch (both Desktop and TUI clients already handle {type:"send"}).
             return _ok(rid, {"type": "send", "message": seed})
         payload = {"output": output or "(no output)"}
+        _emit_command_output(sid, base, output)
         if warning := _mirror_slash_side_effects(sid, session, cmd):
             payload["warning"] = warning
         if base in _SESSION_CONTROL_SLASHES:

@@ -388,6 +388,8 @@ class VoiceRecordParams(Params):
     action: VoiceRecordAction = VoiceRecordAction.start
     session_id: str | None = None  # where voice.transcript / voice.status events are addressed
     profile: str | None = None
+    # Caller-minted capture id: echoed back on start, checked on stop (a stale client id is refused).
+    capture_id: str | None = None
 
 
 class VoiceRecordStatus(WireEnum):
@@ -398,7 +400,8 @@ class VoiceRecordStatus(WireEnum):
 
 class VoiceRecordResult(Result):
     status: VoiceRecordStatus
-    reason: str | None = None  # "wake_owned" when another surface holds the mic
+    reason: str | None = None  # "wake_owned" when another surface holds the mic; "capture_mismatch" on a stale stop id
+    capture_id: str | None = None  # the live capture this reply belongs to (minted on start when the caller sent none)
 
 
 method("voice.record", params=VoiceRecordParams, result=VoiceRecordResult,

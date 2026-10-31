@@ -47,7 +47,12 @@ def test_local_viewer_gets_the_segment_boundary_as_null_delta():
     delta_cb = _delta_cb(_turn(Platform.LOCAL, published))
     delta_cb('hello')
     delta_cb(None)
-    assert published == [('message.delta', {'text': 'hello'}), ('message.delta', {'text': None})]
+    assert published == [
+        ('message.block_start', {'kind': 'text'}),
+        ('message.delta', {'text': 'hello'}),
+        ('message.block_end', {'kind': 'text', 'content_index': 0, 'content': 'hello'}),
+        ('message.delta', {'text': None}),
+    ]
 
 
 def test_messaging_route_never_publishes_the_boundary():
@@ -55,7 +60,11 @@ def test_messaging_route_never_publishes_the_boundary():
     delta_cb = _delta_cb(_turn(Platform.TELEGRAM, published))
     delta_cb('hello')
     delta_cb(None)
-    assert published == [('message.delta', {'text': 'hello'})]
+    assert published == [
+        ('message.block_start', {'kind': 'text'}),
+        ('message.delta', {'text': 'hello'}),
+        ('message.block_end', {'kind': 'text', 'content_index': 0, 'content': 'hello'}),
+    ]
 
 
 def test_turn_sinks_publish_and_restore_on_the_shared_agent():

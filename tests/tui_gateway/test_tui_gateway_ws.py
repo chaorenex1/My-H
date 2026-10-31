@@ -9,6 +9,12 @@ import pytest
 
 from tui_gateway import server
 from tui_gateway import ws as ws_mod
+from tui_gateway.contracts.protocol import (
+    MAX_FRAME_BYTES,
+    MAX_REASSEMBLED_FRAME_BYTES,
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 
 
 
@@ -163,6 +169,12 @@ def test_ws_ready_advertises_heartbeat_and_ping_is_inline(monkeypatch):
     ready = sent[0]["params"]
     assert ready["type"] == "gateway.ready"
     assert ready["payload"]["heartbeat"] is True
+    # Transport negotiation travels on the same first frame (appendix A.3.1): omp-ui binds its
+    # decoder to these before any other request is answered.
+    assert ready["payload"]["protocol_version"] == PROTOCOL_VERSION
+    assert ready["payload"]["supported_protocol_versions"] == list(SUPPORTED_PROTOCOL_VERSIONS)
+    assert ready["payload"]["max_frame_bytes"] == MAX_FRAME_BYTES
+    assert ready["payload"]["max_reassembled_frame_bytes"] == MAX_REASSEMBLED_FRAME_BYTES
     assert sent[1] == {
         "jsonrpc": "2.0",
         "result": {"ok": True},

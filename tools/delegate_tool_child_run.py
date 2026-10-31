@@ -408,6 +408,18 @@ def _start_heartbeat(child: Any, parent_agent: Any, task_index: int) -> _Heartbe
     """Build (not start) one child's heartbeat; see ``_Heartbeat``."""
     return _Heartbeat(child, parent_agent, task_index)
 
+def _child_task_index(child: Any) -> Optional[int]:
+    """The child's index in its delegation batch. ``_register_child`` is never handed it: the child's own
+    copies are the progress relay it was built with (``_build_child_progress_callback``) and the spawn id
+    (``sa-<index>-<hex>``, ``_build_child_agent``)."""
+    relay_index = getattr(getattr(child, "tool_progress_callback", None), "task_index", None)
+    if isinstance(relay_index, int) and not isinstance(relay_index, bool):
+        return relay_index
+    parts = str(getattr(child, "_subagent_id", "") or "").split("-")
+    if len(parts) > 1 and parts[0] == "sa" and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
 def _register_child(
     child: Any, parent_agent: Any, goal: str, *, owner_session_id: Optional[str], owner_transport: Any,
     owner_session_record: Any,
@@ -424,7 +436,7 @@ def _register_child(
     if owner_session_id and (owner_transport is None or owner_session_record is None):
         owner_transport, owner_session_record = _capture_gateway_steer_authority(owner_session_id)
     _raw_depth = getattr(child, "_delegate_depth", 1)
-    _register_subagent({
+    record = {
         "subagent_id": _subagent_id,
         "parent_id": _str_or_none(getattr(child, "_parent_subagent_id", None)),
         "depth": max(0, _raw_depth - 1) if isinstance(_raw_depth, int) else 0,
@@ -432,6 +444,10 @@ def _register_child(
         "delegation_id": _str_or_none(getattr(child, "_delegation_id", None)),
         "model": _str_or_none(getattr(child, "model", None)),
         "started_at": time.time(), "status": "running", "tool_count": 0, "agent": child,
+        # Roster identity the client paints without touching the live child object.
+        "task_index": _child_task_index(child),
+        "agent_role": getattr(child, "_delegate_role", None),
+        "last_update": time.time(),
         # Owning conversation's durable session id (same lineage completion delivery routes by), sourced from the
         # child's stamp so it survives a parent_agent rebuild between dispatch and run; used for list/steer/stop
         # ownership when the weakref chain breaks.
@@ -443,7 +459,12 @@ def _register_child(
         "owner_session_id": owner_session_id,
         "owner_transport": owner_transport,
         "owner_session_record": owner_session_record,
-    })
+    }
+    # Only a child that actually carries the parent's tool-call id publishes one; nothing invents it.
+    _parent_tool_call_id = getattr(child, "_parent_tool_call_id", None)
+    if _parent_tool_call_id:
+        record["parent_tool_call_id"] = _parent_tool_call_id
+    _register_subagent(record)
     return _subagent_id
 
 def _create_isolated_worktree(parent_agent: Any, parent_task_id: Any, subagent_id: Optional[str]):

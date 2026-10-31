@@ -145,7 +145,7 @@ def _ac_inflight_original(session: dict) -> str:
 
 
 def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[str] | None = None,
-                    turn_author: dict | None = None) -> dict | None:
+                    turn_author: dict | None = None, *, sid: str | None = None) -> dict | None:
     """Queue a message for the next turn. Text-only arrivals share a slot and merge losslessly (like the
     consecutive-user merge in ``repair_message_sequence``); image-bearing and authored ones stay separate
     envelopes so attachment chronology and the sender survive. ``transport`` is pinned so the drained turn
@@ -168,11 +168,13 @@ def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[
             and not session.get("queued_prompts")):
         prev = existing["text"]
         existing["text"] = f"{prev}\n\n{text}" if prev and text else (prev or text)
+        _emit_queue_update(sid, session)
         return existing
     if existing:
         session.setdefault("queued_prompts", []).append(queued)
     else:
         session["queued_prompt"] = queued
+    _emit_queue_update(sid, session)
     return queued
 
 
@@ -212,13 +214,29 @@ def _drop_queued_duplicates_of_inflight_user(session: dict) -> None:
     _ac_set_queue(session, [c for c in cleaned if c is not None])
 
 
-def _ac_set_queue(session: dict, entries: list) -> None:
+def _ac_set_queue(session: dict, entries: list, *, sid: str | None = None) -> None:
     """Write ``entries`` back as queued_prompt (head) + queued_prompts (rest)."""
     session["queued_prompt"] = entries[0] if entries else None
     if len(entries) > 1:
         session["queued_prompts"] = entries[1:]
     else:
         session.pop("queued_prompts", None)
+    _emit_queue_update(sid, session)
+
+
+def _emit_queue_update(sid: str | None, session: dict) -> None:
+    """Publish the displayable prompt queue (omp's ``queue_update`` shape) after a mutation.
+
+    The TUI queue is one FIFO of follow-up prompts: nothing is steered into a live response here,
+    so ``steering`` is empty and ``live_steered`` is 0. The canonical authority publishes its own
+    split snapshot from ``session_authority._publish_pending``."""
+    if not sid:
+        return
+    envelopes = (([session["queued_prompt"]] if session.get("queued_prompt") else [])
+                 + list(session.get("queued_prompts") or []))
+    follow_up = [str(e.get("text")) for e in envelopes
+                 if isinstance(e, dict) and isinstance(e.get("text"), str) and e.get("text")]
+    _emit("queue.updated", sid, {"steering": [], "follow_up": follow_up, "live_steered": 0})
 
 
 def _interrupt_busy_session(sid: str, session: dict, agent: Any) -> None:
@@ -436,7 +454,8 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
             if image_paths:
                 session["attached_images"] = image_paths + list(session.get("attached_images", []))
             return None
-        envelope = _enqueue_prompt(session, text, transport, image_paths=image_paths, turn_author=turn_author)
+        envelope = _enqueue_prompt(session, text, transport, image_paths=image_paths, turn_author=turn_author,
+                                   sid=sid)
         # Durable AT ACCEPT (not when the turn runs): a cold resume sees the queued message and a
         # backend restart cannot lose it. Lives on the envelope, never the shared session slot.
         if envelope is not None:
@@ -461,7 +480,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         if not admitted or session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
         queue_generation = int(session.get("_queued_prompt_generation", 0))
-        _ac_set_queue(session, session.get("queued_prompts") or [])
+        _ac_set_queue(session, session.get("queued_prompts") or [], sid=sid)
         session["running"] = True
         queued_transport = queued.get("transport")
         # The queuer's transport is pinned so the drained turn reaches the client that sent it — but
@@ -477,7 +496,7 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             # envelope (claimed head first, then whatever advanced into the slot) so a legitimate follow-up isn't dropped.
             # See #84417.
             advanced = session.get("queued_prompt")
-            _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])])
+            _ac_set_queue(session, [queued, *([advanced] if advanced else []), *(session.get("queued_prompts") or [])], sid=sid)
             session["running"] = False
             return True
     kwargs: dict = {"queued_prompt_generation": queue_generation}

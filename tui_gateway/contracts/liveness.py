@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from .base import Params, Result
+from .protocol import (
+    MAX_FRAME_BYTES,
+    MAX_REASSEMBLED_FRAME_BYTES,
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 from .registry import method
 
 
@@ -36,6 +44,12 @@ class ClientCapabilitiesParams(Params):
     #: private control socket; it is what makes the welcome trial and first-run onboarding available
     #: in a gateway that also serves the CLI, the TUI and bots.
     desktop_local: bool = False
+    #: Transport negotiation (see ``contracts/protocol.py``). A client that omits these is a build
+    #: older than the negotiation fields and is answered with this backend's own defaults.
+    protocol_version: int | None = None
+    supported_protocol_versions: list[int] | None = None
+    max_frame_bytes: int | None = None
+    max_reassembled_frame_bytes: int | None = None
 
 
 class ClientCapabilitiesResult(Result):
@@ -51,6 +65,11 @@ class ClientCapabilitiesResult(Result):
     #: one card per question. An older owner refuses the unknown key, so a client declares it only when
     #: this is true. (The legacy sidecar always asks the batch at once and is never sent the key.)
     canonical_clarify_batch: bool = False
+    #: Transport negotiation, echoed so a client can bind its decoder to one frame budget.
+    protocol_version: int = PROTOCOL_VERSION
+    supported_protocol_versions: list[int] = Field(default_factory=lambda: list(SUPPORTED_PROTOCOL_VERSIONS))
+    max_frame_bytes: int = MAX_FRAME_BYTES
+    max_reassembled_frame_bytes: int = MAX_REASSEMBLED_FRAME_BYTES
 
 
 method("client.capabilities", params=ClientCapabilitiesParams, result=ClientCapabilitiesResult,

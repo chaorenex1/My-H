@@ -252,6 +252,59 @@ def _prompt_dirs(project: Optional[Path], skill_name: str) -> list[Path]:
     return [directory for directory, _scope in _prompt_scopes(project, skill_name)]
 
 
+def discover_agent_definitions(project_dir: Optional[str | Path] = None) -> list[dict[str, Any]]:
+    """Every named-agent definition visible to this process, in ``_prompt_scopes`` order.
+
+    Project first (including the process cwd), then the profile (``HERMES_HOME``), then the
+    installation. Each row carries the prompt path, the scope label and the frontmatter's
+    model/provider/reasoning effort; the first definition for a name wins.
+    """
+    project = Path(project_dir).expanduser() if project_dir else None
+    seen: set[str] = set()
+    found: list[dict[str, Any]] = []
+    for directory, scope in _prompt_scopes(project, ""):
+        try:
+            entries = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for path in entries:
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if path.suffix not in ("", ".md"):
+                continue
+            name = path.stem if path.suffix == ".md" else path.name
+            if not name or name in seen:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeError):
+                continue
+            try:
+                metadata, body = agent_definitions.parse_definition(text, source=str(path))
+            except agent_definitions.DefinitionError as exc:
+                logger.warning("agent: definition %s skipped: %s", path, exc)
+                continue
+            if not body:
+                continue
+            seen.add(name)
+            route = str(metadata.get("model") or "")
+            provider, sep, model = route.partition(":")
+            if not sep or not provider.strip() or not model.strip():
+                provider, model = "", route
+            found.append({
+                "agent_id": name,
+                "name": str(metadata.get("name") or name),
+                "description": str(metadata.get("description") or ""),
+                "source": str(path),
+                "scope": scope,
+                "model": model.strip() or None,
+                "provider": provider.strip() or None,
+                "thinking": str(metadata.get("reasoning_effort") or "") or None,
+                "toolsets": list(metadata.get("toolsets") or []),
+            })
+    return found
+
+
 def _same_path(left: Path, right: Path) -> bool:
     try:
         return os.path.normcase(os.path.realpath(left)) == os.path.normcase(os.path.realpath(right))

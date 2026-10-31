@@ -75,7 +75,12 @@ async def probe(mode):
                 for method, expected in [('process.list', {'processes': []}),
                                          ('subagent.list', {'subagents': [], 'delegations': []})]:
                     result = await rpc(ws, method, session_id=sid)
-                    assert result.get('result') == expected, result
+                    body = result.get('result') or {}
+                    if method == 'subagent.list':
+                        # The installation's bundled agent definitions are always visible.
+                        assert isinstance(body.get('agents'), list), result
+                        body = {key: body.get(key) for key in expected}
+                    assert body == expected, result
                 assert authority.agent(ref) is None
                 assert not authority.db.get_messages(sid)
                 authority.sessions.pop(sid)
@@ -128,7 +133,8 @@ async def probe(mode):
                     assert {p['session_id'] for p in handed['result']['processes']} == {p.id for p in processes[:2]}, handed
                     roster = await rpc(ws, 'subagent.list', session_id=sid)
                     assert [r['subagent_id'] for r in roster.get('result', {}).get('subagents', [])] == ['owned'], roster
-                    assert 'agent' not in roster['result']['subagents'][0]
+                    # The row always carries the derived role; these doubles carry none.
+                    assert roster['result']['subagents'][0]['agent'] is None
                     for child in children:
                         tail = await rpc(ws, 'subagent.tail', session_id=sid, subagent_id=child._subagent_id)
                         data = tail['result']

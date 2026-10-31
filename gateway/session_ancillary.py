@@ -13,12 +13,29 @@ from gateway.session_busy_controls import authorize
 from hermes_state_runtime import RuntimeStoreError
 
 
-_SUBAGENT_FIELDS = (
-    'subagent_id', 'parent_id', 'depth', 'goal', 'delegation_id', 'model',
-    'started_at', 'status', 'tool_count', 'last_tool', 'accepting_steer',
-)
+# Wire name → live registry record key (the authority twin of
+# tui_gateway/methods_subagents.py::_SUBAGENT_SNAPSHOT_FIELDS; the two must answer the same keys).
+_SUBAGENT_SNAPSHOT_FIELDS = {
+    'subagent_id': 'subagent_id', 'parent_id': 'parent_id', 'depth': 'depth', 'goal': 'goal',
+    'delegation_id': 'delegation_id', 'model': 'model', 'started_at': 'started_at',
+    'status': 'status', 'tool_count': 'tool_count', 'last_tool': 'last_tool',
+    'accepting_steer': 'accepting_steer',
+    'index': 'task_index', 'agent': 'agent_role', 'description': 'goal', 'task': 'goal',
+    'assignment': 'goal', 'session_file': 'session_file', 'last_update': 'last_update',
+    'parent_tool_call_id': 'parent_tool_call_id',
+}
+_SUBAGENT_PROGRESS_FIELDS = ('tool_count', 'last_tool', 'status')
 _TAIL_BYTES = 16384
 _PROCESS_TAIL_CHARS = 32768  # main's dock tail view (cli_process_dock.process_tail)
+
+
+def _subagent_snapshot(record):
+    """One roster row. Absent keys stay ``None``: ``session_file`` until a helper maps a child's
+    session id to a transcript path, ``parent_tool_call_id`` until a child carries one."""
+    row = {name: record.get(key) for name, key in _SUBAGENT_SNAPSHOT_FIELDS.items()}
+    counters = {key: record.get(key) for key in _SUBAGENT_PROGRESS_FIELDS if record.get(key) is not None}
+    row['progress'] = counters or None
+    return row
 
 
 def handlers(connection):
@@ -51,8 +68,8 @@ async def subagent_control(connection, ref, params, *, steer):
         child = next((r['agent'] for r in _owner_objects(connection.authority, ref)[1] if r.get('subagent_id') == sub), None)
     if not steer:
         from agent.interrupt_compat import request_hard_interrupt
-        return {'found': child is not None and bool(request_hard_interrupt(child, f'Interrupted via Desktop ({sub})')),
-                'subagent_id': sub}
+        found = child is not None and bool(request_hard_interrupt(child, f'Interrupted via Desktop ({sub})'))
+        return {'found': found, 'subagent_id': sub, 'cancelled': found}
     from tools import delegate_tool_registry as registry
     with registry._active_subagents_lock:  # linearized with the child's final steer drain
         record = registry._active_subagents.get(sub)
@@ -234,12 +251,28 @@ async def read(connection, ref, params, *, kind):
     if ref.session_id not in authority.sessions:
         raise RuntimeStoreError('not_found')
     authorize(connection, ref, params, 'session:read')
+    live = authority.sessions[ref.session_id]
+    agents = []
+    if kind == 'subagents':
+        from gateway.agent_roster import list_agent_definitions
+        from gateway.session_authorities import owner_scope
+        from gateway.session_policy import policy_for_source
+        from hermes_constants import get_hermes_home
+        policy = policy_for_source(authority.runner, live.source)
+        home = Path(str(authority.profile_id))
+        home = str(home) if home.is_absolute() and home.is_dir() else str(get_hermes_home())
+        cwd = policy.cwd if policy is not None else home
+
+        def roster():
+            with owner_scope(authority):
+                return list_agent_definitions(cwd, authority.db)
+        agents = await asyncio.to_thread(roster)
     # In a worker thread (it inherits the dispatch's owner scope): the projection takes the session's
     # event lock, which every streamed token takes too, reads state.db (compression lineage, local
     # receipt, control meta) and the process registry under its lock. Clients poll these every 1-5 s per
     # open session, so on the loop they were a large share of loop time with many sessions running.
-    return await asyncio.to_thread(locked_projection, authority, authority.sessions[ref.session_id], ref,
-                                   partial(_project, authority, ref, params, kind))
+    return await asyncio.to_thread(locked_projection, authority, live, ref,
+                                   partial(_project, authority, ref, params, kind, agents))
 
 
 def locked_projection(authority, live, ref, project):
@@ -257,7 +290,7 @@ def locked_projection(authority, live, ref, project):
             raise
 
 
-def _project(authority, ref, params, kind):
+def _project(authority, ref, params, kind, agents=()):
     if kind == 'control':
         # Persisted per session id, never the route's live objects: readable after a messaging
         # route moved on to another conversation.
@@ -265,7 +298,8 @@ def _project(authority, ref, params, kind):
     _require_current_route(authority, ref)
     agent, records = _owner_objects(authority, ref, include_fallback_evicted=kind == 'subagents')
     if kind == 'subagents':
-        return {'subagents': [subagent_row(record) for record in records], 'delegations': []}
+        return {'subagents': [subagent_row(record) for record in records],
+                'delegations': [], 'agents': list(agents)}
     if kind == 'tail':
         return subagent_tail(records, params['subagent_id'])
     return {'processes': process_snapshot(authority, ref, agent, records)}
@@ -593,12 +627,13 @@ def subagent_row(record):
     """One ``subagent.list`` row; ``child_session_id`` is the child's own stored session, the one
     ``session.transcript`` reads for its ``subagent_id``."""
     child = getattr(record.get('agent'), 'session_id', None)
-    return {**{key: record.get(key) for key in _SUBAGENT_FIELDS},
+    return {**_subagent_snapshot(record),
             'child_session_id': child if isinstance(child, str) and child else None}
 
 
 def subagent_tail(records, subagent_id):
-    result = {'subagent_id': subagent_id, 'available': False, 'text': '', 'truncated': False}
+    result = {'subagent_id': subagent_id, 'available': False, 'text': '', 'truncated': False,
+              'session_file': None, 'from_byte': 0, 'next_byte': 0}
     record = next((r for r in records if r.get('subagent_id') == subagent_id), None)
     path = getattr(record.get('agent'), '_live_transcript_path', None) if record else None
     if not path:
@@ -606,11 +641,14 @@ def subagent_tail(records, subagent_id):
     try:
         with open(path, 'rb') as stream:
             size = stream.seek(0, 2)
-            stream.seek(max(0, size - _TAIL_BYTES))
+            from_byte = max(0, size - _TAIL_BYTES)
+            stream.seek(from_byte)
             text = stream.read(_TAIL_BYTES).decode('utf-8', errors='ignore')
     except OSError:
-        return result
-    return {**result, 'available': True, 'text': text, 'truncated': size > _TAIL_BYTES}
+        # Creation/cleanup races are normal while a child starts or ends; the path is still real.
+        return {**result, 'session_file': str(path)}
+    return {**result, 'available': True, 'text': text, 'truncated': size > _TAIL_BYTES,
+            'session_file': str(path), 'from_byte': from_byte, 'next_byte': size}
 
 
 def _ownership(authority, ref, agent, records):

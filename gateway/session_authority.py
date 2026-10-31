@@ -477,6 +477,13 @@ class SessionAuthority:
                 'execution_generation': handle.execution_generation,
                 'revision': handle.revision,
             }, event_type='session.info')
+            # The omp wire's queue chips (A.7.1): accepted steers already handed to the running
+            # execution are `steering`; rows still waiting are `follow_up`.
+            steering = [row['text'] for row in pending if row['steering'] and row['text']]
+            follow_up = [row['text'] for row in pending if not row['steering'] and row['text']]
+            live.event_stream.publish(ref.session_id, {
+                'steering': steering, 'follow_up': follow_up, 'live_steered': len(steering),
+            }, event_type='queue.updated')
         from gateway.session_bot_mailbox import wake_bot_receipts
         wake_bot_receipts(self, ref.session_id)
 
@@ -1170,8 +1177,14 @@ class SessionAuthority:
                     'admission_id': row['admission_id']}
                 self.executing[ref.session_id] = row['generation']
                 from gateway.session_automation import admission_display
-                live.event_stream.publish(ref.session_id, admission_display(row.get('payload') or {}),
-                                          event_type='message.start')
+                # One message identity for this execution's start, deltas and completion (the
+                # runner seeds its TurnSegments from the same epoch+generation).
+                message_id = f"{self.epoch}:{row['generation']}"
+                live.event_stream.publish(ref.session_id, {'message_id': message_id},
+                                          event_type='turn.start')
+                start = admission_display(row.get('payload') or {})
+                start['message_id'] = message_id
+                live.event_stream.publish(ref.session_id, start, event_type='message.start')
                 self._publish_pending(ref)
         return row
 

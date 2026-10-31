@@ -226,6 +226,25 @@ class SessionStatsParams(Params):
     session_id: str
 
 
+class TokenUsage(Result):
+    """Session-cumulative token counters (the agent's ``session_*`` totals)."""
+
+    input: int = 0
+    output: int = 0
+    reasoning: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    total: int = 0
+
+
+class ContextUsage(Result):
+    """Current context occupancy against the window (``percent`` clamped 0..100)."""
+
+    tokens: int = 0
+    context_window: int | None = None
+    percent: int = 0
+
+
 class SessionStats(Result):
     """``gateway/session_usage.py::usage_stats``: session-cumulative counters (the agent's ``session_*``),
     context / compressor figures, rolling latency and throughput, rate-limit state, live subagents."""
@@ -254,6 +273,16 @@ class SessionStats(Result):
     provider: str
     fallback_model: str | None = None
     plan_gauge: PlanGauge | None = None
+    session_id: str | None = None
+    tokens: TokenUsage | None = None
+    context_usage: ContextUsage | None = None
+    cost_usd: float | None = None
+    user_messages: int | None = None
+    assistant_messages: int | None = None
+    tool_calls: int | None = None
+    tool_results: int | None = None
+    total_messages: int | None = None
+    routed_models: dict[str, int] | None = None
 
 
 canonical_method("session.stats", params=SessionStatsParams, result=SessionStats,

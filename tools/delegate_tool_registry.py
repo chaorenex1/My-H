@@ -168,7 +168,9 @@ def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[A
         return None, None
 
 # Registry record fields never exposed to the TUI/RPC snapshot.
-_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
+_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer",
+                                  # Roster identity only the subagent.* wire projections read from the raw records.
+                                  "task_index", "agent_role", "last_update", "parent_tool_call_id"})
 
 def list_active_subagents() -> list[dict[str, Any]]:
     """Copy of the running subagent tree ({subagent_id, parent_id, depth, goal, model,

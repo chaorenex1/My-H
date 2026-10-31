@@ -1886,6 +1886,23 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         sql = "SELECT COUNT(*) FROM messages" + (" WHERE session_id = ?" if session_id else "")
         return self._read_one(sql, (session_id,) if session_id else ())[0]
 
+    def message_role_counts(self, session_id: str) -> dict[str, int]:
+        """Per-role counts of this segment's ACTIVE display rows (``user`` / ``assistant`` / ``tool``):
+        the set a display read paints, so a viewer's role counters match its transcript."""
+        counts = {"user": 0, "assistant": 0, "tool": 0}
+        rows = self._read_all(
+            "SELECT role, COUNT(*) FROM messages WHERE session_id = ?" + _DISPLAY_ACTIVE_CLAUSE
+            + DISPLAY_VISIBLE_SQL + " AND role IN ('user', 'assistant', 'tool') GROUP BY role",
+            (session_id,))
+        counts.update({str(role): int(count) for role, count in rows})
+        return counts
+
+    def session_model_call_counts(self, session_id: str) -> dict[str, int]:
+        """API calls per routed model (``session_model_usage``: main loop and auxiliary tasks alike)."""
+        return {str(model): int(calls or 0) for model, calls in self._read_all(
+            "SELECT model, SUM(api_call_count) FROM session_model_usage WHERE session_id = ? GROUP BY model",
+            (session_id,))}
+
     def has_gateway_input_owner(self, session_id: str, owner: str) -> bool:
         """Probe the accepted-input marker without allocating message bodies or archives."""
         return self._read_one(

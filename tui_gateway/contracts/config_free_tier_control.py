@@ -569,10 +569,40 @@ class ModelOptionProvider(OpenModel):
     usage: ProviderUsage | None = None
 
 
+class ModelCost(Result):
+    """Per-Mtok USD prices from models.dev; ``None`` for an absent or zero value."""
+
+    input: float | None = None
+    output: float | None = None
+    cache_read: float | None = None
+    cache_write: float | None = None
+
+
+class ModelThinking(Result):
+    levels: list[str] = Field(default_factory=list)
+
+
+class ModelInfoEntry(Result):
+    """One (provider, model) row projected from the providers payload + the models.dev catalog."""
+
+    id: str
+    name: str = ""
+    provider: str = ""
+    provider_name: str = ""
+    base_url: str | None = None
+    reasoning: bool | None = None
+    input: list[str] = Field(default_factory=list)
+    context_window: int | None = None
+    max_tokens: int | None = None
+    cost: ModelCost | None = None
+    thinking: ModelThinking | None = None
+
+
 class ModelOptionsResult(Result):
     providers: list[ModelOptionProvider]
     model: str = ""
     provider: str = ""
+    models: list[ModelInfoEntry] = Field(default_factory=list)
 
 
 method("model.options", params=ModelOptionsParams, result=ModelOptionsResult,

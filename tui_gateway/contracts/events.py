@@ -20,6 +20,12 @@ from pydantic import Field
 from .base import JsonValue, Payload, WireEnum
 from .common import MessageReaction, PlanGauge, SessionLiveInfo, SubagentStatus, ToolLabel, ToolLabelKind, Usage
 from .config_free_tier_control import FreeTierChallengePayload, SessionControlSnapshot
+from .protocol import (
+    MAX_FRAME_BYTES,
+    MAX_REASSEMBLED_FRAME_BYTES,
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 from .registry import event
 
 
@@ -58,6 +64,13 @@ class GatewayReadyPayload(Payload):
     # WebSocket transport bound to a session authority: session verbs speak the canonical wire
     # (``runtime.describe`` / ``session.create source=…``), so an explicit attach must negotiate it.
     session_authority: bool | None = None
+    # Transport negotiation for a peer whose wire is not JSON-RPC (omp-ui): the version this backend
+    # emits on, the peer versions it can answer, and the frame limits it enforces. ``0`` means "not
+    # enforced"; this gateway never emits ``rpc_chunk`` frames (see ``contracts/protocol.py``).
+    protocol_version: int = PROTOCOL_VERSION
+    supported_protocol_versions: list[int] = Field(default_factory=lambda: list(SUPPORTED_PROTOCOL_VERSIONS))
+    max_frame_bytes: int = MAX_FRAME_BYTES
+    max_reassembled_frame_bytes: int = MAX_REASSEMBLED_FRAME_BYTES
 
 
 event("gateway.ready", GatewayReadyPayload,
@@ -145,6 +158,9 @@ class MessageStartPayload(Payload):
     #: ``stream_segments.TurnSegments`` identity of the prompt turn; a client that sees the same id again is
     #: looking at a re-sent frame of the turn it already has, not a new turn.
     turn_id: str | None = None
+    #: Identity of the assistant message this turn produces (one per turn today); shared by its start,
+    #: deltas and completion so a client can upsert the message instead of trusting frame order.
+    message_id: str | None = None
 
 
 event("message.start", MessageStartPayload,
@@ -166,11 +182,15 @@ class MessageDeltaPayload(StreamDeltaPayload):
     reply segment boundary (the agent's ``stream_delta_callback(None)``, before tool lines) that
     closes the classic CLI's reply box. Every other viewer ignores an empty chunk.
 
-    A prompt turn stamps ``turn_id`` + ``segment`` (interim seals before it) + ``offset`` (UTF-16 code
-    units of that segment already sent): a client drops a re-sent chunk it already applied."""
+    A prompt turn stamps ``turn_id`` + ``message_id`` + ``segment`` (interim seals before it) + ``offset``
+    (UTF-16 code units of that segment already sent): a client drops a re-sent chunk it already applied.
+    ``content_index`` names the assistant message block the chunk belongs to (the text block a client is
+    appending to; it advances with each interim seal)."""
 
     text: str | None
     turn_id: str | None = None
+    message_id: str | None = None
+    content_index: int | None = None
     segment: int | None = None
     offset: int | None = None
 
@@ -188,11 +208,38 @@ class MessageInterimPayload(Payload):
     already_streamed: bool
     #: The turn and segment this seal closes; a re-sent seal of a closed segment is not a new bubble.
     turn_id: str | None = None
+    message_id: str | None = None
     segment: int | None = None
 
 
 event("message.interim", MessageInterimPayload,
       doc="Interim assistant commentary (text beside tool calls) sealed as its own segment.")
+
+
+class MessageBlockStartPayload(Payload):
+    """``prompt_turn._emit_delta`` opens the text block with the first non-empty chunk of a segment.
+    ``content_index`` is the segment counter (every interim seal starts a new block); ``kind`` is the
+    block's content type (``text`` today)."""
+
+    kind: str
+    content_index: int = 0
+    message_id: str | None = None
+
+
+class MessageBlockEndPayload(Payload):
+    """``prompt_turn`` closes the text block at the interim seal or turn completion, carrying the
+    block's whole content so a client that missed deltas can still render it."""
+
+    kind: str
+    content_index: int = 0
+    content: JsonValue = None
+    message_id: str | None = None
+
+
+event("message.block_start", MessageBlockStartPayload,
+      doc="An assistant message block (text) began; its deltas carry the same content_index.")
+event("message.block_end", MessageBlockEndPayload,
+      doc="An assistant message block closed, with its full content.")
 
 
 class MessageAdviserPayload(Payload):
@@ -300,6 +347,11 @@ class MessageCompletePayload(Payload):
     text: str | JsonValue = ""
     usage: Usage | None = None
     status: TurnStatus | None = None
+    #: The assistant message this completion closes (the turn's ``message_id`` from message.start).
+    message_id: str | None = None
+    #: The model's stop reason in omp's vocabulary: ``stop`` | ``length`` | ``toolUse`` | ``error`` |
+    #: ``aborted``. Hermes carries the same outcome as ``status``; this is the one-way projection.
+    stop_reason: str | None = None
     reasoning: str | None = None
     warning: str | None = None
     response_previewed: bool | None = None
@@ -317,6 +369,66 @@ class MessageCompletePayload(Payload):
 
 
 event("message.complete", MessageCompletePayload, doc="The turn ended: final text, usage and outcome.")
+
+
+class TurnStartPayload(Payload):
+    """``prompt_turn._run_prompt_submit`` after the prompt is admitted (one per accepted prompt turn).
+    ``resumed_tool_call_ids`` is absent: Hermes never resumes a tool call mid-flight."""
+
+    resumed_tool_call_ids: list[str] | None = None
+    message_id: str | None = None
+
+
+class TurnEndPayload(Payload):
+    """``prompt_turn.run_body``'s ``finally`` — the closing half of ``turn.start``, emitted on every
+    exit path (completion, error, interrupt). ``message``/``tool_results`` stay absent until the
+    turn result exposes the omp ``AgentMessage`` shape; ``status`` is Hermes-native
+    (``complete`` / ``error`` / ``interrupted``)."""
+
+    status: str | None = None
+    message: JsonValue | None = None
+    tool_results: list[JsonValue] = Field(default_factory=list)
+    message_id: str | None = None
+
+
+event("turn.start", TurnStartPayload, doc="An accepted prompt turn began (paired with turn.end).")
+event("turn.end", TurnEndPayload, doc="The accepted prompt turn finished; emitted exactly once, on every exit path.")
+
+
+class PromptResultError(Payload):
+    """The terminal error of a prompt, in omp's ``prompt_result.error`` shape."""
+
+    message: str
+    provider: str | None = None
+    model: str | None = None
+    http_status: int | None = None
+    retryable: bool = False
+    code: str | None = None
+
+
+class PromptResultPayload(Payload):
+    """``prompt_turn.run_body``'s ``finally``: the terminal outcome of one accepted prompt, correlated
+    by the submit request id (``admission_id``). ``session_settled`` stays false; the separate
+    ``session.settled`` frame closes the queue."""
+
+    admission_id: str
+    agent_invoked: bool
+    status: str  # completed | aborted | error
+    error: PromptResultError | None = None
+    session_settled: bool = False
+
+
+class SessionSettledPayload(Payload):
+    """``prompt_turn.run`` once post-turn follow-ups left the session idle (no queued prompt, no goal
+    continuation, no running turn)."""
+
+    idle_since: float | None = None
+
+
+event("prompt.result", PromptResultPayload,
+      doc="A prompt reached its terminal outcome (completed / aborted / error), keyed by the submit id.")
+event("session.settled", SessionSettledPayload,
+      doc="The session is idle: no turn running and no queued prompt left to drain.")
 
 
 class StatusUpdatePayload(Payload):
@@ -436,6 +548,9 @@ class ToolCompletePayload(Payload):
     duration_s: float | None = None
     result: JsonValue = None
     summary: str | None = None
+    #: The executor's failure verdict for this call (``_detect_tool_failure``); absent from older
+    #: emitters that never learned the outcome.
+    is_error: bool | None = None
     result_text: str | None = None
     inline_diff: str | None = None
     todos: list[JsonValue] | None = None
@@ -492,6 +607,33 @@ class TodoUpdatedPayload(Payload):
 
 
 event("todo.updated", TodoUpdatedPayload, doc="Full todo snapshot after a todo tool ran.")
+
+
+class QueueUpdatedPayload(Payload):
+    """The displayable prompt queue, in omp's ``queue_update`` shape.
+
+    Emitted by ``session_auto_continue._emit_queue_update`` (the TUI's next-turn queue) and by
+    ``gateway/session_authority._publish_pending`` (canonical admissions: ``steering`` rows are the
+    accepted steers, ``follow_up`` the still-queued user texts). ``live_steered`` counts steering
+    entries already handed to the streaming response."""
+
+    steering: list[str] = Field(default_factory=list)
+    follow_up: list[str] = Field(default_factory=list)
+    live_steered: int = 0
+
+
+class CommandOutputPayload(Payload):
+    """``methods_tools.command.dispatch`` / ``slash.exec``: the text a slash command printed
+    out of band (the synchronous result already carries the same text)."""
+
+    text: str
+    name: str | None = None
+
+
+event("queue.updated", QueueUpdatedPayload,
+      doc="The pending prompt queue changed; replace the client's queue chips with this snapshot.")
+event("command.output", CommandOutputPayload,
+      doc="A slash command produced renderer-visible output text.")
 
 
 # ── notifications ─────────────────────────────────────────────────────────────────────────────
@@ -879,24 +1021,40 @@ event("projects.changed", ChangeSignalPayload, doc="projects.db moved; refetch t
 event("pairing.changed", ChangeSignalPayload, doc="Pairing state moved; refetch pairing.")
 event("skills.changed", ChangeSignalPayload,
       doc="A skill root moved (installed/removed elsewhere); refetch commands.catalog from the gateway.")
+
+
+class CommandsChangedPayload(Payload):
+    """``change_watcher`` after the skill-root signature moved: the slash catalog may have changed.
+    ``commands`` stays absent; the client refetches ``commands.catalog`` (the catalog is
+    profile-scoped and too large for a watcher frame)."""
+
+    commands: list[JsonValue] | None = None
+
+
+event("commands.changed", CommandsChangedPayload,
+      doc="The available slash-command catalog may have changed; refetch it.")
 event("bot_relay.outbox.pending", ChangeSignalPayload, doc="A bot-relay outbox envelope is queued; drain it.")
 
 
 __all__ = [
-    "BillingBlock", "BillingStepUpVerificationPayload", "BrowserProgressPayload", "ChangeSignalPayload", "ErrorPayload",
+    "BillingBlock", "BillingStepUpVerificationPayload", "BrowserProgressPayload", "ChangeSignalPayload", "CommandOutputPayload",
+    "CommandsChangedPayload", "ErrorPayload",
     "ErrorSurface", "FreeTierChallengePayload", "GatewayReadyPayload",
+    "MessageBlockEndPayload", "MessageBlockStartPayload",
     "MessageCompletePayload", "MessageInterimPayload", "MessageReaction", "MessageReactionPayload", "MoaAggregatingPayload",
     "MoaPhasePayload", "MoaProgressPayload", "MoaReferencePayload", "NoticePayload",
     "NotificationClearPayload", "NotificationShowPayload", "OpenPayload", "PaneRevealPayload",
     "PetChangedPayload", "PetGenerateProgressPayload", "PetHatchProgressPayload", "PreviewClosePayload",
-    "PreviewOpenPayload", "PreviewRestartProgressPayload", "ReactionPayload", "ResumePhaseStatus",
+    "PreviewOpenPayload", "PreviewRestartProgressPayload", "PromptResultError", "PromptResultPayload",
+    "QueueUpdatedPayload", "ReactionPayload", "ResumePhaseStatus",
     "ReviewSummaryPayload", "SessionControlSnapshot", "SessionControlUpdatePayload",
-    "SessionReclaimedPayload", "SessionResumeProgressPayload", "SessionTitlePayload", "SessionUsagePayload",
+    "SessionReclaimedPayload", "SessionResumeProgressPayload", "SessionSettledPayload", "SessionTitlePayload",
+    "SessionUsagePayload",
     "SetupReadyPayload", "SideAgentCompletePayload", "SkinPayload", "StatusUpdatePayload",
     "StreamDeltaPayload", "SubagentEventPayload", "SubagentOutputTailEntry", "TerminalClosePayload",
     "TerminalOutputPayload", "TipShowPayload", "TodoUpdatedPayload", "ToolCompletePayload",
     "ToolGeneratingPayload", "ToolLabel", "ToolLabelKind", "ToolOutputRiskPayload", "ToolProgressPayload",
     "ToolStartPayload",
-    "TurnStatus", "VoicePartialPayload", "VoiceStatusPayload",
+    "TurnEndPayload", "TurnStartPayload", "TurnStatus", "VoicePartialPayload", "VoiceStatusPayload",
     "VoiceTranscriptPayload", "WakeDetectedPayload",
 ]

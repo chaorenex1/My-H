@@ -323,12 +323,14 @@ def _(rid, params: dict) -> dict:
     skew = _model_skew_err(rid)
     if skew is not None:
         return skew
-    from hermes_cli.inventory import build_model_options_payload
+    from hermes_cli.inventory import build_model_options_payload, project_model_infos
     # A spawned agent owns the live provider/model/base_url; empty attributes must
     # NOT clobber disk config (with_overrides is truthy-only).
-    return _ok(rid, build_model_options_payload(
+    payload = build_model_options_payload(
         _model_picker_context(_session_agent(params)), explicit_only=bool(params.get("explicit_only")),
-        include_unconfigured=bool(params.get("include_unconfigured")), refresh=bool(params.get("refresh"))))
+        include_unconfigured=bool(params.get("include_unconfigured")), refresh=bool(params.get("refresh")))
+    payload["models"] = project_model_infos(payload)
+    return _ok(rid, payload)
 
 
 @method("model.save_key")

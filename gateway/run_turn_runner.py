@@ -225,15 +225,34 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 session_id, generation, event_type, self._stamp_segment(generation, event_type, payload))
         return False
 
+    def _close_text_block(self, segments) -> None:
+        """Close an open assistant text block on the authority stream (omp's message.block_end)."""
+        closed = segments.close_text_block()
+        if closed is not None:
+            content_index, content = closed
+            self._publish_execution("message.block_end", {
+                "kind": "text", "content_index": content_index, "content": content})
+
+    def _segments_for(self, generation):
+        """This execution's reply cursor, created on first use. The claim's message.start names the
+        same identity (authority epoch + generation), so start, deltas and completion bind to one
+        message."""
+        from tui_gateway.stream_segments import TurnSegments
+        segments = getattr(self, "_segments", None)
+        if segments is None or segments[0] != generation:
+            segments = self._segments = (generation, TurnSegments())
+            owner = self._approval_owner
+            epoch = getattr(owner[0], "epoch", None) if owner is not None else None
+            if isinstance(epoch, str) and epoch:
+                segments[1].message_id = f"{epoch}:{generation}"
+        return segments[1]
+
     def _stamp_segment(self, generation, event_type, payload):
         """The turn's wire identity on its reply frames (tui_gateway/stream_segments.py), so a viewer
         upserts a re-sent delta or seal instead of painting a second copy (#144609). The same
         stamping rule as tui_gateway's ``_emit``, with one cursor per execution generation."""
-        from tui_gateway.stream_segments import TurnSegments, stamp_reply_frame
-        segments = getattr(self, "_segments", None)
-        if segments is None or segments[0] != generation:
-            segments = self._segments = (generation, TurnSegments())
-        return stamp_reply_frame(segments[1], event_type, payload)
+        from tui_gateway.stream_segments import stamp_reply_frame
+        return stamp_reply_frame(self._segments_for(generation), event_type, payload)
 
     def _publish_api_tool(self, event_type, call_id, tool_name, args, result=None):
         """The retained tool payload reaches the API observers of this exact admission only;
@@ -317,6 +336,15 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 if not ctx._run_still_current():
                     return
                 delivered = bool(delta_sinks)
+                segments = (self._segments_for(self._approval_owner[2])
+                            if self._approval_owner is not None else None)
+                if isinstance(text, str) and text:
+                    if segments is not None and segments.open_text_block() is not None:
+                        self._publish_execution("message.block_start", {"kind": "text"})
+                    if segments is not None:
+                        segments.note_text(text)
+                elif segments is not None:
+                    self._close_text_block(segments)
                 if text is not None:
                     delivered = self._publish_execution("message.delta", {"text": text}) or delivered
                 elif local_viewer_route:
@@ -335,6 +363,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         def interim_assistant_cb(text: str, *, already_streamed: bool = False) -> None:
             if not ctx._run_still_current():
                 return
+            segments = (self._segments_for(self._approval_owner[2])
+                        if self._approval_owner is not None else None)
+            if segments is not None:
+                self._close_text_block(segments)
             unseen = False
             if local_viewer_route and not already_streamed and str(text or "").strip():
                 # LocalSessionAdapter.send publishes nothing, so unstreamed commentary handed to the
@@ -1396,6 +1428,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 result = run_classic_cli_turn(self, lambda: self._run_conversation_with_approval(
                     agent, agent_history, observed_group_context, persist_msg, persist_ts))
         finally:
+            if self._approval_owner is not None:
+                self._close_text_block(self._segments_for(self._approval_owner[2]))
             if local_sinks is not None:
                 from gateway import local_viewer_events
                 local_viewer_events.restore(agent, local_sinks)

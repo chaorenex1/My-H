@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import sqlite3
+import time
 
 from gateway.session_producer_lifecycle import drop_producer_turn
 from hermes_state_runtime import RuntimeStoreError, _admission, _epoch, get_session_admission, settle_steer_transfers
@@ -51,7 +52,7 @@ async def recover_failed_settlement(authority, row):
             await asyncio.sleep(1)
 
 
-def completion_payload(row, settled, response, captured):
+def completion_payload(row, settled, response, captured, *, message_id=None):
     # ``status`` is the message.complete contract's TurnStatus: the Desktop
     # extends a Stopped bubble to the persisted partial only on 'interrupted'.
     complete = {
@@ -59,6 +60,11 @@ def completion_payload(row, settled, response, captured):
         'outcome': 'cancelled' if settled['outcome'] == 'interrupted' else settled['outcome'],
         'status': {'completed': 'complete', 'interrupted': 'interrupted'}.get(
             settled['outcome'], 'error')}
+    # The omp message contract's one-way projection of the same outcome.
+    complete['stop_reason'] = {'complete': 'stop', 'interrupted': 'aborted'}.get(
+        complete['status'], 'error')
+    if message_id is not None:
+        complete['message_id'] = message_id
     # Only the agent's reuse site sets this (never inferred from equal text): the
     # final repeats a reply the viewer already painted, so it settles in place.
     captured_result = (captured or {}).get('result') or {}
@@ -113,13 +119,42 @@ def _publish_completion(authority, live, ref, row, settled, response, captured):
         live.controls.snapshot(ref.session_id, None)
     except Exception:
         logger.exception('Terminal control cleanup failed for admission %s', row['admission_id'])
-    complete = completion_payload(row, settled, response, captured)
+    try:
+        generation = row['generation']
+    except (KeyError, IndexError):
+        generation = None
+    epoch = getattr(authority, 'epoch', None)
+    message_id = (f"{epoch}:{generation}"
+                  if generation is not None and isinstance(epoch, str) and epoch else None)
+    complete = completion_payload(row, settled, response, captured, message_id=message_id)
     notice = owner_stop_notice(captured, settled['outcome'], row)
     if notice and not complete.get('warning'):
         # ``warning`` is the slot every surface already renders on message.complete (Ink activity
         # line, Desktop toast), so a turn the owner's stop cut short says why (#134889 F1).
         complete['warning'] = notice
     live.event_stream.publish(ref.session_id, complete)
+    # The omp turn primitives on the same execution stream: close the turn and report the prompt's
+    # terminal outcome (message.complete above remains the Hermes-native frame).
+    status = complete['status']
+    turn_end = {'status': status}
+    if message_id is not None:
+        turn_end['message_id'] = message_id
+    live.event_stream.publish(ref.session_id, turn_end, event_type='turn.end')
+    prompt_result = {
+        'admission_id': row['admission_id'],
+        'agent_invoked': bool(captured),
+        'status': {'complete': 'completed', 'interrupted': 'aborted'}.get(status, 'error'),
+    }
+    if status == 'error':
+        result = (captured or {}).get('result') or {}
+        prompt_result['error'] = {
+            'message': str(result.get('error') or complete.get('text') or 'turn failed'),
+            'retryable': False,
+        }
+    live.event_stream.publish(ref.session_id, prompt_result, event_type='prompt.result')
+    # A queued admission that drains next emits its own turn.start; a viewer treats this as the
+    # idle edge of the execution that just settled.
+    live.event_stream.publish(ref.session_id, {'idle_since': time.time()}, event_type='session.settled')
 
 
 RESTART_INTERRUPT_NOTICE = ('Gateway restarting: this turn was interrupted and will not be run again. '

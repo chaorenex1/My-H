@@ -98,6 +98,22 @@ def _emit_ordinary_and_essential_tools(sid):
     server._on_tool_complete(sid, "tool-fail", "terminal", {"command": "deploy"}, json.dumps({"error": "disk full"}))
 
 
+def test_tool_complete_carries_the_executor_error_verdict(monkeypatch):
+    """The omp tool row needs a boolean verdict; the gateway derives it with the executor's own
+    classifier so a failing terminal result is not re-parsed by the client."""
+    events = _capture(monkeypatch)
+    _session(monkeypatch, "tool-verdict", show_reasoning=False, tool_progress="all")
+
+    server._on_tool_complete(
+        "tool-verdict", "t-fail", "terminal", {"command": "deploy"},
+        json.dumps({"exit_code": 1, "error": "disk full"}))
+    server._on_tool_complete("tool-verdict", "t-ok", "read_file", {"path": "a"}, "contents")
+
+    verdicts = {payload["tool_id"]: payload["is_error"]
+                for event, _sid, payload in events if event == "tool.complete"}
+    assert verdicts == {"t-fail": True, "t-ok": False}
+
+
 def _lifecycle(events, tool_id):
     return [event[0] for event in events if (event[2] or {}).get("tool_id") == tool_id]
 

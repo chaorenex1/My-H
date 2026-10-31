@@ -260,8 +260,26 @@ class AuthorityConnection:
         handlers.update(side_handlers(self))
         from gateway.session_llm_oneshot import handlers as oneshot_handlers
         handlers.update(oneshot_handlers(self))
+        from gateway.session_git import handlers as git_handlers
+        handlers.update(git_handlers(self))
+        from gateway.session_hooks import handlers as hooks_handlers
+        handlers.update(hooks_handlers(self))
+        from gateway.session_skins import handlers as skin_handlers
+        handlers.update(skin_handlers(self))
+        from gateway.session_config_schema import handlers as schema_handlers
+        handlers.update(schema_handlers(self))
+        from gateway.session_plan import handlers as plan_handlers
+        handlers.update(plan_handlers(self))
+        from gateway.session_btw_history import handlers as btw_handlers
+        handlers.update(btw_handlers(self))
+        from gateway.session_subagent_config import handlers as subagent_config_handlers
+        handlers.update(subagent_config_handlers(self))
         from gateway.session_images import attach_bytes
         from functools import partial
+        from gateway.session_lease import lease
+        handlers['session.lease'] = partial(lease, self)
+        from gateway.session_auth_accounts import accounts
+        handlers['auth.accounts'] = partial(accounts, self)
         handlers['image.attach_bytes'] = partial(attach_bytes, self)
         from gateway.session_complete_path import complete_path
         handlers['complete.path'] = partial(complete_path, self)

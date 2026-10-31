@@ -158,17 +158,15 @@
     {
       "id": "theme_selector",
       "title": "Theme selector / skin",
-      "status": "pending",
-      "supported": false,
-      "note": "skin.list does not exist yet (N); config.get/set are served",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "skin.list",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "config.get",
@@ -183,22 +181,25 @@
           "change": []
         }
       ],
-      "events": []
+      "events": [
+        {
+          "name": "skin.changed",
+          "status": "A"
+        }
+      ]
     },
     {
       "id": "settings_menu",
       "title": "Settings menu",
-      "status": "pending",
-      "supported": false,
-      "note": "config.schema does not exist yet (N)",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "config.schema",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "config.get",
@@ -327,9 +328,9 @@
     {
       "id": "agent_hub",
       "title": "Agent Hub / dashboard / transcript",
-      "status": "pending",
-      "supported": false,
-      "note": "subagent.config (N) is pending",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "subagent.list",
@@ -370,10 +371,8 @@
         {
           "name": "subagent.config",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         }
       ],
       "events": [
@@ -478,7 +477,7 @@
       "title": "Extensions center",
       "status": "pending",
       "supported": false,
-      "note": "hooks.list/toggle (N) are pending; Hermes has no in-process extension registry",
+      "note": "hooks.changed is a P4 event; Hermes has no in-process extension registry",
       "methods": [
         {
           "name": "plugins.list",
@@ -489,10 +488,8 @@
         {
           "name": "hooks.list",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "plugins.manage",
@@ -503,10 +500,8 @@
         {
           "name": "hooks.toggle",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         }
       ],
       "events": [
@@ -519,65 +514,51 @@
     {
       "id": "git_tui",
       "title": "Git TUI",
-      "status": "pending",
-      "supported": false,
-      "note": "the git.* contract is not implemented yet (N)",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "git.status",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.diff",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.log",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.branches",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.stage",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.unstage",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "git.commit",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         }
       ],
       "events": []
@@ -656,17 +637,15 @@
     {
       "id": "btw_panel",
       "title": "BTW panel / history",
-      "status": "pending",
-      "supported": false,
-      "note": "btw.history does not exist yet (N)",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "btw.history",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "prompt.btw",
@@ -696,31 +675,25 @@
       "title": "Plan review / save / TOC",
       "status": "pending",
       "supported": false,
-      "note": "session.plan.* does not exist yet (N)",
+      "note": "session.plan.updated is a P4 event",
       "methods": [
         {
           "name": "session.plan.read",
           "access": "read",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "session.plan.save",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         },
         {
           "name": "session.plan.approve",
           "access": "write",
-          "status": "M",
-          "change": [
-            "N"
-          ]
+          "status": "A",
+          "change": []
         }
       ],
       "events": [
@@ -827,7 +800,12 @@
           "change": []
         }
       ],
-      "events": []
+      "events": [
+        {
+          "name": "commands.changed",
+          "status": "A"
+        }
+      ]
     },
     {
       "id": "autoresearch",

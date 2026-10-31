@@ -14237,7 +14237,7 @@ def _wake_lease_double():
 def test_accepted_interrupt_resumes_wake_mismatch_does_not(monkeypatch):
     """An accepted interrupt re-arms the caller's paused detector; a hosted-task mismatch does not."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    owner = types.SimpleNamespace(_closed=False)
+    owner = types.SimpleNamespace(_closed=False, write=lambda _frame: True)
     state["lease"] = owner
     session = _session(
         agent=types.SimpleNamespace(interrupt=lambda: None),
@@ -14278,7 +14278,7 @@ def test_accepted_interrupt_resumes_wake_mismatch_does_not(monkeypatch):
 def test_interrupt_error_after_tts_stop_still_resumes_wake(monkeypatch):
     """TTS is cut before session lookup and the compute-host call; a later error must still re-arm."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    owner = types.SimpleNamespace(_closed=False)
+    owner = types.SimpleNamespace(_closed=False, write=lambda _frame: True)
     state["lease"] = owner
     session = _session(agent=types.SimpleNamespace(interrupt=lambda: None), running=True)
     server._sessions["sid"] = session
@@ -14319,9 +14319,9 @@ def test_interrupt_error_after_tts_stop_still_resumes_wake(monkeypatch):
 def test_interrupt_resumes_voice_wake_owner_not_a_foreign_lease(monkeypatch):
     """Interrupt resumes a voice-owned pause even when the caller differs, and leaves a foreign lease paused."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    voice_owner = types.SimpleNamespace(_closed=False, role="voice")
-    caller = types.SimpleNamespace(_closed=False, role="caller")
-    foreign = types.SimpleNamespace(_closed=False, role="foreign")
+    voice_owner = types.SimpleNamespace(_closed=False, role="voice", write=lambda _frame: True)
+    caller = types.SimpleNamespace(_closed=False, role="caller", write=lambda _frame: True)
+    foreign = types.SimpleNamespace(_closed=False, role="foreign", write=lambda _frame: True)
     state["lease"] = voice_owner
     session = _session(agent=types.SimpleNamespace(interrupt=lambda: None), running=True)
     server._sessions["sid"] = session

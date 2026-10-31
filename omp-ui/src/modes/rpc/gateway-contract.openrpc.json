@@ -3446,7 +3446,7 @@
     },
     {
       "name": "session.history",
-      "summary": "The durable display transcript (ancestors included, row ids attached).",
+      "summary": "The durable display transcript (ancestors included, row ids attached), paged by row id.",
       "params": [
         {
           "name": "params",
@@ -5710,6 +5710,85 @@
         "title": "AttachedImageResult",
         "type": "object"
       },
+      "AuthAccount": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "title": "Credential Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "type": {
+            "default": "api_key",
+            "title": "Type",
+            "type": "string"
+          },
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "credential_id",
+          "provider"
+        ],
+        "title": "AuthAccount",
+        "type": "object"
+      },
+      "AuthAccountsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "provider_id"
+        ],
+        "title": "AuthAccountsParams",
+        "type": "object"
+      },
+      "AuthAccountsResult": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AuthAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          }
+        },
+        "title": "AuthAccountsResult",
+        "type": "object"
+      },
       "AutoContinue": {
         "additionalProperties": false,
         "description": "A crash-interrupted turn was scheduled to continue right after this resume.",
@@ -7601,6 +7680,172 @@
           "level"
         ],
         "title": "BrowserProgressPayload",
+        "type": "object"
+      },
+      "BtwHistoryItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question": {
+            "default": "",
+            "title": "Question",
+            "type": "string"
+          },
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "id",
+          "created_at"
+        ],
+        "title": "BtwHistoryItem",
+        "type": "object"
+      },
+      "BtwHistoryParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "BtwHistoryParams",
+        "type": "object"
+      },
+      "BtwHistoryRecord": {
+        "additionalProperties": false,
+        "description": "The panel's row: the same stored answer, newest first, with an epoch-millis time.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question": {
+            "default": "",
+            "title": "Question",
+            "type": "string"
+          },
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At"
+          },
+          "created_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Created At Ms"
+          },
+          "status": {
+            "default": "completed",
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "BtwHistoryRecord",
+        "type": "object"
+      },
+      "BtwHistoryResult": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BtwHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/BtwHistoryRecord"
+            },
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "title": "BtwHistoryResult",
         "type": "object"
       },
       "CanonicalApprovalParams": {
@@ -11756,6 +12001,57 @@
             "default": false,
             "title": "Desktop Local",
             "type": "boolean"
+          },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Protocol Version"
+          },
+          "supported_protocol_versions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supported Protocol Versions"
+          },
+          "max_frame_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Frame Bytes"
+          },
+          "max_reassembled_frame_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Reassembled Frame Bytes"
           }
         },
         "title": "ClientCapabilitiesParams",
@@ -11780,6 +12076,28 @@
             "default": false,
             "title": "Canonical Clarify Batch",
             "type": "boolean"
+          },
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "supported_protocol_versions": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Supported Protocol Versions",
+            "type": "array"
+          },
+          "max_frame_bytes": {
+            "default": 0,
+            "title": "Max Frame Bytes",
+            "type": "integer"
+          },
+          "max_reassembled_frame_bytes": {
+            "default": 0,
+            "title": "Max Reassembled Frame Bytes",
+            "type": "integer"
           }
         },
         "required": [
@@ -11812,6 +12130,68 @@
           "session_id"
         ],
         "title": "ClipboardPasteParams",
+        "type": "object"
+      },
+      "CommandCatalogEntry": {
+        "additionalProperties": false,
+        "description": "One flat per-command row: ``name`` has no leading slash; ``aliases``/``subcommands`` are bare\nnames too. ``source`` is builtin|quick|plugin|skill; ``hint`` is the registry args hint.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "source": {
+            "default": "builtin",
+            "title": "Source",
+            "type": "string"
+          },
+          "argument_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArgumentMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hint"
+          },
+          "subcommands": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subcommands",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CommandCatalogEntry",
         "type": "object"
       },
       "CommandCatalogMeta": {
@@ -12088,6 +12468,33 @@
         "title": "CommandObserveResult",
         "type": "object"
       },
+      "CommandOutputPayload": {
+        "additionalProperties": false,
+        "description": "``methods_tools.command.dispatch`` / ``slash.exec``: the text a slash command printed\nout of band (the synchronous result already carries the same text).",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "CommandOutputPayload",
+        "type": "object"
+      },
       "CommandResolveParams": {
         "additionalProperties": false,
         "properties": {
@@ -12246,9 +12653,37 @@
             },
             "title": "Plugin Commands",
             "type": "object"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/CommandCatalogEntry"
+            },
+            "title": "Entries",
+            "type": "array"
           }
         },
         "title": "CommandsCatalogResult",
+        "type": "object"
+      },
+      "CommandsChangedPayload": {
+        "additionalProperties": false,
+        "description": "``change_watcher`` after the skill-root signature moved: the slash catalog may have changed.\n``commands`` stays absent; the client refetches ``commands.catalog`` (the catalog is\nprofile-scoped and too large for a watcher frame).",
+        "properties": {
+          "commands": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commands"
+          }
+        },
+        "title": "CommandsChangedPayload",
         "type": "object"
       },
       "CompletePathParams": {
@@ -12744,6 +13179,39 @@
         "title": "ConfigProviderRef",
         "type": "object"
       },
+      "ConfigSchemaParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "title": "ConfigSchemaParams",
+        "type": "object"
+      },
+      "ConfigSchemaResult": {
+        "additionalProperties": false,
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigSetting"
+            },
+            "title": "Settings",
+            "type": "array"
+          }
+        },
+        "title": "ConfigSchemaResult",
+        "type": "object"
+      },
       "ConfigSection": {
         "additionalProperties": false,
         "properties": {
@@ -12975,6 +13443,78 @@
           "key"
         ],
         "title": "ConfigSetResult",
+        "type": "object"
+      },
+      "ConfigSetting": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "boolean",
+              "number",
+              "list",
+              "object",
+              "select"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "default": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default"
+          },
+          "enum": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enum"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "category": {
+            "default": "general",
+            "title": "Category",
+            "type": "string"
+          },
+          "scope": {
+            "default": "profile",
+            "title": "Scope",
+            "type": "string"
+          },
+          "restart_required": {
+            "default": false,
+            "title": "Restart Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "type"
+        ],
+        "title": "ConfigSetting",
         "type": "object"
       },
       "ConfigShowParams": {
@@ -15344,6 +15884,36 @@
           "status"
         ],
         "title": "ContextFileSource",
+        "type": "object"
+      },
+      "ContextUsage": {
+        "additionalProperties": false,
+        "description": "Current context occupancy against the window (``percent`` clamped 0..100).",
+        "properties": {
+          "tokens": {
+            "default": 0,
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context Window"
+          },
+          "percent": {
+            "default": 0,
+            "title": "Percent",
+            "type": "integer"
+          }
+        },
+        "title": "ContextUsage",
         "type": "object"
       },
       "CorrectionStatus": {
@@ -18618,6 +19188,28 @@
             ],
             "default": null,
             "title": "Session Authority"
+          },
+          "protocol_version": {
+            "default": 1,
+            "title": "Protocol Version",
+            "type": "integer"
+          },
+          "supported_protocol_versions": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Supported Protocol Versions",
+            "type": "array"
+          },
+          "max_frame_bytes": {
+            "default": 0,
+            "title": "Max Frame Bytes",
+            "type": "integer"
+          },
+          "max_reassembled_frame_bytes": {
+            "default": 0,
+            "title": "Max Reassembled Frame Bytes",
+            "type": "integer"
           }
         },
         "required": [
@@ -18626,6 +19218,446 @@
           "replay_epoch"
         ],
         "title": "GatewayReadyPayload",
+        "type": "object"
+      },
+      "GitBranchInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "upstream": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Upstream"
+          },
+          "ahead": {
+            "default": 0,
+            "title": "Ahead",
+            "type": "integer"
+          },
+          "behind": {
+            "default": 0,
+            "title": "Behind",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GitBranchInfo",
+        "type": "object"
+      },
+      "GitBranchesParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "GitBranchesParams",
+        "type": "object"
+      },
+      "GitBranchesResult": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "default": "",
+            "title": "Current",
+            "type": "string"
+          },
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/GitBranchInfo"
+            },
+            "title": "Branches",
+            "type": "array"
+          }
+        },
+        "title": "GitBranchesResult",
+        "type": "object"
+      },
+      "GitCommitInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "title": "Subject",
+            "type": "string"
+          },
+          "author": {
+            "default": "",
+            "title": "Author",
+            "type": "string"
+          },
+          "date": {
+            "default": "",
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "title": "GitCommitInfo",
+        "type": "object"
+      },
+      "GitCommitParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "sign": {
+            "default": false,
+            "title": "Sign",
+            "type": "boolean"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "session_id",
+          "message"
+        ],
+        "title": "GitCommitParams",
+        "type": "object"
+      },
+      "GitCommitResult": {
+        "additionalProperties": false,
+        "properties": {
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "title": "GitCommitResult",
+        "type": "object"
+      },
+      "GitDiffParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "staged": {
+            "default": false,
+            "title": "Staged",
+            "type": "boolean"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "GitDiffParams",
+        "type": "object"
+      },
+      "GitDiffResult": {
+        "additionalProperties": false,
+        "properties": {
+          "diff": {
+            "default": "",
+            "title": "Diff",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "title": "GitDiffResult",
+        "type": "object"
+      },
+      "GitFileStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "xy": {
+            "title": "Xy",
+            "type": "string"
+          },
+          "staged": {
+            "default": false,
+            "title": "Staged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "xy"
+        ],
+        "title": "GitFileStatus",
+        "type": "object"
+      },
+      "GitLogParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "GitLogParams",
+        "type": "object"
+      },
+      "GitLogResult": {
+        "additionalProperties": false,
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/GitCommitInfo"
+            },
+            "title": "Commits",
+            "type": "array"
+          }
+        },
+        "title": "GitLogResult",
+        "type": "object"
+      },
+      "GitPathsParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Paths",
+            "type": "array"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "session_id",
+          "paths"
+        ],
+        "title": "GitPathsParams",
+        "type": "object"
+      },
+      "GitStagedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "staged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Staged",
+            "type": "array"
+          }
+        },
+        "title": "GitStagedResult",
+        "type": "object"
+      },
+      "GitStatusParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "GitStatusParams",
+        "type": "object"
+      },
+      "GitStatusResult": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "default": "",
+            "title": "Branch",
+            "type": "string"
+          },
+          "ahead": {
+            "default": 0,
+            "title": "Ahead",
+            "type": "integer"
+          },
+          "behind": {
+            "default": 0,
+            "title": "Behind",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/GitFileStatus"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "title": "GitStatusResult",
         "type": "object"
       },
       "GoalContractSnapshot": {
@@ -20534,6 +21566,213 @@
           "fire_count"
         ],
         "title": "HeartbeatSnapshot",
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "additionalProperties": false,
+        "description": "One paged transcript entry (a projected message carrying a durable ``row_id``).",
+        "properties": {
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Text"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timestamp"
+          },
+          "display_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Display Kind"
+          }
+        },
+        "required": [
+          "entry_id",
+          "role"
+        ],
+        "title": "HistoryEntry",
+        "type": "object"
+      },
+      "HookRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "scope": {
+            "default": "profile",
+            "title": "Scope",
+            "type": "string"
+          },
+          "source": {
+            "default": "config.yaml",
+            "title": "Source",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "event",
+          "enabled"
+        ],
+        "title": "HookRow",
+        "type": "object"
+      },
+      "HookToggleParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        },
+        "required": [
+          "name",
+          "enabled",
+          "request_id"
+        ],
+        "title": "HookToggleParams",
+        "type": "object"
+      },
+      "HookToggleResult": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "enabled"
+        ],
+        "title": "HookToggleResult",
+        "type": "object"
+      },
+      "HooksListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          }
+        },
+        "title": "HooksListParams",
+        "type": "object"
+      },
+      "HooksListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "hooks": {
+            "items": {
+              "$ref": "#/components/schemas/HookRow"
+            },
+            "title": "Hooks",
+            "type": "array"
+          }
+        },
+        "title": "HooksListResult",
         "type": "object"
       },
       "I18nCatalogParams": {
@@ -23356,6 +24595,74 @@
         "title": "MessageAdviserPayload",
         "type": "object"
       },
+      "MessageBlockEndPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn`` closes the text block at the interim seal or turn completion, carrying the\nblock's whole content so a client that missed deltas can still render it.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "content_index": {
+            "default": 0,
+            "title": "Content Index",
+            "type": "integer"
+          },
+          "content": {
+            "default": null,
+            "title": "Content"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "MessageBlockEndPayload",
+        "type": "object"
+      },
+      "MessageBlockStartPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn._emit_delta`` opens the text block with the first non-empty chunk of a segment.\n``content_index`` is the segment counter (every interim seal starts a new block); ``kind`` is the\nblock's content type (``text`` today).",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "content_index": {
+            "default": 0,
+            "title": "Content Index",
+            "type": "integer"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "MessageBlockStartPayload",
+        "type": "object"
+      },
       "MessageCompletePayload": {
         "additionalProperties": false,
         "description": "``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` /\n``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) /\n``compute_host_bridge`` (``text`` + ``status``).",
@@ -23391,6 +24698,30 @@
               }
             ],
             "default": null
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          },
+          "stop_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stop Reason"
           },
           "reasoning": {
             "anyOf": [
@@ -23551,7 +24882,7 @@
       },
       "MessageDeltaPayload": {
         "additionalProperties": false,
-        "description": "``message.delta``. A session-authority local-viewer turn also publishes ``text: null``: the\nreply segment boundary (the agent's ``stream_delta_callback(None)``, before tool lines) that\ncloses the classic CLI's reply box. Every other viewer ignores an empty chunk.\n\nA prompt turn stamps ``turn_id`` + ``segment`` (interim seals before it) + ``offset`` (UTF-16 code\nunits of that segment already sent): a client drops a re-sent chunk it already applied.",
+        "description": "``message.delta``. A session-authority local-viewer turn also publishes ``text: null``: the\nreply segment boundary (the agent's ``stream_delta_callback(None)``, before tool lines) that\ncloses the classic CLI's reply box. Every other viewer ignores an empty chunk.\n\nA prompt turn stamps ``turn_id`` + ``message_id`` + ``segment`` (interim seals before it) + ``offset``\n(UTF-16 code units of that segment already sent): a client drops a re-sent chunk it already applied.\n``content_index`` names the assistant message block the chunk belongs to (the text block a client is\nappending to; it advances with each interim seal).",
         "properties": {
           "text": {
             "anyOf": [
@@ -23599,6 +24930,30 @@
             ],
             "default": null,
             "title": "Turn Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          },
+          "content_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content Index"
           },
           "segment": {
             "anyOf": [
@@ -23654,6 +25009,18 @@
             ],
             "default": null,
             "title": "Turn Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
           },
           "segment": {
             "anyOf": [
@@ -23906,6 +25273,18 @@
             ],
             "default": null,
             "title": "Turn Id"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
           }
         },
         "title": "MessageStartPayload",
@@ -24080,6 +25459,62 @@
         "title": "ModelCapabilities",
         "type": "object"
       },
+      "ModelCost": {
+        "additionalProperties": false,
+        "description": "Per-Mtok USD prices from models.dev; ``None`` for an absent or zero value.",
+        "properties": {
+          "input": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Input"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Output"
+          },
+          "cache_read": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cache Read"
+          },
+          "cache_write": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cache Write"
+          }
+        },
+        "title": "ModelCost",
+        "type": "object"
+      },
       "ModelDisconnectParams": {
         "additionalProperties": false,
         "properties": {
@@ -24128,6 +25563,113 @@
           "disconnected"
         ],
         "title": "ModelDisconnectResult",
+        "type": "object"
+      },
+      "ModelInfoEntry": {
+        "additionalProperties": false,
+        "description": "One (provider, model) row projected from the providers payload + the models.dev catalog.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_name": {
+            "default": "",
+            "title": "Provider Name",
+            "type": "string"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Url"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning"
+          },
+          "input": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input",
+            "type": "array"
+          },
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context Window"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Tokens"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelCost"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelThinking"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ModelInfoEntry",
         "type": "object"
       },
       "ModelOptionProvider": {
@@ -24501,6 +26043,13 @@
             "default": "",
             "title": "Provider",
             "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelInfoEntry"
+            },
+            "title": "Models",
+            "type": "array"
           }
         },
         "required": [
@@ -24624,6 +26173,20 @@
           "provider"
         ],
         "title": "ModelSaveKeyResult",
+        "type": "object"
+      },
+      "ModelThinking": {
+        "additionalProperties": false,
+        "properties": {
+          "levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Levels",
+            "type": "array"
+          }
+        },
+        "title": "ModelThinking",
         "type": "object"
       },
       "NoticePayload": {
@@ -27171,6 +28734,50 @@
         "title": "PingResult",
         "type": "object"
       },
+      "PlanApproveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "request_id"
+        ],
+        "title": "PlanApproveParams",
+        "type": "object"
+      },
+      "PlanApproveResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PlanStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PlanApproveResult",
+        "type": "object"
+      },
       "PlanGauge": {
         "additionalProperties": false,
         "description": "``gateway/session_usage.py::plan_gauge``: a window plan's allowance for the status bar.",
@@ -27207,6 +28814,136 @@
         ],
         "title": "PlanGauge",
         "type": "object"
+      },
+      "PlanReadParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "PlanReadParams",
+        "type": "object"
+      },
+      "PlanReadResult": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlanStatus",
+            "default": "none"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          }
+        },
+        "title": "PlanReadResult",
+        "type": "object"
+      },
+      "PlanSaveParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "text",
+          "request_id"
+        ],
+        "title": "PlanSaveParams",
+        "type": "object"
+      },
+      "PlanSaveResult": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path",
+          "updated_at"
+        ],
+        "title": "PlanSaveResult",
+        "type": "object"
+      },
+      "PlanStatus": {
+        "enum": [
+          "none",
+          "draft",
+          "approved"
+        ],
+        "title": "PlanStatus",
+        "type": "string"
       },
       "PlanUsage": {
         "additionalProperties": false,
@@ -32224,6 +33961,115 @@
         "title": "PromptResponseResult",
         "type": "object"
       },
+      "PromptResultError": {
+        "additionalProperties": false,
+        "description": "The terminal error of a prompt, in omp's ``prompt_result.error`` shape.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "http_status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Http Status"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "PromptResultError",
+        "type": "object"
+      },
+      "PromptResultPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn.run_body``'s ``finally``: the terminal outcome of one accepted prompt, correlated\nby the submit request id (``admission_id``). ``session_settled`` stays false; the separate\n``session.settled`` frame closes the queue.",
+        "properties": {
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "agent_invoked": {
+            "title": "Agent Invoked",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptResultError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "session_settled": {
+            "default": false,
+            "title": "Session Settled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "admission_id",
+          "agent_invoked",
+          "status"
+        ],
+        "title": "PromptResultPayload",
+        "type": "object"
+      },
       "PromptSubmitParams": {
         "additionalProperties": false,
         "description": "``text`` is normally a string; the relay / hosted paths may hand a structured (parts list)\npayload, and the busy path renders it. Truncation (rewind / edit / regenerate) needs explicit\nconsent: ``confirm_truncate`` plus one durable target (``truncate_before_row_id`` preferred,\n``truncate_before_message_id``, or the legacy ``truncate_before_user_ordinal``).",
@@ -32724,6 +34570,33 @@
           "used_percent"
         ],
         "title": "ProviderUsageWindow",
+        "type": "object"
+      },
+      "QueueUpdatedPayload": {
+        "additionalProperties": false,
+        "description": "The displayable prompt queue, in omp's ``queue_update`` shape.\n\nEmitted by ``session_auto_continue._emit_queue_update`` (the TUI's next-turn queue) and by\n``gateway/session_authority._publish_pending`` (canonical admissions: ``steering`` rows are the\naccepted steers, ``follow_up`` the still-queued user texts). ``live_steered`` counts steering\nentries already handed to the streaming response.",
+        "properties": {
+          "steering": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Steering",
+            "type": "array"
+          },
+          "follow_up": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Follow Up",
+            "type": "array"
+          },
+          "live_steered": {
+            "default": 0,
+            "title": "Live Steered",
+            "type": "integer"
+          }
+        },
+        "title": "QueueUpdatedPayload",
         "type": "object"
       },
       "QueuedPrompt": {
@@ -37508,6 +39381,42 @@
             ],
             "default": null,
             "title": "Profile"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
           }
         },
         "required": [
@@ -37529,6 +39438,43 @@
             },
             "title": "Messages",
             "type": "array"
+          },
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "leaf_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Leaf Id"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Next Cursor"
+          },
+          "total_messages": {
+            "default": 0,
+            "title": "Total Messages",
+            "type": "integer"
           }
         },
         "required": [
@@ -37611,6 +39557,56 @@
           "status"
         ],
         "title": "SessionInterruptResult",
+        "type": "object"
+      },
+      "SessionLeaseParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Session Ids",
+            "type": "array"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_ids"
+        ],
+        "title": "SessionLeaseParams",
+        "type": "object"
+      },
+      "SessionLeaseResult": {
+        "additionalProperties": false,
+        "properties": {
+          "held": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Held",
+            "type": "array"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unknown",
+            "type": "array"
+          }
+        },
+        "title": "SessionLeaseResult",
         "type": "object"
       },
       "SessionListParams": {
@@ -38734,6 +40730,26 @@
         "title": "SessionSetHiddenResult",
         "type": "object"
       },
+      "SessionSettledPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn.run`` once post-turn follow-ups left the session idle (no queued prompt, no goal\ncontinuation, no running turn).",
+        "properties": {
+          "idle_since": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idle Since"
+          }
+        },
+        "title": "SessionSettledPayload",
+        "type": "object"
+      },
       "SessionStats": {
         "additionalProperties": false,
         "description": "``gateway/session_usage.py::usage_stats``: session-cumulative counters (the agent's ``session_*``),\ncontext / compressor figures, rolling latency and throughput, rate-limit state, live subagents.",
@@ -38897,6 +40913,127 @@
               }
             ],
             "default": null
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "context_usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextUsage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cost Usd"
+          },
+          "user_messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User Messages"
+          },
+          "assistant_messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assistant Messages"
+          },
+          "tool_calls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Calls"
+          },
+          "tool_results": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tool Results"
+          },
+          "total_messages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Messages"
+          },
+          "routed_models": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Routed Models"
           }
         },
         "required": [
@@ -41126,6 +43263,106 @@
           "code": {
             "title": "Code",
             "type": "integer"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Output"
+          },
+          "cancelled": {
+            "default": false,
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "timed_out": {
+            "default": false,
+            "title": "Timed Out",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "total_lines": {
+            "default": 0,
+            "title": "Total Lines",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "default": 0,
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "output_lines": {
+            "default": 0,
+            "title": "Output Lines",
+            "type": "integer"
+          },
+          "output_bytes": {
+            "default": 0,
+            "title": "Output Bytes",
+            "type": "integer"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Id"
+          },
+          "artifact_elided_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Elided Bytes"
+          },
+          "artifact_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Artifact Error"
+          },
+          "working_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Working Dir"
+          },
+          "images": {
+            "items": {},
+            "title": "Images",
+            "type": "array"
           }
         },
         "required": [
@@ -41669,6 +43906,84 @@
           "result"
         ],
         "title": "SkillsReloadResult",
+        "type": "object"
+      },
+      "SkinEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "display": {
+            "default": "",
+            "title": "Display",
+            "type": "string"
+          },
+          "colors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Colors",
+            "type": "object"
+          },
+          "dark": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Dark",
+            "type": "object"
+          },
+          "light": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Light",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkinEntry",
+        "type": "object"
+      },
+      "SkinListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "title": "SkinListParams",
+        "type": "object"
+      },
+      "SkinListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "default": "default",
+            "title": "Current",
+            "type": "string"
+          },
+          "skins": {
+            "items": {
+              "$ref": "#/components/schemas/SkinEntry"
+            },
+            "title": "Skins",
+            "type": "array"
+          }
+        },
+        "title": "SkinListResult",
         "type": "object"
       },
       "SkinPayload": {
@@ -42288,6 +44603,441 @@
         "title": "StreamDeltaPayload",
         "type": "object"
       },
+      "SubagentConfigParams": {
+        "additionalProperties": false,
+        "description": "Per-agent custom configuration stored in the profile's state.db (not config.yaml):\nmodel/provider, adviser/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves\nthe running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster\nfile path). Omitted fields keep their stored value.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Id"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "prewalk": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prewalk"
+          },
+          "advisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Advisor"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern"
+          },
+          "prompt_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt Path"
+          }
+        },
+        "required": [
+          "subagent_id"
+        ],
+        "title": "SubagentConfigParams",
+        "type": "object"
+      },
+      "SubagentConfigResult": {
+        "additionalProperties": false,
+        "properties": {
+          "subagent_id": {
+            "title": "Subagent Id",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "prewalk": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prewalk"
+          },
+          "advisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Advisor"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern"
+          },
+          "prompt_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt Path"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "subagent_id"
+        ],
+        "title": "SubagentConfigResult",
+        "type": "object"
+      },
+      "SubagentDefinition": {
+        "additionalProperties": false,
+        "description": "One statically discovered named agent (project / profile / installation scan). The flat\n``model``/``provider``/``thinking`` are the DEFINITION's frontmatter; ``config`` is the dynamic\nrow that overrides it.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "scope": {
+            "default": "custom",
+            "title": "Scope",
+            "type": "string"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enabled"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "prompt_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt Path"
+          },
+          "config": {
+            "$ref": "#/components/schemas/SubagentDefinitionConfig"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name"
+        ],
+        "title": "SubagentDefinition",
+        "type": "object"
+      },
+      "SubagentDefinitionConfig": {
+        "additionalProperties": false,
+        "description": "The dynamic ``agent_config`` row for one agent (``None`` = inherit the definition).",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider"
+          },
+          "advisor": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Advisor"
+          },
+          "prewalk": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prewalk"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thinking"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pattern"
+          },
+          "prompt_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Prompt Path"
+          }
+        },
+        "title": "SubagentDefinitionConfig",
+        "type": "object"
+      },
       "SubagentEventPayload": {
         "additionalProperties": false,
         "description": "``tool_progress._progress_subagent`` \u2014 every ``subagent.*`` frame; identity fields are optional\nbecause older emitters omit them and the TUI spawn tree falls back to flat rendering.",
@@ -42617,6 +45367,11 @@
           "subagent_id": {
             "title": "Subagent Id",
             "type": "string"
+          },
+          "cancelled": {
+            "default": false,
+            "title": "Cancelled",
+            "type": "boolean"
           }
         },
         "required": [
@@ -42628,7 +45383,7 @@
       },
       "SubagentListResult": {
         "additionalProperties": false,
-        "description": "``delegations``: recently failed async delegation tasks for the session (durable store), newest first.",
+        "description": "``delegations``: recently failed async delegation tasks for the session (durable store), newest first.\n``agents``: the static agent definitions scoped around this session and their dynamic config.",
         "properties": {
           "subagents": {
             "items": {
@@ -42642,6 +45397,13 @@
               "$ref": "#/components/schemas/FailedDelegation"
             },
             "title": "Delegations",
+            "type": "array"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/SubagentDefinition"
+            },
+            "title": "Agents",
             "type": "array"
           }
         },
@@ -42675,7 +45437,7 @@
       },
       "SubagentSnapshot": {
         "additionalProperties": false,
-        "description": "``methods_subagents._SUBAGENT_SNAPSHOT_FIELDS`` projection of one live child record.",
+        "description": "``methods_subagents._SUBAGENT_SNAPSHOT_FIELDS`` projection of one live child record.\n\n``agent`` is the child's derived role, never the live agent object. ``description`` / ``task`` /\n``assignment`` all carry the delegation goal under the name each client asks for. ``progress``\nis the live counter triple and is ``None`` until the child has one. ``session_file`` stays\n``None`` while no helper maps a child's session id to a transcript path, and\n``parent_tool_call_id`` only when the child carries that attribute.",
         "properties": {
           "subagent_id": {
             "title": "Subagent Id",
@@ -42799,6 +45561,115 @@
             ],
             "default": null,
             "title": "Accepting Steer"
+          },
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Index"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Agent"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task"
+          },
+          "assignment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assignment"
+          },
+          "session_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session File"
+          },
+          "last_update": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Update"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Progress"
+          },
+          "parent_tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Tool Call Id"
           }
         },
         "required": [
@@ -42883,7 +45754,7 @@
       },
       "SubagentTailResult": {
         "additionalProperties": false,
-        "description": "``available`` is false while the child has no live transcript yet (or it was cleaned up).",
+        "description": "``available`` is false while the child has no live transcript yet (or it was cleaned up).\n``from_byte`` / ``next_byte`` bracket the bytes this reply read, so a client can resume after\n``next_byte``; ``session_file`` is the transcript the offsets refer to.",
         "properties": {
           "subagent_id": {
             "title": "Subagent Id",
@@ -42903,6 +45774,28 @@
             "default": false,
             "title": "Truncated",
             "type": "boolean"
+          },
+          "session_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session File"
+          },
+          "from_byte": {
+            "default": 0,
+            "title": "From Byte",
+            "type": "integer"
+          },
+          "next_byte": {
+            "default": 0,
+            "title": "Next Byte",
+            "type": "integer"
           }
         },
         "required": [
@@ -44093,6 +46986,44 @@
         "title": "TodoUpdatedPayload",
         "type": "object"
       },
+      "TokenUsage": {
+        "additionalProperties": false,
+        "description": "Session-cumulative token counters (the agent's ``session_*`` totals).",
+        "properties": {
+          "input": {
+            "default": 0,
+            "title": "Input",
+            "type": "integer"
+          },
+          "output": {
+            "default": 0,
+            "title": "Output",
+            "type": "integer"
+          },
+          "reasoning": {
+            "default": 0,
+            "title": "Reasoning",
+            "type": "integer"
+          },
+          "cache_read": {
+            "default": 0,
+            "title": "Cache Read",
+            "type": "integer"
+          },
+          "cache_write": {
+            "default": 0,
+            "title": "Cache Write",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "TokenUsage",
+        "type": "object"
+      },
       "ToolCompletePayload": {
         "additionalProperties": false,
         "description": "``tool_progress._on_tool_complete``; ``todos``/``revision`` merged in for the todo tools.",
@@ -44145,6 +47076,18 @@
             ],
             "default": null,
             "title": "Summary"
+          },
+          "is_error": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Is Error"
           },
           "result_text": {
             "anyOf": [
@@ -45108,6 +48051,88 @@
           "role"
         ],
         "title": "TranscriptMessage",
+        "type": "object"
+      },
+      "TurnEndPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn.run_body``'s ``finally`` \u2014 the closing half of ``turn.start``, emitted on every\nexit path (completion, error, interrupt). ``message``/``tool_results`` stay absent until the\nturn result exposes the omp ``AgentMessage`` shape; ``status`` is Hermes-native\n(``complete`` / ``error`` / ``interrupted``).",
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Status"
+          },
+          "message": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "tool_results": {
+            "items": {},
+            "title": "Tool Results",
+            "type": "array"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          }
+        },
+        "title": "TurnEndPayload",
+        "type": "object"
+      },
+      "TurnStartPayload": {
+        "additionalProperties": false,
+        "description": "``prompt_turn._run_prompt_submit`` after the prompt is admitted (one per accepted prompt turn).\n``resumed_tool_call_ids`` is absent: Hermes never resumes a tool call mid-flight.",
+        "properties": {
+          "resumed_tool_call_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Resumed Tool Call Ids"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          }
+        },
+        "title": "TurnStartPayload",
         "type": "object"
       },
       "TurnStatus": {
@@ -46585,6 +49610,18 @@
             ],
             "default": null,
             "title": "Profile"
+          },
+          "capture_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capture Id"
           }
         },
         "title": "VoiceRecordParams",
@@ -46607,6 +49644,18 @@
             ],
             "default": null,
             "title": "Reason"
+          },
+          "capture_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Capture Id"
           }
         },
         "required": [
@@ -47880,6 +50929,24 @@
       }
     },
     {
+      "name": "auth.accounts",
+      "summary": "Non-secret identity of the provider's stored credentials (label/source only; never a token).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/AuthAccountsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AuthAccountsResult"
+        }
+      }
+    },
+    {
       "name": "bot_relay.deliver",
       "summary": "",
       "params": [
@@ -47912,6 +50979,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/CanonicalBotDeliverResult"
+        }
+      }
+    },
+    {
+      "name": "btw.history",
+      "summary": "Answers this session's /btw side questions: ``items`` oldest first, ``records`` newest first.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/BtwHistoryParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/BtwHistoryResult"
         }
       }
     },
@@ -47984,6 +51069,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/CanonicalConfigGetResult"
+        }
+      }
+    },
+    {
+      "name": "config.schema",
+      "summary": "Flattened settings schema so a client renders typed controls; writes still use config.set.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ConfigSchemaParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ConfigSchemaResult"
         }
       }
     },
@@ -48096,6 +51199,132 @@
       }
     },
     {
+      "name": "git.branches",
+      "summary": "Local branches with upstream tracking counts.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitBranchesParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitBranchesResult"
+        }
+      }
+    },
+    {
+      "name": "git.commit",
+      "summary": "Commit the index with ``message``; never amends.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitCommitParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitCommitResult"
+        }
+      }
+    },
+    {
+      "name": "git.diff",
+      "summary": "One file's (or the whole tree's) diff; ``staged`` reads the index.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitDiffParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitDiffResult"
+        }
+      }
+    },
+    {
+      "name": "git.log",
+      "summary": "The session repository's recent commits.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitLogParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitLogResult"
+        }
+      }
+    },
+    {
+      "name": "git.stage",
+      "summary": "Stage the named paths; answers the index's staged paths.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitPathsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitStagedResult"
+        }
+      }
+    },
+    {
+      "name": "git.status",
+      "summary": "Working-tree status of the session's repository, read in its terminal backend.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitStatusParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitStatusResult"
+        }
+      }
+    },
+    {
+      "name": "git.unstage",
+      "summary": "Unstage the named paths; answers the index's staged paths.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/GitPathsParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/GitStagedResult"
+        }
+      }
+    },
+    {
       "name": "groups.approve",
       "summary": "",
       "params": [
@@ -48200,6 +51429,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/GroupsRetryResult"
+        }
+      }
+    },
+    {
+      "name": "hooks.list",
+      "summary": "The profile's configured shell hooks and whether each is approved to run.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/HooksListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/HooksListResult"
+        }
+      }
+    },
+    {
+      "name": "hooks.toggle",
+      "summary": "Approve or revoke one configured shell hook (the allowlist is the enabled state).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/HookToggleParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/HookToggleResult"
         }
       }
     },
@@ -48564,6 +51829,24 @@
       }
     },
     {
+      "name": "session.lease",
+      "summary": "Requested session ids that hold a live cross-process lease, and those whose liveness could not be probed.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionLeaseParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionLeaseResult"
+        }
+      }
+    },
+    {
       "name": "session.list",
       "summary": "",
       "params": [
@@ -48596,6 +51879,60 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionMutateResult"
+        }
+      }
+    },
+    {
+      "name": "session.plan.approve",
+      "summary": "Flip the saved plan to approved; never resumes execution.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PlanApproveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PlanApproveResult"
+        }
+      }
+    },
+    {
+      "name": "session.plan.read",
+      "summary": "The newest plan in the session workspace's ``.hermes/plans`` and its approval state.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PlanReadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PlanReadResult"
+        }
+      }
+    },
+    {
+      "name": "session.plan.save",
+      "summary": "Write the plan markdown in the session workspace and reset it to draft.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PlanSaveParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PlanSaveResult"
         }
       }
     },
@@ -48722,6 +52059,42 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/ShellExecResult"
+        }
+      }
+    },
+    {
+      "name": "skin.list",
+      "summary": "Installed Hermes skins and the active one; ``config.set{key:\"skin\"}`` switches.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SkinListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SkinListResult"
+        }
+      }
+    },
+    {
+      "name": "subagent.config",
+      "summary": "Read or update one agent role's custom configuration (profile state.db).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SubagentConfigParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SubagentConfigResult"
         }
       }
     },
@@ -49168,6 +52541,30 @@
       ]
     },
     {
+      "name": "command.output",
+      "summary": "A slash command produced renderer-visible output text.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/CommandOutputPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "commands.changed",
+      "summary": "The available slash-command catalog may have changed; refetch it.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/CommandsChangedPayload"
+          }
+        }
+      ]
+    },
+    {
       "name": "connection.request",
       "summary": "A connection operation opened on this session; the desktop renders its card.",
       "params": [
@@ -49295,6 +52692,30 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/MessageAdviserPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "message.block_end",
+      "summary": "An assistant message block closed, with its full content.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/MessageBlockEndPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "message.block_start",
+      "summary": "An assistant message block (text) began; its deltas carry the same content_index.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/MessageBlockStartPayload"
           }
         }
       ]
@@ -49588,6 +53009,30 @@
       ]
     },
     {
+      "name": "prompt.result",
+      "summary": "A prompt reached its terminal outcome (completed / aborted / error), keyed by the submit id.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/PromptResultPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "queue.updated",
+      "summary": "The pending prompt queue changed; replace the client's queue chips with this snapshot.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/QueueUpdatedPayload"
+          }
+        }
+      ]
+    },
+    {
       "name": "reaction",
       "summary": "Affection reaction detected in the user's message (hearts etc.).",
       "params": [
@@ -49691,6 +53136,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/SessionResumeProgressPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "session.settled",
+      "summary": "The session is idle: no turn running and no queued prompt left to drain.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/SessionSettledPayload"
           }
         }
       ]
@@ -49955,6 +53412,30 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/ToolStartPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "turn.end",
+      "summary": "The accepted prompt turn finished; emitted exactly once, on every exit path.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/TurnEndPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "turn.start",
+      "summary": "An accepted prompt turn began (paired with turn.end).",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/TurnStartPayload"
           }
         }
       ]

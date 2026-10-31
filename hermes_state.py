@@ -80,6 +80,7 @@ from hermes_state_prompt_refresh import SessionPromptRefreshMixin
 from hermes_state_session_jobs import SessionJobsMixin
 from hermes_state_steps import SessionStepsMixin
 from hermes_state_tasks import SessionTasksMixin
+from hermes_state_agent_config import SessionAgentConfigMixin
 from hermes_state_usage import SessionUsageMixin
 from hermes_state_maintenance import SessionMaintenanceMixin
 from hermes_state_gateway import SessionGatewayMixin
@@ -468,6 +469,7 @@ class SessionDB(
     SessionSessionsMixin, SessionFtsSetupMixin, SessionSearchMixin, SessionSchemaMixin,
     SessionPortabilityMixin, SessionTelegramTopicsMixin, SessionCompressionMixin,
     SessionGatewayMixin, SessionMaintenanceMixin, SessionUsageMixin, SessionStepsMixin, SessionTasksMixin, SessionJobsMixin, SessionTitlesMixin,
+    SessionAgentConfigMixin,
     SessionMessagesMixin, SessionPruneRewriteMixin, SessionApiContentMixin, SessionCoverageMixin, SessionRewindMixin, SessionProfileRepairMixin,
     SessionPromptRefreshMixin,
 ):

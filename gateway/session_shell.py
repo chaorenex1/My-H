@@ -72,6 +72,19 @@ def _run(command, cwd):
     except OSError:
         raise RuntimeStoreError('command_failed') from None
     # Redact before tailing so a credential crossing the slice boundary cannot survive as fragments.
-    stdout = redact_sensitive_text(result.stdout or '', force=True, redact_url_credentials=True)[-4000:]
-    stderr = redact_sensitive_text(result.stderr or '', force=True, redact_url_credentials=True)[-2000:]
-    return {'stdout': stdout, 'stderr': stderr, 'code': result.returncode}
+    raw_stdout = result.stdout or ''
+    raw_stderr = result.stderr or ''
+    stdout = redact_sensitive_text(raw_stdout, force=True, redact_url_credentials=True)[-4000:]
+    stderr = redact_sensitive_text(raw_stderr, force=True, redact_url_credentials=True)[-2000:]
+    # Totals describe what the child wrote; the output_* pair describes what actually crossed the
+    # wire (redacted + sliced), so a truncation badge can say how much was cut.
+    output = stdout + (f'\n{stderr}' if stderr else '')
+    return {'stdout': stdout, 'stderr': stderr, 'code': result.returncode, 'output': output,
+            'truncated': len(raw_stdout) > 4000 or len(raw_stderr) > 2000,
+            'total_lines': len(raw_stdout.splitlines()) + len(raw_stderr.splitlines()),
+            'total_bytes': len(raw_stdout.encode('utf-8')) + len(raw_stderr.encode('utf-8')),
+            'output_lines': len(output.splitlines()), 'output_bytes': len(output.encode('utf-8')),
+            'working_dir': cwd,
+            # No cancellation handle or artifact spill exists here; a timeout raises before this point.
+            'cancelled': False, 'timed_out': False,
+            'artifact_id': None, 'artifact_elided_bytes': None, 'artifact_error': None, 'images': []}

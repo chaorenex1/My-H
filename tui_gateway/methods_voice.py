@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import uuid
 
 from .method_ctx import HandlerRegistry, bind_module
 
@@ -25,6 +26,9 @@ _voice_event_transport: Optional[Transport] = None
 # The session whose push-to-talk capture is live, and a generation that invalidates its callbacks
 # when that session's voice mode goes off (a late transcript must not land after /voice off).
 _voice_capture_sid: str = ""
+# The live capture's id: minted (or caller-supplied) on start, echoed on stop, emptied by stop. It lives
+# exactly as long as ``_voice_capture_sid``, so a stale client id is refused instead of stopping a new capture.
+_voice_capture_id: str = ""
 _voice_capture_gen = 0
 
 
@@ -527,6 +531,7 @@ def _(rid, params: dict) -> dict:
     from hermes_cli.process_identity import local_desktop_client
     from tui_gateway import server_requests
     from tui_gateway.contracts import registry as contracts
+    from tui_gateway.contracts.protocol import ready_protocol_fields
     transport = _caller_transport()
     # Each call updates what it names: the Desktop sends ``desktop_local`` on its own, so a backend older
     # than the field refuses only that call and keeps the ``server_requests`` it already accepted.
@@ -537,8 +542,8 @@ def _(rid, params: dict) -> dict:
         if transport.desktop_local:
             from tui_gateway import server
             server.begin_local_desktop_boot()
-    return _ok(rid, {"server_requests": sorted(contracts.SERVER_REQUESTS), "declines_not_shown": True,
-                     "canonical_clarify_batch": True})
+    return _ok(rid, {**ready_protocol_fields(), "server_requests": sorted(contracts.SERVER_REQUESTS),
+                     "declines_not_shown": True, "canonical_clarify_batch": True})
 
 
 @method("ping")
@@ -820,20 +825,30 @@ def _(rid, params: dict) -> dict:
     if wake_owner is not None and wake_owner is not transport:
         return _ok(rid, {"status": "busy", "reason": "wake_owned"})
     try:
-        global _voice_event_sid, _voice_event_transport, _voice_wake_owner, _voice_capture_sid
+        global _voice_event_sid, _voice_event_transport, _voice_wake_owner, _voice_capture_sid, _voice_capture_id
         if action == "start" and not _session_voice_enabled(params.get("session_id")):
             return _err(rid, 4015, "voice mode is off — enable with /voice on")
         sid = params.get("session_id") or ""
         if _voice_capture_sid and sid != _voice_capture_sid and _capture_live():
             return _err(rid, 4016, "voice capture is busy in another session")
+        # A stop for a capture this process no longer runs (another surface, a newer start) must not
+        # cut the live one; it answers busy instead of inventing a new status. With no live capture the
+        # stop keeps its old meaning (nothing to cut, nothing to match).
+        supplied_capture = params.get("capture_id") or ""
+        if action == "stop" and _voice_capture_id and supplied_capture not in ("", _voice_capture_id):
+            return _ok(rid, {"status": "busy", "reason": "capture_mismatch",
+                             "capture_id": _voice_capture_id})
         with _voice_sid_lock:
             _voice_event_sid = sid or _voice_event_sid
             _voice_event_transport = transport
         if action == "stop":
+            with _voice_sid_lock:
+                remembered, _voice_capture_id = _voice_capture_id, ""
             from hermes_cli.voice import stop_continuous
             stop_continuous(force_transcribe=True)
             _resume_voice_wake()
-            return _ok(rid, {"status": "stopped"})
+            return _ok(rid, {"status": "stopped", "capture_id": remembered or None})
+        capture_id = params.get("capture_id") or uuid.uuid4().hex
         # PTT barge-in (#40010): arming the mic cuts in-flight TTS so a stale
         # reply can't talk over the user — mirrors the CLI record-key handler.
         # user_barge=True also marks the speech interrupted for the next turn's
@@ -874,7 +889,9 @@ def _(rid, params: dict) -> dict:
         else:
             with _voice_sid_lock:
                 _voice_capture_sid = sid
-        return _ok(rid, {"status": "busy" if started is False else "recording"})
+                _voice_capture_id = capture_id
+        return _ok(rid, {"status": "busy" if started is False else "recording",
+                         "capture_id": None if started is False else capture_id})
     except Exception as e:
         if wake_paused or action == "stop":
             _resume_voice_wake()

@@ -136,7 +136,7 @@ def test_rpc_scope_reaches_llm_oneshot_and_model_options(two_homes, monkeypatch)
     assert r["result"]["text"] == "t"
     assert seen["oneshot_home"] == b and seen["oneshot"][1:] == (B_VAL, None)
     r = server._methods["model.options"]("r2", {"profile": "b"})
-    assert r["result"] == {"providers": []}
+    assert r["result"] == {"providers": [], "models": []}
     assert seen["options"] == (b, B_VAL, None)
 
 

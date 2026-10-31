@@ -57,6 +57,35 @@ def _complete(response, captured):
     return completion_payload(row, {'outcome': outcome}, response, captured)
 
 
+def test_terminal_publication_closes_the_omp_turn_primitives(monkeypatch):
+    """The authority stream carries turn.end / prompt.result / session.settled after the native
+    message.complete, all bound to the claim's epoch+generation message identity."""
+    from gateway import session_settlement_recovery
+
+    # ``owner_stop_notice`` imports gateway.run (a heavy bootstrap); this test only asserts the
+    # frames published by the terminal half.
+    monkeypatch.setattr(session_settlement_recovery, 'owner_stop_notice', lambda *_a, **_k: None)
+    published = []
+
+    class _Stream:
+        def publish(self, session_id, payload, *, event_type='message.complete', execution=None):
+            published.append((event_type, payload))
+
+    live = SimpleNamespace(event_stream=_Stream(),
+                           controls=SimpleNamespace(snapshot=lambda *_a: None))
+    row = {'admission_id': 'a1', 'request_id': 'r1', 'generation': 7}
+    session_settlement_recovery._publish_completion(
+        SimpleNamespace(epoch='e1'), live, SimpleNamespace(session_id='s'), row,
+        {'outcome': 'completed'}, 'ok', {'result': {}})
+
+    kinds = [kind for kind, _payload in published]
+    assert kinds == ['message.complete', 'turn.end', 'prompt.result', 'session.settled']
+    complete, turn_end, prompt_result, _settled = (payload for _kind, payload in published)
+    assert complete['message_id'] == 'e1:7' and complete['stop_reason'] == 'stop'
+    assert turn_end == {'status': 'complete', 'message_id': 'e1:7'}
+    assert prompt_result == {'admission_id': 'a1', 'agent_invoked': True, 'status': 'completed'}
+
+
 @pytest.mark.parametrize('platform', [Platform.LOCAL, Platform.TELEGRAM])
 def test_free_tier_at_capacity_turn_completes_with_its_own_surface(platform):
     complete = _complete(*_authority_turn(platform, _FREE_TIER_FULL))

@@ -343,6 +343,10 @@ def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result
     if _connector_lifecycle_is_stale(sid, name, args):
         return
     payload = {"tool_id": tool_call_id, "name": name, "args": args}
+    # The executor's own classifier, so the row's error verdict matches the model-facing one without
+    # widening the 4-arg tool_complete_callback ABI every other surface also implements.
+    from agent.display import _detect_tool_failure
+    payload["is_error"], _failure_detail = _detect_tool_failure(name, result)
     if (labels := _tool_labels(name, args)) is not None:
         payload["labels"] = labels
     if metadata is None:

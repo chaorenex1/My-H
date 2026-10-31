@@ -256,6 +256,75 @@ def build_model_options_payload(
     return payload
 
 
+def project_model_infos(payload: dict) -> list[dict]:
+    """Flat ``model.options`` ``models`` rows: one per (provider, model) from the providers payload.
+
+    Provider identity comes from the row; catalog facts from ``models.dev`` with
+    ``allow_network=False`` (a picker read must never fetch). A missing catalog entry or a raising
+    lookup degrades to the provider-only fields, never fails the payload."""
+    logger = logging.getLogger(__name__)
+    try:
+        from agent.models_dev import get_model_info
+    except Exception:
+        logger.debug("model catalog unavailable", exc_info=True)
+        get_model_info = None  # type: ignore[assignment]
+
+    def _cost(value) -> float | None:
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return None
+        return price or None  # 0.0 / absent -> unknown
+
+    infos: list[dict] = []
+    for row in payload.get("providers") or []:
+        if not isinstance(row, dict):
+            continue
+        slug = str(row.get("slug") or "")
+        capabilities = row.get("capabilities") or {}
+        for model in row.get("models") or []:
+            model_id = str(model)
+            info = None
+            if get_model_info is not None:
+                try:
+                    info = get_model_info(slug, model_id, allow_network=False)
+                except Exception:
+                    logger.debug("model metadata lookup failed for %s/%s", slug, model_id, exc_info=True)
+                    info = None
+            cap = capabilities.get(model_id) if isinstance(capabilities, dict) else None
+            reasoning = cap.get("reasoning") if isinstance(cap, dict) else None
+            cost = None
+            if info is not None:
+                cost = {
+                    "input": _cost(getattr(info, "cost_input", None)),
+                    "output": _cost(getattr(info, "cost_output", None)),
+                    "cache_read": _cost(getattr(info, "cost_cache_read", None)),
+                    "cache_write": _cost(getattr(info, "cost_cache_write", None)),
+                }
+            thinking = None
+            if reasoning:
+                try:
+                    from agent.reasoning_effort import route_supported_efforts
+                    thinking = {"levels": list(route_supported_efforts(slug, model_id))}
+                except Exception:
+                    logger.debug("thinking levels unavailable for %s/%s", slug, model_id, exc_info=True)
+                    thinking = None
+            infos.append({
+                "id": model_id,
+                "name": str(getattr(info, "name", "") or model_id) if info is not None else model_id,
+                "provider": slug,
+                "provider_name": str(row.get("name") or ""),
+                "base_url": row.get("api_url") or None,
+                "reasoning": reasoning,
+                "input": list(getattr(info, "input_modalities", ()) or ()) if info is not None else [],
+                "context_window": getattr(info, "context_window", None) if info is not None else None,
+                "max_tokens": getattr(info, "max_output", None) if info is not None else None,
+                "cost": cost,
+                "thinking": thinking,
+            })
+    return infos
+
+
 def _apply_limits(rows: list[dict]) -> None:
     """Attach ``limit`` to rows whose credential pool is rate-limited, so a picker can say why and until
     when instead of the row just looking broken. Only providers with a persisted pool are read (no

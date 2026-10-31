@@ -119,8 +119,17 @@ async def export_session(connection, ref, params):
 
 
 async def session_history(connection, ref, params):
-    """Main's ``session.history``: the display transcript of the conversation's current physical row (compression tip or local receipt entry), ancestors included, each row with its durable ``row_id``; Desktop's edit resolves its turn by it."""
-    _live_ref(connection, ref, params, {'session_id', 'profile'}, 'session:read')
+    """Main's ``session.history``: the display transcript of the conversation's current physical row
+    (compression tip or local receipt entry), ancestors included, each row with its durable
+    ``row_id``; Desktop's edit resolves its turn by it. ``since`` / ``cursor`` page by row id and
+    ``limit`` cuts one page (1..500); ``entries`` carry the paged transcript rows."""
+    _live_ref(connection, ref, params, {'session_id', 'profile', 'since', 'cursor', 'limit'}, 'session:read')
+    limit = params.get('limit')
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise RuntimeStoreError('invalid_params', field='limit')
+    limit = min(limit, 500) if limit is not None else None
+    since, cursor = params.get('since'), params.get('cursor')
+    after = since if since is not None else cursor
     authority = connection.authority
     from gateway.session_local_recovery import transcript_target
     # On the loop, as ``attach`` resolves it: a local restore publishes the live entry.
@@ -128,8 +137,13 @@ async def session_history(connection, ref, params):
 
     def read():
         from gateway.session_controls import display_projection
+        from tui_gateway.history_paging import history_page
         rows = authority.db.get_messages_as_conversation(target, include_ancestors=True, include_row_ids=True)
-        return {'count': len(rows), 'messages': display_projection(rows, authority.profile_id)}
+        messages = display_projection(rows, authority.profile_id)
+        page, entries, next_cursor = history_page(messages, after=after, limit=limit)
+        leaf_id = max((m['row_id'] for m in messages if isinstance(m.get('row_id'), int)), default=None)
+        return {'count': len(page), 'messages': page, 'entries': entries, 'leaf_id': leaf_id,
+                'next_cursor': next_cursor, 'total_messages': len(messages)}
     return await asyncio.to_thread(read)
 
 

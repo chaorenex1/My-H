@@ -90,7 +90,12 @@ async def test_session_stats_returns_the_same_dict(tmp_path, monkeypatch):
         reply = await connection.dispatch({'id': 2, 'method': 'session.stats', 'params': {'session_id': 's'}})
         assert 'result' in reply, reply
         from gateway.session_usage import usage_stats
-        assert reply['result'] == usage_stats(agent)
+        # The verb adds the stored-row counters (session_id/tokens/context_usage/cost/…) on top of
+        # the live usage dict, so every live figure must match and the enrichment must be present.
+        for key, value in usage_stats(agent).items():
+            assert reply['result'][key] == value
+        assert reply['result']['session_id'] == 's'
+        assert reply['result']['tokens']['total'] == reply['result']['total_tokens']
         CANONICAL_METHODS['session.stats'].result.model_validate(reply['result'])
     finally:
         await connection.close()
