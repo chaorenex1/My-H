@@ -30,6 +30,9 @@ act/
 .uv-cache/
 compose.hermes.local.yml
 export*
+# The omp shell keeps a source directory named `export/` (upstream snapshot).
+!omp-ui/src/export/
+!omp-ui/src/export/**
 __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
 logs/
