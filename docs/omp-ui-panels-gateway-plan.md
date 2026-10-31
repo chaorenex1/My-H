@@ -1,10 +1,19 @@
 # omp-ui 面板接通：Hermes 网关改动计划
 
-> 目标：把 omp-ui 的**所有面板**接到 Hermes 网关。本文只描述**网关侧**要做的改动（contract、
-> handler、事件、能力协商、测试）；UI 侧移植见 `docs/omp-ui-gap-plan.md`。
+> 目标：把 omp-ui 的**所有面板**接到 Hermes 网关。本文主体描述**网关侧**要做的改动（contract、
+> handler、事件、能力协商、测试）；UI 侧移植与按需代码搬运见 `docs/omp-ui-gap-plan.md`。
 >
-> 前提：omp-ui 的最终实现就在 `omp-ui/coding-agent/src`（就地改），客户端直连 canonical
-> WebSocket。面板不允许依赖 legacy sidecar 的 `-32601` 回退——回退只在“旧客户端兼容”时保留。
+> **2026-10-31 方向修正：单一 wire，两端适配。**
+>
+> 旧方向（本文件上一版 P1）：把 sidecar 的 74 个面板方法逐一重写进 session authority，追求
+> “fallback 命中 0”。**作废**——它把已有实现复制了一遍（约 4.7k 行网关代码 + 2.6k 行测试），
+> 只改变了 method 的归属，没有增加任何面板能力。
+>
+> 现在的方向：**Hermes JSON-RPC 是唯一 wire**；`omp-ui/src` 增加 `modes/rpc/gateway-client.ts`
+> 并把 `AgentSession`/`SessionManager` 就地接到 Hermes method；Hermes 网关只补 `src` 真正缺的
+> 协议（新方法、字段扩展、事件）。面板方法由 **authority 直服** 或 **进程内 sidecar 适配**
+> （`tui_gateway/ws_legacy_fallback.py::dispatch_legacy`，绑定调用者 profile）服务，二者都算
+> “已接通”；不为搬家而重写业务逻辑。
 
 ## 0. 范围与非目标
 
@@ -17,12 +26,29 @@
 
 这些在 §10 统一标 `unsupported`，由 `runtime.describe` 告知 UI，不静默失败。
 
+**两端改动**：
+- **客户端（`omp-ui/src`）**：`modes/rpc/gateway-client.ts` 说 Hermes JSON-RPC（请求/响应、
+  `event`、server→client request、断线重连）；`session/agent-session.ts` 与
+  `session/session-manager.ts` 就地把 omp 的类映射到 Hermes method/事件/历史行；错误码与
+  legacy 数字码在一个映射函数里归一。omp 自己的 `rpc-client.ts`（`{type:"prompt"}` 自有帧）
+  不接网关，保留但不在运行路径。
+- **网关**：只补 §4 的新方法、§4.7 的字段扩展与 §6 的事件；已有 sidecar 方法经适配器服务，
+  不重写。
+
+**UI 侧代码搬运**：所需 omp 代码按 import 闭包从本地 checkout
+`C:\Users\zarag\projects\oh-my-pi`（HEAD `6a86df8539fccf3ad7818081266e554022fc21bc`）复制到
+`omp-ui/src/vendor/`；不得从 `omp-ui/node_modules` 复制。依赖边界见
+`docs/omp-ui-gap-plan.md` 的 D3/§3（`package.json` 只保留 `@oh-my-pi/pi-tui`）。
+
 ## 1. 设计原则
 
-1. **Authority 优先**：面板方法必须由网关 owner（`gateway/*` handler + `CANONICAL_METHODS` 或
-   authority 的 `METHODS`）直接服务；legacy sidecar 只保留给旧客户端。
+1. **单一实现，两种归属**：每个面板方法只有一份业务实现。authority 自有方法（会话/准入/控制）
+   由 `gateway/*` 服务；profile 级 sidecar 方法由网关**同进程**执行原 handler
+   （`dispatch_legacy`，绑定 ticket profile），不复制、不重写。只有“sidecar 读自己的
+   `_sessions`”这类会话绑定缺口才升到 authority（§5）。
 2. **契约先行**：每个方法/事件在 `tui_gateway/contracts/*.py` 声明 `Params`/`Result`/`Payload`，
-   `extra="forbid"`；生成 `apps/shared/src/gateway-contract.generated.ts` 与 OpenRPC。
+   `extra="forbid"`；生成 `omp-ui/src/modes/rpc/gateway-contract.generated.ts` 与 OpenRPC
+   （`apps/shared/src` 的旧副本留给 Hermes 原有界面，不再由生成器改写）。
 3. **作用域**：会话方法带 `session_id`，走 `@_profile_scoped`；无会话方法带 `profile`，
    走 `_profile_scoped_rpc`（home + secret + terminal scope 三件套）。
 4. **终端在会话语义里**：`git.*`、附件、路径类方法必须跑在**会话的 terminal backend**（本地/远程/SSH），
@@ -34,75 +60,76 @@
 
 ## 2. 面板清单与依赖矩阵
 
-状态图例：**A** authority 已服务（`gateway/*.py` 的 handler，含 `session_ancillary.handlers()` 这类
-comprehension 表：`session.control.read`、`process.list`、`subagent.list/tail/steer/interrupt`、
-`process.stop/kill`、`reload.mcp`、`file.attach`、`tools.show`、`skills.reload`、`approval.pending/received`）；
-**L** 契约存在但只有 legacy sidecar handler；**M** 完全没有方法；**E** 存在但字段/参数不足；
-**C** 纯客户端；**U** 不支持；**D** 待设计（当前不支持或部分支持，需先出设计再实现）。
+状态图例：**A** authority 直服（`gateway/*.py` handler + `CANONICAL_METHODS`，含
+`session_ancillary.handlers()` 这类 comprehension 表）；**L** 由 legacy sidecar handler 经网关的
+**进程内适配器**服务（`dispatch_legacy`，绑定调用者 profile；**受支持**）；
+**M** 完全没有方法；**E** 存在但字段/参数不足；**C** 纯客户端；**U** 不支持；
+**D** 待设计（需先出决策记录）。
 
 三类拆分的口径（P0 脚本按此判定）：
-(a) `gateway/` 有 handler（authority）；
-(b) `tui_gateway/contracts` 有声明、handler 只在 `methods_*.py` 的 sidecar；
-(c) 完全没有声明。
-覆盖清单只覆盖**面板实际调用的方法**，不追求把 281 个方法全部 canonical 化。
+(a) `gateway/` 有 handler（A）；
+(b) `tui_gateway/contracts` 有声明、handler 在 `methods_*.py`，由适配器执行（L，受支持）；
+(c) 完全没有声明（M）。
+`runtime.describe.panels` 的 `methods` 广告 **A + L**；只有 M 不可调用。覆盖清单只覆盖
+**面板实际调用的方法**。
 
-| 面板 | 读 | 写 | 现状 | 改动 |
-|---|---|---|---|---|
-| Model hub / picker / browser | `model.options`、`config.get` | `session.mutate{model}`、`model.save_key`、`model.disconnect` | A / L | **E + P**：`model.options` 补元数据；凭据方法提升 |
-| Session selector | `session.list`、`session.active_list`、`session.most_recent` | `session.mutate{rename,archive,delete}` | A / L | **E**：`session.list` 加 `query`/`pinned`/`preview`；`most_recent` 提升 |
-| Tree selector | `session.history`、`session.info` | `session.mutate{rewind,branch}` + 分支摘要 | A | **E**：branch payload 支持 `summarize`/`instructions` |
-| Rewind selector | `session.history` | `session.mutate{rewind}` | A | 无 |
-| Copy selector | 客户端 transcript | — | C | 无 |
-| Theme selector / skin | `skin.list`、`config.get` | `config.set{skin}` | M | **N**：`skin.list`（含 token 预览） |
-| Settings menu | `config.schema`、`config.get` | `config.set` | M | **N**：`config.schema`（类型/默认/枚举/scope/restart） |
-| Thinking / effort | `model.options` | `session.mutate{model,reasoning}` | A | 无 |
-| Usage dashboard | `session.usage`、`session.stats`、`billing.state`、`usage.bars` | — | L / A | **P**：usage/bars 提升（`stats` 不改） |
-| Jobs panel / job tree | `process.list`、`spawn_tree.list` | `process.stop`、`process.kill` | A / L | **E + P**：`process.list` 补 cpu/mem/started_at/log_tail；spawn_tree 提升 |
-| Agent Hub / dashboard / transcript | `subagent.list`、`subagent.tail`、`delegation.status` | `subagent.steer`、`subagent.interrupt`、`delegation.pause`、`subagent.config` | A | **E + N**：`subagent.config`（角色模型/prewalk/advisor） |
-| MCP manager / add wizard | `mcp.catalog`、`mcp.servers.list/status` | `mcp.servers.add/remove/set_api_key`、`mcp.servers.oauth.*` | L | **P**：全部提升 |
-| Extensions center | `plugins.list`、`hooks.list` | `plugins.manage`、`hooks.toggle` | L / M | **P + N**：hooks 新建 |
-| Git TUI | `git.status/diff/log/branches` | `git.stage/unstage/commit` | M | **N**：整套 `git.*`，跑会话终端 |
-| Context viewer | `session.context_breakdown`、`session.history` | — | A | 无（`session.context_breakdown` 已由 `gateway/session_tui_ops.py` 服务） |
-| Hotkeys sheet | 客户端 | — | C | 无 |
-| Changelog | `runtime.describe{version}` + 静态文件 | — | C | 无 |
-| Debug selector | `runtime.describe`、`session.info` | — | A | 无 |
-| BTW panel / history | `prompt.btw` 事件 + `btw.history` | `prompt.btw` | A / M | **N**：`btw.history` |
-| OMFG | — | — | D | 待设计：是否移植 omp 的规则锻造后端（见 §10） |
-| Plan review / save / TOC | `session.plan.read` | `session.plan.save/approve` | M | **N**：`session.plan.*` |
-| Annotation overlay | — | — | D | 待设计：存储/协议/导出（见 §10） |
-| Pause screen | `session.control.read` | `delegation.pause` | A / D（部分） | **partial 待设计**：需要“暂停在跑回合”的原语（见 §10） |
-| Session info overlay | `session.info`、`session.stats` | — | A | 无 |
-| Transcript browser / outline | `session.history` | — | A | **E**：分页/`row_id`/outline 元数据 |
-| Skill picker | `skills.manage`、`commands.catalog`、`complete.slash` | `skills.manage` | L / A | **P**：`skills.manage` 提升 |
-| Autoresearch / cleanse / ps-top / live | `process.list`、`voice.*` | — | L / D | ps-top→**E**；live→**P**；cleanse/autoresearch→**D**（见 §10） |
-| Billing / subscription | `billing.*`、`subscription.*`、`usage.bars` | `billing.charge`、`subscription.*` | L | **P** |
-| Connectors | `connectors.*` | `connectors.connect`、`accounts.*` | L / A | **P** |
-| Vault | `vault.list/sources` | `vault.add/remove/unlock/lock/source.set` | L | **P** |
-| Profiles / multiplex | `profiles.list/describe` | `profiles.create/configure/set_asset` | A / L | **P** |
-| Rollback / checkpoints | `rollback.list/diff` | `rollback.restore` | A | 无（`rollback.session_diff` 已 canonical） |
-| Pets | `pet.gallery/info/cells` | `pet.select/hatch/generate` | L | **P** |
-| Cron | `cron.manage`、`cron.status` | `cron.submit/cancel`、`cron.manage` | L / A | **P**：`cron.manage` 提升 |
-| Login / logout / provider auth | `model.options`、`config.get` | `model.save_key`、`model.disconnect` | L | **P** + 产品决定 OAuth 粘贴 |
-| Approvals / ask / sudo / secret | server→client requests | `approval.respond`、`clarify.respond` | A | 无 |
-| Todo HUD | `todo.updated` | — | A | 无 |
-| Goal / loop bars | `session.control.read` | `session.control`（allowlist actions）+ `session.automation` | A | 无（两者都已 owner 服务） |
-| i18n | `i18n.languages/catalog` | — | L | **P** |
-| Shared metrics consent | `shared_metrics.status` | `shared_metrics.set` | L | **P** |
-| Kanban（只读面板） | `kanban.run`（读模式） | — | A | 可选 **N**：`kanban.board` 若需要列/卡片快照 |
-| Spawn-tree replay / diff | `spawn_tree.list/load/save` | — | L | **P** |
-| MoA 展示 | `moa.*` 事件 | `config.set`（如需配置） | A | 无/可选 E |
-| Collab / QR / LIVE | `groups.*`（桌面 hosted rooms） | — | D | 待设计：omp collab 与 groups 的协议映射/权限/中继（见 §10） |
-| Review 摘要 | `review.summary` 事件 | — | A | 无 |
-
+| 面板 | 读 | 写 | 现状 | 改动 | 备注 |
+|---|---|---|---|---|---|
+| Model hub / picker / browser | `model.options`、`config.get` | `session.mutate`、`model.save_key`、`model.disconnect` | A/L | E | model.options metadata (E) is pending |
+| Session selector | `session.list`、`session.active_list`、`session.most_recent` | `session.mutate` | A/L | E | session.list query/pin/preview (E) is pending |
+| Tree selector | `session.history`、`session.info` | `session.mutate` | A | E | branch summarize/instructions payload (E) is pending |
+| Rewind selector | `session.history` | `session.mutate` | A | — |  |
+| Copy selector | — | — | — | — |  |
+| Theme selector / skin | `skin.list`、`config.get` | `config.set` | A/M | N | skin.list does not exist yet (N); config.get/set are served |
+| Settings menu | `config.schema`、`config.get` | `config.set` | A/M | N | config.schema does not exist yet (N) |
+| Thinking / effort | `model.options` | `session.mutate` | A | — |  |
+| Usage dashboard | `session.usage`、`session.stats`、`billing.state`、`usage.bars` | — | A/L | — |  |
+| Jobs panel / job tree | `process.list`、`spawn_tree.list` | `process.stop`、`process.kill` | A/L | E | process.list stats fields (E) and process events are pending |
+| Agent Hub / dashboard / transcript | `subagent.list`、`subagent.tail`、`delegation.status` | `subagent.steer`、`subagent.interrupt`、`delegation.pause`、`subagent.config` | A/L/M | N | subagent.config (N) is pending |
+| MCP manager / add wizard | `mcp.catalog`、`mcp.servers.list`、`mcp.servers.status` | `mcp.servers.add`、`mcp.servers.remove`、`mcp.servers.set_api_key`、`mcp.servers.oauth.start`、`mcp.servers.oauth.poll`、`mcp.servers.oauth.callback`、`mcp.servers.oauth.cancel` | L | — |  |
+| Extensions center | `plugins.list`、`hooks.list` | `plugins.manage`、`hooks.toggle` | A/L/M | N | hooks.list/toggle (N) are pending; Hermes has no in-process extension registry |
+| Git TUI | `git.status`、`git.diff`、`git.log`、`git.branches` | `git.stage`、`git.unstage`、`git.commit` | M | N | the git.* contract is not implemented yet (N) |
+| Context viewer | `session.context_breakdown`、`session.history` | — | A | — |  |
+| Hotkeys sheet | — | — | — | — |  |
+| Changelog | `runtime.describe` | — | A | E | runtime.describe does not carry a version yet (E); the changelog content is client-side |
+| Debug selector | `runtime.describe`、`session.info` | — | A | — |  |
+| BTW panel / history | `btw.history` | `prompt.btw` | A/M | N | btw.history does not exist yet (N) |
+| OMFG | — | — | — | — | no Hermes backend: the omp rule-forging workflow has no gateway equivalent (P6) |
+| Plan review / save / TOC | `session.plan.read` | `session.plan.save`、`session.plan.approve` | M | N | session.plan.* does not exist yet (N) |
+| Annotation overlay | — | — | — | — | no annotation backend; storage and protocol are undesigned (P6) |
+| Pause screen | `session.control.read` | `delegation.pause` | A | — | delegation.pause only gates new spawns; freezing in-flight turns needs a new primitive (P6) |
+| Session info overlay | `session.info`、`session.stats` | — | A | — |  |
+| Transcript browser / outline | `session.history` | — | A | E | session.history pagination/outline extension (E) is pending |
+| Skill picker | `commands.catalog`、`complete.slash` | `skills.manage` | A/L | — |  |
+| Autoresearch / cleanse / ps-top / live | `process.list`、`voice.record` | `voice.toggle`、`voice.tts` | A/L | E | cleanse/autoresearch have no Hermes backend (P6); ps-top needs process.list stats (E) |
+| Billing / subscription | `billing.state`、`billing.auto_reload`、`billing.charge_status`、`usage.bars`、`subscription.state`、`subscription.preview` | `billing.charge`、`billing.keep_going_on_credits`、`billing.step_up`、`subscription.change`、`subscription.upgrade`、`subscription.resume` | L | — |  |
+| Connectors | `connectors.list`、`connectors.catalog`、`connectors.accounts`、`connectors.tools`、`connectors.policy.get`、`connectors.operation.status` | `connectors.connect`、`connectors.accounts.remove`、`connectors.accounts.rename` | A/L | — |  |
+| Vault | `vault.list`、`vault.sources` | `vault.add`、`vault.remove`、`vault.unlock`、`vault.lock`、`vault.source.set` | L | — |  |
+| Profiles / multiplex | `profiles.list`、`profiles.describe` | `profiles.create`、`profiles.configure`、`profiles.set_asset` | A/L | — |  |
+| Rollback / checkpoints | `rollback.list`、`rollback.diff` | `rollback.restore` | A | — |  |
+| Pets | `pet.gallery`、`pet.info`、`pet.cells` | `pet.select`、`pet.hatch`、`pet.generate` | L | — |  |
+| Cron | `cron.manage`、`cron.status` | `cron.submit`、`cron.cancel`、`cron.manage` | A/L | — |  |
+| Login / logout / provider auth | `model.options`、`config.get` | `model.save_key`、`model.disconnect` | A/L | E | model.options metadata (E) is pending |
+| Approvals / ask / sudo / secret | — | `approval.respond`、`clarify.respond` | A | — |  |
+| Todo HUD | — | — | — | — |  |
+| Goal / loop bars | `session.control.read` | `session.control`、`session.automation` | A | — |  |
+| i18n | `i18n.languages`、`i18n.catalog` | — | L | — |  |
+| Shared metrics consent | `shared_metrics.status` | `shared_metrics.set` | L | — |  |
+| Kanban (read-only board) | `kanban.run`、`kanban.board` | — | A/M | N | kanban.run is served; the kanban.board snapshot and kanban.changed are not (N) |
+| Spawn-tree replay / diff | `spawn_tree.list`、`spawn_tree.load` | `spawn_tree.save` | L | — |  |
+| MoA display | — | `config.set` | A | — |  |
+| Collab / QR / LIVE | — | — | — | — | omp collab has no Hermes protocol mapping; groups.* hosted rooms are desktop-only (P6) |
+| Review summary | — | — | — | — |  |
 ## 3. 改动分类与总量
 
 | 类 | 含义 | 方法 |
 |---|---|---|
-| **P 提升**（sidecar → authority） | 已有 handler，迁到 owner/canonical 契约 | `mcp.*`、`skills.manage`、`plugins.*`、`cron.manage`、`billing.*`、`subscription.*`、`connectors.*`、`vault.*`、`profiles.*`、`pet.*`、`wake.*`、`voice.*`、`i18n.*`、`shared_metrics.*`、`spawn_tree.*`、`browser.manage`、`image.attach`、`pdf.attach`、`model.save_key`、`model.disconnect`、`session.active_list`、`session.most_recent` |
-| **N 新建** | 无方法，需 contract + handler + test | `git.status/diff/log/branches/stage/unstage/commit`、`hooks.list/toggle`、`skin.list`、`config.schema`、`btw.history`、`session.plan.read/save/approve`、`subagent.config`、`kanban.board`（可选） |
+| **L 适配**（已有实现，零重写） | sidecar handler 经 `dispatch_legacy` 同进程执行，绑定 profile；视为已接通 | `mcp.*`、`skills.manage`、`plugins.manage`、`cron.manage`、`billing.*`、`subscription.*`、`usage.bars`、`connectors.catalog/accounts/tools/policy.get/accounts.*`、`vault.*`、`profiles.describe/create/configure/set_asset`、`pet.*`、`voice.*`、`wake.*`、`i18n.*`、`shared_metrics.*`、`spawn_tree.*`、`browser.manage`、`model.save_key`、`model.disconnect`、`session.most_recent`、`delegation.status` |
+| **A 会话缺口**（authority 必须自服） | sidecar handler 读自己的 `_sessions`，authority 会话不在其中 | `session.usage`、`image.attach`、`pdf.attach`、`connectors.list`（session-owned 分支） |
+| **N 新建** | 网关没有该协议，需 contract + handler + test | `git.*`、`hooks.list/toggle`、`skin.list`、`config.schema`、`btw.history`、`session.plan.read/save/approve`、`subagent.config`、`kanban.board`（可选） |
 | **E 扩展** | 字段/参数/事件不足 | `model.options`、`session.list`、`session.history`、`process.list`、`session.mutate{branch.summarize}` |
-| **G 能力协商** | `runtime.describe.panels` | 所有面板 |
-| **C 客户端** | 无网关改动 | copy、hotkeys、changelog、context 渲染、theme 预览（omp 主题） |
+| **G 能力协商** | `runtime.describe.panels` 广告 A + L | 所有面板 |
+| **C 客户端** | 无网关改动，`src` 内接线 | copy、hotkeys、changelog、context 渲染、theme 预览（omp 主题） |
 | **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | OMFG、cleanse、ratchet、prewalk、auto-graph、in-process extensions、annotation、collab、pause freeze-all、desktop-only 面板（§10） |
 
 ## 4. 新方法契约（重点）
@@ -196,19 +223,33 @@ session.plan.approve{session_id, request_id}     -> {status}
 上下文面板不需要扩展：`session.context_breakdown`（`contracts/sessions.py`）已由
 `gateway/session_tui_ops.py` 服务。
 
-## 5. 侧车提升（P）的统一做法
+## 5. 侧车方法怎么接入：适配，不重写
 
-1. 在 `tui_gateway/contracts/` 为方法补 `Params`/`Result`（若已有 legacy 声明，迁到 canonical 契约）。
-2. 在 `gateway/` 找 owner：
-   - 会话相关 → `gateway/session_ancillary.py` / `session_tui_*.py` / `session_controls.py`；
-   - 进程级/配置类 → 对应 owner 模块，**不要**回退 sidecar。
-3. 处理 profile scope：`@_profile_scoped` 或 `_profile_scoped_rpc`；两 home 探针。
-4. 去掉对 legacy fallback 的依赖：测试中断言 owner 直接返回，`ws_legacy_fallback` 命中数为 0。
-5. 旧客户端仍走 fallback：按 `client.capabilities`/版本门控，不删除 sidecar handler。
+现有适配器已经具备同进程执行 sidecar handler 的能力：
 
-提升顺序（按 UI 价值）：`mcp.*` → `skills.manage` → `plugins.*` → `cron.manage` → `billing.*` →
-`connectors.*` → `vault.*` → `profiles.*` → `pet.*` → `i18n.*` → `shared_metrics.*` →
-`spawn_tree.*` → `voice/wake` → `browser.manage` → `image/pdf.attach` → `usage`。
+- `tui_gateway/ws.py::_dispatch_request`：authority 返回 `-32601` 后，若 method 在
+  `server._methods` 且 `legacy_fallback_allowed`，调用 `dispatch_legacy`；
+- `dispatch_legacy`：绑定 ticket 的 profile（`_session_profile_runtime_scope`），把 WS
+  `transport` 传入 `server.dispatch`（`_caller_transport()` 即当前 socket）；
+- `_SESSION_FALLBACK_ALLOWED` 已覆盖 store-wide 读（如 `session.most_recent`）；
+- `_PROCESS_GLOBAL` 继续挡掉进程级危险动词（`process.stop`、`reload.mcp` 等）；需要 owner 语义的
+  已在 authority 实现。
+
+因此规则是：
+
+1. **默认 L**：profile 级面板方法保持 sidecar 实现，网关不新增 handler；测试断言“适配器可服务”。
+2. **只有会话缺口升 A**：handler 依赖 sidecar `_sessions` 的，写一个最小 authority handler：
+   - `session.usage`（同 `session.stats` 的数据；sidecar 版查旧会话表）；
+   - `image.attach` / `pdf.attach`（staging + 终端作用域；`image.attach_bytes`/`file.attach` 已有
+     authority 版）；
+   - `connectors.list` 的 session-owned 分支。
+3. **契约加法而非搬迁**：这些方法在 `METHODS` 保留原声明，另在 `canonical_promoted.py` 用同一
+   `Params`/`Result` 注册 canonical 条目；不移动、不复制模型。
+4. **能力广告**：`runtime.describe.panels` 同时广告 A 与 L；客户端不会对 L 触发探测或报错。
+5. **错误归一在客户端**：canonical 用 `{code,message,data.reason}`，适配器可能返回 legacy 数字码；
+   `src` 的 `gateway-client.ts` 用一个映射函数处理，不在网关造第二套错误。
+6. **测试**：覆盖门断言面板方法 ∈ {A, L}；不再要求 `ws_legacy_fallback` 命中数为 0。会话缺口
+   另有 dispatcher 测试（含无 session 的入口与 profile 选择器拒绝）。
 
 ## 6. 事件与实时面板
 
@@ -243,19 +284,21 @@ runtime.describe {profile?} -> {
 }
 ```
 
-omp-ui 启动时读一次，未支持的面板直接标 `unsupported`，不发请求。新增/提升方法时同步更新该映射，
-用覆盖测试保证“面板清单 = 契约清单”。
+`methods` 同时列出 **A（authority）与 L（进程内 sidecar 适配）**；只有 M 不出现在列表里。
+omp-ui 启动时读一次，未支持的面板直接标 `unsupported`，不发请求。新增方法时同步更新该映射，
+覆盖测试保证“面板清单 = 契约清单”。
 
 ## 8. 契约、生成与测试
 
 1. 改 `tui_gateway/contracts/*.py` → 跑 `scripts/gen_gateway_contracts.py` → 提交生成物
-   （`apps/shared/src/gateway-contract.generated.ts`、`gateway-contract.openrpc.json`）。
+   （`omp-ui/src/modes/rpc/gateway-contract.generated.ts`、`gateway-contract.openrpc.json`；
+   `apps/` 是 Hermes 原有界面，暂不改）。
 2. 契约测试：每个方法一组 `Params`/`Result` 正反例；未知参数 4000；未声明方法 import 期拒绝。
 3. 面板覆盖门（P0 产出）：`tests/tui_gateway/panels/test_panel_coverage.py`
    - 读 `docs/omp-ui-panels.json`（面板 → 方法/事件）；
-   - 断言每个方法在 `METHODS`/`CANONICAL_METHODS` 声明、由 owner 服务、并且 `runtime.describe.panels`
-     覆盖；
-   - 断言没有面板方法只存在于 legacy sidecar。
+   - 断言每个方法的真实归属：A = authority handler；L = `METHODS` 声明且适配器可执行；
+     M = 两边都没有；
+   - 断言 `runtime.describe.panels` 广告 A + L，且 ready 面板没有 M。
 4. profile 作用域：两个磁盘 home + 只在副 profile 存在的 `.env`，调用面板方法断言解析正确、启动 profile
    未被污染。
 5. 终端作用域：`git.*`/附件方法在远程会话下不得读网关宿主路径（用假的 remote backend 断言）。
@@ -266,17 +309,24 @@ omp-ui 启动时读一次，未支持的面板直接标 `unsupported`，不发�
 | 阶段 | 内容 | 退出条件 |
 |---|---|---|
 | **P0** | 面板清单落盘（`docs/omp-ui-panels.json`）、覆盖脚本、`runtime.describe.panels` 骨架 | 覆盖门能列出 A/L/M；CI 可跑 |
-| **P1** | 提升高价值 sidecar：mcp、skills、plugins、cron.manage、billing、connectors、vault、profiles、pet、i18n、shared_metrics、spawn_tree、voice/wake、browser、image/pdf attach | 每项 owner 直服；fallback 命中 0；契约测试通过 |
-| **P2** | 新方法：git、hooks、skin.list、config.schema、btw.history、session.plan.*、subagent.config | UI 面板可端到端读写；终端作用域测试通过 |
-| **P3** | 扩展：model.options、session.list/history、process.list、branch summary | 面板数据完整；无客户端拼凑 |
+| **P1** | **适配语义 + 会话缺口**：L 改为“适配器受支持”；`capabilities` 广告 A+L；只补 `session.usage`、`image.attach`、`pdf.attach`、`connectors.list`（session 分支） | 每个面板方法 ∈ {A, L}（M 仅 P2 计划项）；会话缺口 dispatcher 测试通过；不新增 profile 级重写 |
+| **P2** | 新方法：`git.*`、`hooks.*`、`skin.list`、`config.schema`、`btw.history`、`session.plan.*`、`subagent.config` | UI 面板可端到端读写；终端作用域测试通过 |
+| **P3** | 扩展：`model.options`、`session.list/history`、`process.list`、branch summary | 面板数据完整；无客户端拼凑 |
 | **P4** | 事件补齐：process stats、plan.updated、hooks.changed、kanban.board（可选） | 实时面板不轮询 |
-| **P5** | 旧客户端门控：interactive 新客户端不再触发 fallback；旧客户端保持 | fallback 仅旧版本命中 |
+| **P5** | **客户端轨道（`omp-ui/src`）**：`modes/rpc/gateway-client.ts`；`AgentSession`/`SessionManager` 就地接线；事件/错误码映射；面板 controller 接线 | `bun run check`；smoke 输出 `ok/pending/unsupported`，无 FAIL |
 | **P6** | 设计轨道（与 P0–P5 并行）：§10 的 D 项逐项 ADR；决定为“做”的进入 P2/P3 | 每个 D 项有决定、约束、验收；无未决死入口 |
 
 **P0 状态**：已落地。`docs/omp-ui-panels.json`（45 面板 / 146 方法 / 21 事件，A 59 / L 70 / M 17）、
 覆盖门 `tests/tui_gateway/panels/test_panel_coverage.py`、`runtime.describe.panels`
 （`PanelCapability`）。清单以 `gateway/panel_inventory.py` 为源，`scripts/gen_panel_inventory.py`
 生成；改清单后必须重跑生成器，覆盖门与 `test_generated` 会把漂移挡在 CI。
+
+**P1 状态**：已落地（方向修正后）。`L` 的语义改为“由 `tui_gateway/ws_legacy_fallback.py::dispatch_legacy`
+同进程执行、绑定调用者 profile，受支持”；`capabilities()` 广告 A+L；23 个面板 `ready`。
+authority 只新增四个会话缺口方法：`session.usage`、`image.attach`、`pdf.attach`、`connectors.list`
+（session 分支），契约在 `tui_gateway/contracts/canonical_promoted.py` 复用 legacy 模型。
+家族级重写（mcp/vault/billing/profiles/pets/voice/browser/...）已删除——它们由适配器服务，
+每个方法只有一份实现。测试：`tests/gateway/test_promoted_{usage,connectors,attachments,surface}.py`。
 
 ## 10. 不支持 / 部分支持：待设计清单
 
@@ -304,30 +354,36 @@ omp-ui 启动时读一次，未支持的面板直接标 `unsupported`，不发�
 
 | 风险 | 说明 | 缓解 |
 |---|---|---|
-| 提升 sidecar 引入行为漂移 | sidecar handler 有进程级语义（如 `process.stop`/`reload.mcp`） | 只提升面板需要的只读/会话级方法；进程级保持 owner 规则 |
-| 终端作用域 | git/附件在网关宿主执行会读写错目录 | 统一走 `tools/environments`，远程会话测试 |
-| 契约膨胀 | 30+ 面板方法一次性进 canonical | 按 P1–P4 分批；每批生成 TS/OpenRPC 并跑覆盖门 |
-| profile 泄漏 | 面板方法无 session 时默认 launch home | `_profile_scoped` + 两 home 探针 |
-| 能力协商漂移 | `runtime.describe.panels` 与真实契约不一致 | 覆盖测试从 `panels.json` 生成断言 |
-| 旧客户端 | 删除 fallback 会破坏旧 Ink/desktop | 版本门控，sidecar 保留 |
+| 适配层语义漂移 | sidecar handler 有进程级语义（如 `process.stop`/`reload.mcp`） | `_PROCESS_GLOBAL` 继续挡住；需要 owner 语义的已在 authority 实现 |
+| 会话绑定缺口 | sidecar handler 读自己的 `_sessions`，authority 会话不在其中 | 只把这类方法升 A（P1 的四个）；其余不重写 |
+| 终端作用域 | 附件 path 在网关宿主执行会读写错目录 | `terminal_uses_host_cwd` 检查；远程会话只接受 bytes |
+| profile 泄漏 | 适配器无 session 时默认 launch home | `dispatch_legacy` 绑定 ticket profile；`require()` 校验 profile |
+| 能力协商漂移 | `runtime.describe.panels` 与真实归属不一致 | 覆盖门从 `panels.json` 生成断言；A/L/M 以 handler 表为准 |
+| 客户端协议分叉 | omp 自有 `{type:"prompt"}` 帧与 JSON-RPC 并存 | `rpc-client.ts` 保留但不接网关；`gateway-client.ts` 是唯一传输 |
+| 错误码两套 | canonical `data.reason` vs legacy 数字码 | 客户端一个映射函数归一，网关不造第二套 |
 | D 项长期悬空 | “待设计”变成永久 unsupported | P6 每项必须有决定与验收；UI 只显示真实状态 |
 
 ## 12. 验收
 
 ```bash
 python scripts/gen_gateway_contracts.py --check
+python scripts/gen_panel_inventory.py --check   # 或重跑后 git diff 为空
 scripts/run_tests.sh tests/tui_gateway/panels/ tests/tui_gateway/contracts/
-# 面板覆盖门
-python -m pytest tests/tui_gateway/panels/test_panel_coverage.py -q
+scripts/run_tests.sh tests/gateway/test_promoted_usage.py tests/gateway/test_promoted_connectors.py \
+  tests/gateway/test_promoted_attachments.py tests/gateway/test_promoted_surface.py
 ```
 
 通过条件：
 
-1. `docs/omp-ui-panels.json` 中每个方法都有契约、owner handler、`runtime.describe.panels` 条目；
-2. 新客户端调用面板方法时 legacy fallback 命中数为 0；
-3. 写方法幂等、CAS 拒绝可复现；
-4. 远程会话下 `git.*`/附件不读网关宿主；
+1. `docs/omp-ui-panels.json` 中每个面板方法都有真实归属：A（authority handler）或 L（`METHODS`
+   声明 + 适配器可执行）；只有 P2 计划项是 M；
+2. `runtime.describe.panels` 广告 A + L，客户端不会对已服务方法触发探测或 `-32601`；
+3. 会话缺口（`session.usage`、`image.attach`、`pdf.attach`、`connectors.list` session 分支）由
+   authority 直服，dispatcher 测试通过；
+4. 远程会话下附件不读网关宿主；`git.*`/`hooks.*`（P2）同样走会话语义；
 5. 两个 profile 的作用域探针通过；
 6. 契约生成物无漂移（`--check` 通过）；
-7. §10 的每个 D 项都有 ADR/决定；决定为“做”的已进入契约清单，决定为“不做”的由
-   `runtime.describe.panels` 返回 `supported:false` 与原因。
+7. `omp-ui/src`：`gateway-client.ts` + `AgentSession`/`SessionManager` 接线后 `bun run check`
+   通过，smoke 无 FAIL；
+8. §10 的每个 D 项都有 ADR/决定；决定为“不做”的由 `runtime.describe.panels` 返回
+   `supported:false` 与原因。

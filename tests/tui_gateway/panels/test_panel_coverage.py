@@ -54,7 +54,9 @@ def _wire_status(name: str, served: set[str]) -> str:
 
 
 def _open_work(panel) -> bool:
-    return (any(method.status != AUTHORITY for method in panel.methods)
+    # ``A`` and ``L`` are both served (authority or the in-process sidecar adapter); only ``M`` or
+    # an explicitly planned extension keeps a panel pending.
+    return (any(method.status not in {AUTHORITY, SIDECAR} for method in panel.methods)
             or any(method.change for method in panel.methods)
             or any(event.status != AUTHORITY for event in panel.events))
 
@@ -168,11 +170,13 @@ async def test_runtime_describe_advertises_the_matrix(tmp_path, monkeypatch):
             authority.db.close()
 
 
-def test_ready_panels_name_only_authority_methods(tmp_path):
-    """A ready panel's advertised methods are exactly its A methods: no sidecar call slips through."""
+def test_ready_panels_name_only_served_methods(tmp_path):
+    """A ready panel advertises exactly its served methods: authority-owned or adapter-served."""
     served = _served(tmp_path)
     advertised = panel_inventory.capabilities()
     for panel in panel_inventory.PANELS:
-        expected = [method.name for method in panel.methods if method.status == AUTHORITY]
+        expected = [method.name for method in panel.methods
+                    if method.status in {AUTHORITY, SIDECAR}]
         assert advertised[panel.id]["methods"] == expected, panel.id
-        assert all(name in served for name in expected), panel.id
+        # A = an authority handler; L = a declared sidecar handler the adapter executes.
+        assert all(name in served or name in METHODS for name in expected), panel.id

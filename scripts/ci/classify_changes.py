@@ -94,7 +94,7 @@ import os
 import subprocess
 import sys
 
-_FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
+_FRONTEND = ("ui-tui/", "web/", "apps/", "omp-ui/")  # TS typecheck-matrix packages
 # Shipped page outside those packages, exercised by the desktop Electron suite. The desktop cache
 # key owner is checked by tests-js/desktop-build-cache-inputs.test.mjs against the Node graph.
 _FRONTEND_FILES = {"scripts/desktop-update/ui.html", "scripts/ci/desktop_build_cache.py"}
@@ -135,6 +135,8 @@ _PY_RELEVANT_CONTRACT_FILES = {
     "apps/shared/src/gateway-contract.openrpc.json",
     # tests/gateway/test_control_socket_vectors.py (the public control-socket contract)
     "apps/shared/src/node/control-socket.vectors.json",
+    "omp-ui/src/modes/rpc/gateway-contract.generated.ts",
+    "omp-ui/src/modes/rpc/gateway-contract.openrpc.json",
     # tests/hermes_cli/test_desktop_slash_registry.py
     "apps/desktop/src/lib/desktop-slash-registry.json",
     # tests/tui_gateway/test_show_reasoning_display_gate.py (card-tool names vs the gateway lifecycle set)

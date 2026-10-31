@@ -74,7 +74,7 @@ def main() -> int:
     args = parser.parse_args()
     text = render()
     if args.check:
-        current = OUT.read_text(encoding="utf-8") if OUT.exists() else None
+        current = OUT.read_text(encoding="utf-8-sig") if OUT.exists() else None
         if current != text:
             print(f"stale {OUT.relative_to(ROOT)}: run scripts/gen_panel_inventory.py")
             return 1

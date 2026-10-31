@@ -40,8 +40,11 @@ from tools.connectors.gateway.wire import ConnectionStatus
 from tools.connectors.portal.tools_cache import ToolsRead
 from tools.connectors.portal.wire import ConnectorTool
 
-TS_OUT = ROOT / "apps" / "shared" / "src" / "gateway-contract.generated.ts"
-OPENRPC_OUT = ROOT / "apps" / "shared" / "src" / "gateway-contract.openrpc.json"
+# The generated wire belongs to the client that consumes it: omp-ui's RPC directory. The
+# original apps/shared copies are the legacy TUI/Desktop surface and are not touched by this
+# generator any more.
+TS_OUT = ROOT / "omp-ui" / "src" / "modes" / "rpc" / "gateway-contract.generated.ts"
+OPENRPC_OUT = ROOT / "omp-ui" / "src" / "modes" / "rpc" / "gateway-contract.openrpc.json"
 _ENUM_PAIRS = (
     ("ConnectionTargetState", ConnectionTargetState, "TargetState", TargetState),
     ("ConnectionSettleReason", ConnectionSettleReason, "SettleReason", SettleReason),

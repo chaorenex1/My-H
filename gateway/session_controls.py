@@ -285,6 +285,8 @@ class AuthorityConnection:
         handlers.update(onboarding_handlers(self))
         from gateway.session_stored_reads import handlers as stored_read_handlers
         handlers.update(stored_read_handlers(self))
+        from gateway.session_promoted import handlers as promoted_handlers
+        handlers.update(promoted_handlers(self))
         return handlers
 
     async def dispatch(self, request):
