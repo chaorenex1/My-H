@@ -1,7 +1,9 @@
 """``hermes omp``: parser wiring and the Bun launch contract.
 
-The shell itself is exercised by ``omp-ui/app/smoke.ts`` against a live gateway; these tests pin
-the parts the CLI owns — argv, environment, the one-time ``bun install``, and the refusals.
+The launcher only prepares the Bun workspace and the environment; the UI is
+``omp-ui/src/main.ts`` (Hermes entry over the vendored shell). These tests pin that
+contract: the entry path, ``--resume`` forwarding, the Hermes-scoped agent dir, and one
+``bun install`` per lockfile.
 """
 
 from __future__ import annotations
@@ -29,12 +31,9 @@ def test_omp_parser_wires_handler_and_flags() -> None:
     plain = root.parse_args(["omp"])
     assert plain.func is _capture
     assert plain.resume is None
-    assert plain.no_start is False
 
-    resumed = root.parse_args(["omp", "--resume", "local-abc", "--no-start"])
+    resumed = root.parse_args(["omp", "--resume", "local-abc"])
     assert resumed.resume == "local-abc"
-    assert resumed.no_start is True
-
     assert root.parse_args(["omp", "-r", "local-def"]).resume == "local-def"
 
 
@@ -43,16 +42,20 @@ def fake_workspace(tmp_path, monkeypatch):
     """An ``omp-ui`` checkout under a fake project root, with Bun and both subprocess seams spied."""
     root = tmp_path / "checkout"
     ui_dir = root / "omp-ui"
-    entry = ui_dir / "coding-agent" / "hermes" / "main.ts"
+    entry = ui_dir / "src" / "main.ts"
     entry.parent.mkdir(parents=True)
     entry.write_text("// entry\n", encoding="utf-8")
     (ui_dir / "package.json").write_text('{"name":"hermes-omp-ui"}\n', encoding="utf-8")
     (ui_dir / "bun.lock").write_text("lock\n", encoding="utf-8")
+    agent_dir = tmp_path / "hermes-home" / "omp-ui" / "agent"
+    agent_dir.mkdir(parents=True)
 
     monkeypatch.setattr(omp_launch, "project_root", lambda: root)
     monkeypatch.setattr(omp_launch, "_bun_bin", lambda: "/usr/bin/bun")
     monkeypatch.setattr(omp_launch, "_require_terminal", lambda: None)
+    monkeypatch.setattr(omp_launch, "_hermes_scoped_agent_dir", lambda: agent_dir)
     monkeypatch.delenv("HERMES_OMP_ALLOW_NO_TTY", raising=False)
+    monkeypatch.setenv("OMP_PROFILE", "work")
 
     installs: list[tuple[list[str], str]] = []
     launches: list[tuple[list[str], str, dict]] = []
@@ -67,53 +70,47 @@ def fake_workspace(tmp_path, monkeypatch):
 
     monkeypatch.setattr(omp_launch.subprocess, "run", run)
     monkeypatch.setattr(omp_launch.subprocess, "call", call)
-    return SimpleNamespace(root=root, ui_dir=ui_dir, installs=installs, launches=launches)
+    return SimpleNamespace(root=root, ui_dir=ui_dir, entry=entry, agent_dir=agent_dir, installs=installs, launches=launches)
 
 
 def test_cmd_omp_installs_once_then_launches_with_contract_env(fake_workspace) -> None:
-    args = SimpleNamespace(resume="local-abc", no_start=False)
+    args = SimpleNamespace(resume="local-abc")
 
     assert omp_launch.cmd_omp(args) == 0
     assert fake_workspace.installs == [
-        (["/usr/bin/bun", "install", "--ignore-scripts"], str(fake_workspace.ui_dir))
+        (["/usr/bin/bun", "install", "--ignore-scripts", "--production"], str(fake_workspace.ui_dir))
     ]
     assert (fake_workspace.ui_dir / "node_modules" / ".hermes-omp-ui").is_file()
 
     argv, cwd, env = fake_workspace.launches[0]
-    assert argv == ["/usr/bin/bun", str(fake_workspace.ui_dir / "coding-agent" / "hermes" / "main.ts"), "--resume", "local-abc"]
+    assert argv == ["/usr/bin/bun", str(fake_workspace.entry), "--resume=local-abc"]
     assert cwd == str(os.getcwd())
     assert env["HERMES_AGENT_ROOT"] == str(fake_workspace.root)
     assert env["HERMES_PYTHON"] == sys.executable
-    assert env["HERMES_OMP_START"] == "1"
-    assert env["HERMES_OMP_RESUME"] == "local-abc"
+    assert env["PI_CODING_AGENT_DIR"] == str(fake_workspace.agent_dir)
+    assert "HERMES_OMP_START" not in env
+    assert "HERMES_OMP_RESUME" not in env
+    assert "OMP_PROFILE" not in env
+    assert "PI_PROFILE" not in env
 
     # A second launch with the same lockfile must not pay for `bun install` again.
-    assert omp_launch.cmd_omp(SimpleNamespace(resume=None, no_start=False)) == 0
+    assert omp_launch.cmd_omp(SimpleNamespace(resume=None)) == 0
     assert len(fake_workspace.installs) == 1
-    second = fake_workspace.launches[1]
-    assert second[0] == ["/usr/bin/bun", str(fake_workspace.ui_dir / "coding-agent" / "hermes" / "main.ts")]
-    assert "HERMES_OMP_RESUME" not in second[2]
-
-
-def test_cmd_omp_no_start_never_sets_the_start_flag(fake_workspace, monkeypatch) -> None:
-    monkeypatch.setenv("HERMES_OMP_START", "1")
-
-    assert omp_launch.cmd_omp(SimpleNamespace(resume=None, no_start=True)) == 0
-    assert "HERMES_OMP_START" not in fake_workspace.launches[0][2]
+    assert fake_workspace.launches[1][0] == ["/usr/bin/bun", str(fake_workspace.entry)]
 
 
 def test_cmd_omp_refuses_without_bun(fake_workspace, monkeypatch, capsys) -> None:
     monkeypatch.setattr(omp_launch, "_bun_bin", lambda: None)
 
-    assert omp_launch.cmd_omp(SimpleNamespace(resume=None, no_start=False)) == 1
+    assert omp_launch.cmd_omp(SimpleNamespace(resume=None)) == 1
     assert "https://bun.sh" in capsys.readouterr().err
     assert fake_workspace.launches == []
 
 
 def test_cmd_omp_refuses_without_the_workspace(fake_workspace) -> None:
-    (fake_workspace.ui_dir / "coding-agent" / "hermes" / "main.ts").unlink()
+    fake_workspace.entry.unlink()
 
-    assert omp_launch.cmd_omp(SimpleNamespace(resume=None, no_start=False)) == 1
+    assert omp_launch.cmd_omp(SimpleNamespace(resume=None)) == 1
 
 
 def test_cmd_omp_requires_a_tty(monkeypatch, capsys) -> None:
@@ -122,6 +119,7 @@ def test_cmd_omp_requires_a_tty(monkeypatch, capsys) -> None:
             return False
 
     monkeypatch.delenv("HERMES_OMP_ALLOW_NO_TTY", raising=False)
+    monkeypatch.setenv("OMP_PROFILE", "work")
     monkeypatch.setattr(sys, "stdin", _NotATty())
     monkeypatch.setattr(sys, "stdout", _NotATty())
 

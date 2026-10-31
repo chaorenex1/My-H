@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@oh-my-pi/pi-utils/type-guards";
+import { isRecord } from "../../vendor/utils/src/type-guards.ts";
 import type { RpcChunkFrame } from "./rpc-types";
 
 /** Maximum UTF-8 size of one newline-delimited RPC frame, including the newline. */

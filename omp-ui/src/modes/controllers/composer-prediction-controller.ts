@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "../../vendor/agent/src/index.ts";
+import type { AssistantMessage } from "../../vendor/ai/src/index.ts";
+import { logger, prompt, sanitizeText } from "../../vendor/utils/src/index.ts";
 import composerPredictionPrompt from "../../prompts/system/composer-prediction-user.md" with { type: "text" };
 import type { AgentSession } from "../../session/agent-session";
 import { cfgComposerPredictions } from "../settings";

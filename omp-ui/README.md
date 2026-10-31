@@ -1,112 +1,116 @@
-> **方向已重定（2026-10-31）：** 实现位置改为 `src`（就地修改），协议代码从
-> `oh-my-pi` vendor 进 `src`，`src` 的直接依赖只允许 `@oh-my-pi/pi-tui`。本文描述的
-> `app/` + `coding-agent/hermes/` 桥接是**旧路径，已冻结、待删除（G6）**。
-> 唯一权威计划见 [`../docs/omp-ui-gap-plan.md`](../docs/omp-ui-gap-plan.md)。
+# omp-ui — omp's terminal shell, vendored for Hermes
 
-# omp-ui — Hermes' TUI on omp's renderer
+`omp-ui` is omp's own `InteractiveMode` (upstream coding-agent shell, not a reimplementation) with
+its dependency tree vendored into `src/`, ready to be driven by the Hermes profile gateway. The current
+plan is [`../docs/omp-ui-panels-gateway-plan.md`](../docs/omp-ui-panels-gateway-plan.md) (the old
+`../docs/omp-ui-gap-plan.md` is deprecated); this file is the current state, not the target state.
 
-`hermes omp` opens **omp's own `InteractiveMode`** — the upstream coding-agent shell, not a
-reimplementation — and runs it as a JSON-RPC client of the Hermes profile gateway. The screen is
-the real thing: omp's welcome lockup, band editor, transcript cards, status strip, tool cards,
-approval/ask dialogs and slash autocomplete. Hermes owns the agent: sessions, streaming, tools,
-approvals and commands all come from the gateway's canonical session API.
+## Status (2026-11-01)
 
-    hermes omp              # the product entry point
-    hermes omp --resume <session-id>
-    hermes omp --no-start   # attach to a running gateway only
+| Stage | State |
+|---|---|
+| **G1** snapshot + vendor closure | done — `src/` is the pinned upstream snapshot; non-installed packages live in `src/vendor/` (pi-tui + pi-natives stay installed) |
+| **G2** import boundary (R1–R5) | done — `bun run check:imports` clean, `bun run check` passes |
+| **G3** `AgentSession`/`SessionManager` → gateway client | **main screen wired** — `hermes omp` creates or resumes a Hermes session over the paired WebSocket; prompts, streaming text/thinking, tool cards, queue/todo state, usage/context and history all come from the gateway. `AgentSession` keeps its class and controllers; the gateway replaces the turn source (`attachGateway`), so there is no local-agent mode and no mode switch. Local JSONL persistence and the local model picker remain, marked below |
+| **G4** Hermes entry (`hermes omp` → `src/main.ts`) | done — `main.ts` parses argv, opens the gateway session, seeds history, and boots `InteractiveMode`; omp's `runRootCommand`/CLI command layer is not on this path (`src/cli.ts` stays the worker-host fallback). `--resume` takes a Hermes session id/title |
+| **G5** smoke status machine | not started |
 
-`hermes omp` attaches to the profile gateway (starting one when none is running, like
-`hermes --tui`); it never opens `state.db` itself. First run installs this workspace with
-`bun install`.
+The transport (`src/modes/rpc/gateway-client.ts` + `gateway-socket.ts`) and the main-screen projection
+(`src/modes/rpc/gateway-session.ts`) are covered by `bun test src/modes/rpc`. The wiring was exercised
+against a live gateway: create, resume, streamed reply, a `terminal` tool call, usage/context refresh,
+and interrupt.
 
-## Why a separate workspace
+### Wired now
+
+- session create/resume (`session.create` / `session.resume`), snapshot history, reconnect replay cursor
+- prompt submission, steering, follow-ups, queued cancel, `session.interrupt` (with a generation retry)
+- `message.start/delta/interim/complete`, reasoning, `tool.start/progress/complete`, `turn.*`,
+  `prompt.result`, `session.settled`, `queue.updated`, `todo.updated`, `session.info`, `session.usage`
+- Hermes slash commands that omp does not handle locally go through `command.dispatch`
+- startup chrome is omp's own composition (plan §2.3.1): welcome lockup + tip, config warnings, and
+  What's New from the vendored `CHANGELOG.md` keyed to the shell snapshot version (a resume suppresses
+  the intro and skips it); the optional startup splash follows `startup.showSplash` + `startup.quiet`
+- status line model (relabelled to the served gateway model), context tokens/window, session cost
+- the local `SessionManager` is an in-memory accounting projection (usage/context/`/session`), never a
+  second transcript writer
+
+### Still local / next
+
+- **approvals and clarify** answer deny/cancel with a notice (no dialog route yet); a turn that needs
+  an approval in ask mode will be refused
+- **`/model`, `/resume` pickers** still read omp's local catalog and session list, not
+  `model.options` / `session.list`
+- **`/tree`, branch/rewind, compact** still drive local `SessionManager` mutations; the gateway owns
+  those operations
+- **subagent/JOBS/usage dashboards** consume gateway events only where mapped above
+- **login/logout, MCP, skills, plugins, cron** panels still use omp's local backends
+
+## Layout
+
+    src/                        pinned snapshot of packages/coding-agent/src (modified in place)
+    src/main.ts                 Hermes entry: argv parsing → session → InteractiveMode
+    src/cli.ts                  upstream omp CLI; retained only as the worker-host fallback,
+                                never the launch entry
+    src/session/agent-session.ts         the shell's session; `attachGateway()` makes the gateway
+                                         its turn source (local members stay for the worker host)
+    src/session/session-manager.ts       in-memory accounting projection on the wired path
+    src/modes/rpc/gateway-client.ts      JSON-RPC 2.0 envelopes, event unwrap, seq/replay (done)
+    src/modes/rpc/gateway-socket.ts      WebSocket transport + reconnect
+    src/modes/rpc/gateway-session.ts     session create/resume, prompt/steer/interrupt, event projection
+    src/modes/rpc/gateway-contract.generated.ts   generated from tui_gateway/contracts/*.py
+    src/vendor/<pkg>/           import closure of utils/ai/agent/catalog/wire/omptype/stats/
+                                snapcompact/mnemopi (see src/VENDORED.md)
+    src/assets/                 package.json, CHANGELOG.md, notices the shell imports (R2)
+    types/assets/index.d.ts     `*.md`/`*.txt`/… import declarations (from upstream)
+    scripts/check-imports.ts    purity gate: R1–R3/R5 + every relative import resolves
+    scripts/sync-upstream.py    replay: shell snapshot → vendor closure → rewrite → assets → patches
+    tsconfig.json               typecheck only (the runtime is Bun; no build step)
+
+## Why a separate Bun workspace
 
 The `@oh-my-pi/*` packages publish TypeScript sources (`exports` point at `src/*.ts`), so there is no
 build step and Node cannot load them: Bun is the runtime. Keeping `omp-ui/` a standalone Bun project —
 not an npm workspace — means `npm install` at the repo root stays untouched and the shell's dependency
 graph cannot leak into the Ink TUI.
 
-The only declared dependency is `@oh-my-pi/pi-tui`, with a floor and no upper bound
-(`>=18.14.0`). Every other `@oh-my-pi/*` import **must** be served by code vendored into
-`src/vendor/`; until that vendoring runs, those imports resolve through pi-tui's transitive
-dependencies (transitional only). When a dependency is removed, its code is copied on demand
-(import closure) from the local checkout `C:\Users\zarag\projects\oh-my-pi` at the pinned 18.14.0
-commit, never from `node_modules`.
-`bun.lock` is committed; `bun install` is run once per lockfile change and its digest is recorded
-in `node_modules/.hermes-omp-ui`.
+`package.json` `dependencies` is exactly `@oh-my-pi/pi-tui` (renderer) and `@oh-my-pi/pi-natives`
+(platform addon). Every other `@oh-my-pi/*` specifier is rewritten to `src/vendor/…` by
+`scripts/sync-upstream.py`; the tsconfig `paths` map keeps pi-tui's internal imports on the same
+vendored modules, so a `const enum` or class has one identity at typecheck time and at runtime.
+`bun.lock` is committed; the launcher's install marker lives in `node_modules/.hermes-omp-ui`.
 
-## Layout
+`devDependencies` mirror the upstream shell's optional/runtime packages (transformers, onnxruntime,
+fastembed, OpenTelemetry, `@types/bun`, `typescript`) so the untouched STT/TTS/telemetry files
+typecheck; the wired path does not import them.
 
-> 以下是**旧路径**的布局（冻结，G6 删除）。新布局见
-> [`../docs/omp-ui-gap-plan.md` §2](../docs/omp-ui-gap-plan.md)。
+## Run it
 
-    coding-agent/hermes/main.ts       [legacy] entry: gateway session → omp InteractiveMode
-    coding-agent/hermes/session.ts    [legacy] HermesAgentSession: the AgentSession-shaped double the UI drives
-    coding-agent/hermes/projector.ts  [legacy] gateway events → omp AgentSessionEvents (text/tools/turn)
-    coding-agent/hermes/messages.ts   [legacy] Hermes rows → pi-ai messages (history + live)
-    coding-agent/hermes/dialogs.ts    [legacy] approval / clarify / sudo / secret on omp's dialogs
-    coding-agent/hermes/commands.ts   [legacy] `/` input → gateway command.dispatch, catalog → autocomplete
-    coding-agent/hermes/skin.ts       [legacy] Hermes skin → omp theme (`/theme`, `/skin`)
-    coding-agent/hermes/settings.ts   [legacy] `/settings` over config.get/set
-    coding-agent/hermes/browse.ts     [legacy] `/browse` transcript browser (`/copy` uses omp's picker)
-    coding-agent/hermes/manage.ts     [legacy] `/mcp`, `/skills`, `/plugins`, `/cron` panels
-    coding-agent/hermes/smoke.ts      [legacy] headless end-to-end run (test terminal, live gateway)
-    src/                              [implementation target] the shell; modified in place from G1 on
-    app/                              [legacy] the earlier Composer-only shell
-    app/gateway.ts, history.ts, hermes.ts, palette.ts   [legacy] shared client + conversions
-    tsconfig.json                     typecheck only (the runtime is Bun; no build step)
+    cd omp-ui
+    bun install
+    bun run check            # tsc --noEmit (src + scripts)
+    bun run check:imports    # R1–R3/R5, unresolved relative modules = 0
+    bun test src/modes/rpc   # gateway transport tests
+    bun src/main.ts --version # prints the shell's version
+    bun src/main.ts           # Hermes entry: gateway session → InteractiveMode
+    bun src/main.ts --resume <session-id|title>
 
-### Why an `AgentSession` double
+Rebuild `src/` from the pinned checkout (`OMP_SRC` overrides the path):
 
-`InteractiveMode` is written against omp's `AgentSession` (315 public members, a 15k-line class that
-owns omp's model loop and tools). Hermes owns the loop, so `HermesAgentSession` supplies the surface
-the UI actually queries — state, model, usage, history, queue, event subscription — and routes the
-mutating verbs (`prompt` / `abort` / `steer`) to the gateway. omp ships the same kind of double for
-its own galleries (upstream `packages/coding-agent/src/cli/gallery-fixtures/preview-session.ts`), which is
-what makes this seam legitimate rather than a fork:
-
-| UI needs | Double answers with |
-|---|---|
-| `session.subscribe(ev)` | `projector.apply(type, payload)` for every gateway frame |
-| `session.prompt(text)` | `prompt.submit`; resolves when the turn seals |
-| `session.abort()` | `session.interrupt` |
-| `session.state.model/messages`, `getContextUsage()` | gateway `session.info` / `session.usage` |
-| `session.sessionManager.buildSessionContext()` | history rows → pi-ai messages (`historyMessages`) |
-| `session.slashCommands` | `commands.catalog` (602 commands on a stock profile) |
-| `extensionRunner`, `goalRuntime`, `agent` | no-op doubles: Hermes has no in-process extensions |
-
-`message.delta` / `reasoning.delta` become cumulative `message_update`s; `tool.start` seals the
-assistant segment and emits `tool_execution_start`; `tool.complete` emits `tool_execution_end`;
-`message.complete` seals the turn with `turn_end` + `agent_end`.
-
-## Run it directly
-
-    bun install --ignore-scripts
-    HERMES_AGENT_ROOT=<checkout> bun coding-agent/hermes/main.ts
-    HERMES_OMP_START=1 bun coding-agent/hermes/smoke.ts     # headless proof
-
-omp keeps its own settings under a Hermes-scoped config root (`PI_CONFIG_DIR`, default
-`~/.hermes/omp-ui`; profile-aware via `HERMES_HOME`), so `hermes omp` never reads or writes the
-user's `~/.omp` install.
-
-Env: `HERMES_AGENT_ROOT` (checkout owning `ui-tui/scripts/gateway_bootstrap.py`; defaults to this
-repo), `HERMES_PYTHON` (bootstrap interpreter), `HERMES_OMP_START=1` (own/start the gateway),
-`HERMES_OMP_RESUME` (same as `--resume`), `HERMES_VERSION` (welcome lockup label; `hermes omp` passes
-the install's version), `HERMES_BUN` (binary to launch).
-
-Keys are omp's own: `Enter` send · `Ctrl+C` interrupt · `Ctrl+O` expand tool output · `/` command
-palette (Hermes catalog) · `Esc` cancel a dialog.
+    python scripts/sync-upstream.py && bun run check:imports && bun run check
 
 ## Transport: the gateway WebSocket, not stdio
 
 `tui_gateway.entry` (stdio) refuses to start beside a live gateway — it would be a second `state.db`
-writer. This shell does what the Ink TUI and Desktop do:
+writer. The shell does what the Ink TUI and Desktop do:
 
 1. `ui-tui/scripts/gateway_bootstrap.py` performs discovery (and, with `--start`, ensures an owner)
    and mints a session ticket: `{url, protocols}`.
 2. The client connects with those subprotocols and speaks JSON-RPC, one JSON object per text frame.
 3. First frame is `event {type: "gateway.ready"}`; the client then sends
    `client.capabilities {server_requests: true}` once per connection.
+
+`gateway-client.ts` implements all of that, including the error-code normalization and the
+`seq`/`replay_epoch` watermark used to dedupe reconnect replay.
 
 Wire notes that cost time to discover:
 
@@ -121,38 +125,10 @@ Wire notes that cost time to discover:
 Server→client requests carry string ids (`srq-…`); `request.cancel` must tear the dialog down or the
 agent's wait never settles.
 
-## Verification
-
-    bun run check                                       # tsc --noEmit (app + coding-agent/hermes)
-    HERMES_OMP_START=1 bun run smoke:native             # live gateway + live turn (writes out/)
-    HERMES_OMP_START=1 bun run smoke                    # the earlier shell, unchanged
-
-`smoke:native` boots the real `InteractiveMode` on a test terminal and checks: init renders (welcome,
-status line with model/cwd), the Hermes command catalog reaches the autocomplete, a live turn streams
-`pong` into omp's transcript, the tool card carries the result/diff/todo details (Hermes' ANSI
-`inline_diff` normalized to a unified diff, Ctrl+O expands), the todo HUD mounts from
-`todo.updated`, queue/steer map to the gateway, `/model` opens and closes omp's picker, `/resume`
-switches the live session and replays history, `/new` starts a fresh session, `/export md` writes the
-gateway-rendered file, a notification lands on omp's status row, goal state reaches the footer,
-`/agents` and `/jobs` mount pickers, `/mcp` and `/skills` list live registries, `/plugins`, `/cron`
-and `/settings` mount their panels, `/btw` and `/background` start side agents, images become
-`prompt.submit.attachments`, a server→client approval answers with `once`, a Mermaid fence renders
-as a diagram, Hermes' skin repaints omp's theme, and `/browse`/`/copy` read the live transcript.
-Evidence: `coding-agent/hermes/out/native.smoke.txt`.
-
-## Known gaps
-
-Hermes skins map onto omp's theme tokens (accent, borders, status line, diffs) rather than replacing
-the whole renderer palette; the remaining omp tokens keep the light/dark built-in. Attachment paste
-chips, inline images and the transcript tree-rewind (`/tree`, which needs a server-side branch
-operation) are still open. Tracked in `../docs/omp-ui-gap-plan.md`.
-
 ## Provenance
 
 Renderer, shell and dialog components come from omp (`https://github.com/can1357/oh-my-pi`, MIT).
-`src/` started as the upstream snapshot at commit
-`6a86df8539fccf3ad7818081266e554022fc21bc` (`@oh-my-pi/pi-coding-agent@18.14.0`); under the
-2026-10-31 direction it becomes the **implementation** and is modified in place, so the
-byte-identical/read-only claim **no longer applies**. Provenance for the vendored trees moves to
-`src/vendor/MANIFEST.json` + `src/VENDORED.md` (G1/G2 in
-`../docs/omp-ui-gap-plan.md`). The legacy `coding-agent/hermes/` bridge is frozen for deletion (G6).
+`src/` is the upstream snapshot at commit `6a86df8539fccf3ad7818081266e554022fc21bc`
+(shell `18.14.0`; `@oh-my-pi/*` packages installed at `18.14.1`) and is modified in place from G1
+on. Vendored trees, the R2 relocations and the `main.ts` entry patch are listed in
+[`src/VENDORED.md`](src/VENDORED.md); `src/LICENSE` carries the upstream MIT license.

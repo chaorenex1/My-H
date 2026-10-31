@@ -3,7 +3,7 @@
  *
  * Handles /ssh subcommands for managing SSH host configurations.
  */
-import { getProjectDir, getSSHConfigPath } from "@oh-my-pi/pi-utils";
+import { getProjectDir, getSSHConfigPath } from "../../vendor/utils/src/index.ts";
 import { Text } from "@oh-my-pi/pi-tui";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { reset as resetCapabilities } from "../../capability";

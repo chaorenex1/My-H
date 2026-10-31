@@ -9,7 +9,7 @@ import * as path from "node:path";
 import type { VcsGitRepo, VcsNumstatEntry } from "@oh-my-pi/pi-natives";
 import { DiffSide, DiffStream, type DiffStreamProgress, rasterizeSvg } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { BINARY_SNIFF_BYTES, isEnoent, isProbablyBinaryHeader } from "@oh-my-pi/pi-utils";
+import { BINARY_SNIFF_BYTES, isEnoent, isProbablyBinaryHeader } from "../../vendor/utils/src/index.ts";
 import type { NumstatEntry } from "../../commit/types";
 import {
 	DIFF_CONTEXT_LINES,

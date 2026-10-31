@@ -1,6 +1,6 @@
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "../../vendor/ai/src/index.ts";
 import { type OverlayHandle, replaceTabs } from "@oh-my-pi/pi-tui";
-import { logger, toError, withTimeout } from "@oh-my-pi/pi-utils";
+import { logger, toError, withTimeout } from "../../vendor/utils/src/index.ts";
 import {
 	type BtwHistoryRecord,
 	type BtwHistoryTurn,

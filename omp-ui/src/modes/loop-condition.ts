@@ -15,7 +15,7 @@
  * work, which is the failure mode this whole feature exists to avoid.
  */
 
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "../vendor/utils/src/index.ts";
 import type { LoopConditionConfig } from "@oh-my-pi/pi-tui/status-line/loop";
 import type { BashResult } from "../exec/bash-executor";
 import { executeBash } from "../exec/bash-executor";

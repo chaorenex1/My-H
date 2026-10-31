@@ -13,13 +13,13 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
-import { $env, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { ThinkingLevel } from "../../vendor/agent/src/index.ts";
+import type { Model } from "../../vendor/ai/src/index.ts";
+import { getOAuthProviders } from "../../vendor/ai/src/registry/oauth/index.ts";
+import type { ImageContent } from "../../vendor/ai/src/index.ts";
+import { toolWireSchema } from "../../vendor/ai/src/utils/schema/index.ts";
+import { modelsAreEqual } from "../../vendor/catalog/src/models.ts";
+import { $env, isRecord, logger, Snowflake, toError } from "../../vendor/utils/src/index.ts";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionAskDialogQuestion,

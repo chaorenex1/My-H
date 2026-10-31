@@ -10,8 +10,8 @@
  */
 
 import { truncateToWidth } from "@oh-my-pi/pi-tui";
-import { formatDuration, getProjectDir } from "@oh-my-pi/pi-utils";
-import chalk from "@oh-my-pi/pi-utils/chalk";
+import { formatDuration, getProjectDir } from "../vendor/utils/src/index.ts";
+import chalk from "../vendor/utils/src/chalk.ts";
 import {
 	closeDaemonClients,
 	type DaemonBrokerClient,

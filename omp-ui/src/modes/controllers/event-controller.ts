@@ -1,9 +1,9 @@
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import type { AssistantMessage, ImageContent } from "../../vendor/ai/src/index.ts";
+import * as AIError from "../../vendor/ai/src/error/index.ts";
+import { getStreamingPartialJson } from "../../vendor/ai/src/utils/block-symbols.ts";
 import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
+import { formatDuration, isRecord, logger, sanitizeText } from "../../vendor/utils/src/index.ts";
+import { INTENT_FIELD } from "../../vendor/wire/src/index.ts";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";

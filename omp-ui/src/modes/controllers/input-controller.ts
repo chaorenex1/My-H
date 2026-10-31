@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { ThinkingLevel } from "../../vendor/agent/src/index.ts";
+import type { ImageContent } from "../../vendor/ai/src/index.ts";
 import {
 	type AutocompleteProvider,
 	BRACKETED_PASTE_END,
@@ -15,7 +15,7 @@ import {
 	type PasteOptions,
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
-import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, postmortem, sanitizeText } from "../../vendor/utils/src/index.ts";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";

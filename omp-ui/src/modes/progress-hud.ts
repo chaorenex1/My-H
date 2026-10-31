@@ -7,12 +7,12 @@
 import { type Component, renderProgressBar, visibleWidth } from "@oh-my-pi/pi-tui";
 import { col, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import type { TspSpan } from "../vendor/wire/src/index.ts";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import { formatCost } from "@oh-my-pi/pi-tui/overlays/agent-hub-renderer";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import { formatBytes } from "@oh-my-pi/pi-utils";
+import { formatBytes } from "../vendor/utils/src/index.ts";
 import type { DownloadActivity } from "../downloads/activity";
 import type { JudgmentBatchProgress } from "../eval/judgment-batch-events";
 

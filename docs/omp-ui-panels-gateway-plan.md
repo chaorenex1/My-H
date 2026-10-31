@@ -1,7 +1,8 @@
 # omp-ui 面板接通：Hermes 网关改动计划
 
 > 目标：把 omp-ui 的**所有面板**接到 Hermes 网关。本文主体描述**网关侧**要做的改动（contract、
-> handler、事件、能力协商、测试）；UI 侧移植与按需代码搬运见 `docs/omp-ui-gap-plan.md`。
+> handler、事件、能力协商、测试）；UI 侧只做数据接线，交互保持原样（§0.1）。`docs/omp-ui-gap-plan.md`
+> 已于 2026-11-01 废弃；依赖边界与 vendor 事实以 `omp-ui/src/VENDORED.md` 为准。
 >
 > **2026-10-31 方向修正：单一 wire，两端适配。**
 >
@@ -37,8 +38,46 @@
 
 **UI 侧代码搬运**：所需 omp 代码按 import 闭包从本地 checkout
 `C:\Users\zarag\projects\oh-my-pi`（HEAD `6a86df8539fccf3ad7818081266e554022fc21bc`）复制到
-`omp-ui/src/vendor/`；不得从 `omp-ui/node_modules` 复制。依赖边界见
-`docs/omp-ui-gap-plan.md` 的 D3/§3（`package.json` 只保留 `@oh-my-pi/pi-tui`）。
+`omp-ui/src/vendor/`；不得从 `omp-ui/node_modules` 复制。依赖边界以 `omp-ui/src/VENDORED.md`
+为准（`package.json` 依赖只有 `@oh-my-pi/pi-tui` 与 `@oh-my-pi/pi-natives`；其余 `@oh-my-pi/*`
+改写成 `src/vendor/` 的相对路径，`omp-ui/scripts/check-imports.ts` 执行 R1–R3/R5）。
+
+### 0.1 硬约束：omp 原有交互不变（最高优先级）
+
+本条是其余全部改动的**前提**；与任何性能、简洁或“对齐后端”的目标冲突时，以本条为准。
+
+1. **交互层是只读契约**：omp-ui 的主界面与面板——`modes/interactive-mode.ts` 的纵向结构（§2.3.1）、
+   transcript 区块（§2.3.2）、composer（§2.3.3）、HUD/实时行（§2.3.4）、状态行（§2.3.5）、
+   默认键位（§2.3.6）、slash 面板（§2.3.7）、显示设置（§2.3.8）——不得因为接入 Hermes 数据而改变。
+   不删面板、不改键位、不改默认值、不改渲染分支、不改动画/布局/顺序，也不新增“Hermes 模式”开关。
+2. **数据只从两类 RPC 来**：omp 现有界面需要的数据，全部由 Hermes 的**实时 RPC**（server → client
+   事件/请求，附录 A）与**业务 RPC**（client → server 请求/响应，附录 B）提供；渲染层只读客户端
+   模型（`AgentSessionEvent`、`RpcResponse`、`SessionInfo`、`ModelInfo`、`TodoState` 等）。
+3. **Hermes 适配而不是 UI 变形**：
+   - 语义缺失（Hermes 确实没有该数据/能力）→ 按 §4 的方式补契约/字段/事件；
+   - 命名、枚举、信封、单位差异 → 一律在客户端 `modes/rpc/` 的映射层转换（附录 A.0.1/B.0.1）；
+   - 能力缺失（N 档）→ 契约先定义，`runtime.describe.panels` 广告 `supported:false`，该面板/动作
+     显示 `pending`/`unsupported`，其余交互照旧；不得伪造数据，也不得为了消灭 `unsupported` 而改 UI。
+4. **禁止的捷径**：为迁就后端而重写/分叉 omp 组件、改键位或默认行为、缩减面板、把 omp 的交互状态
+   持久化到 Hermes 后反过来改变 UI 默认值；也禁止在网关侧实现 omp 的交互逻辑。
+5. **主界面回归是验收项**（§12）：接入前后 §2.3 的每一项逐项一致；Hermes 数据只填充值，不改变
+   控制流。发现不一致时先判定是映射层错误，而不是改 omp。
+
+为什么：omp 的交互是用户已经依赖的产品行为；网关是数据源，不是 UI 的重写者。把差异留在客户端一处
+（`gateway-client.ts` + `rpc-*.ts`），既保证交互稳定，也让 Hermes 契约保持自己的命名。
+
+### 0.2 客户端改造约束（承接已废弃的 `omp-ui-gap-plan.md` D1–D6）
+
+这些约束仍然生效，原文只作历史证据：
+
+1. **只改既有路径**：实现落在 `omp-ui/src` 已有文件与类上；不建 `src/hermes/` 或其他平行命名空间。
+2. **不裁剪**：文件与界面能力不删、不拆；改的是实现内容。
+3. **类身份不变**：`AgentSession`/`SessionManager` 就地重写，壳拿同一类型，不用 cast。
+4. **依赖边界**：omp 源码按 import 闭包从固定 checkout（`6a86df853…`）vendor 到 `src/vendor/`，
+   R1–R5、`package.json` 约束与本地补丁以 `omp-ui/src/VENDORED.md` 为准；不从 `node_modules` 复制。
+5. **顺序**：vendor/边界 → 就地重写会话层 → 入口 → 删旧目录 → smoke 收敛；未接通能力标
+   `pending`/`unsupported`，不静默 stub。
+6. **单一入口**：`hermes omp` → `src/main.ts`；`src/cli.ts` 只留作被 spawn 的 worker 宿主。
 
 ## 1. 设计原则
 
@@ -125,6 +164,11 @@
 
 Hermes 网关对 omp-ui 暴露的不是“每个面板各有一个后端”，而是两类 RPC。面板只是消费者；
 方法归属仍以 `gateway/panel_inventory.py` 与 `tui_gateway/contracts/*` 为准。
+
+> **前提（§0.1）**：两类 RPC 只负责把 omp 现有界面需要的数据送进既有消费点。实时面板消费事件，
+> 读/写面板消费方法；形状差异在 `omp-ui/src/modes/rpc/` 的映射层归一（附录 A.0.1/B.0.1），
+> 不反向修改 omp 的渲染、键位、默认值或主界面结构。Hermes 没有的能力按附录的 N 档先定义契约，
+> 由 `runtime.describe.panels` 广告 `supported:false`，而不是改动 UI 来绕开。
 
 **1. 实时 RPC（server → client）**
 
@@ -479,6 +523,9 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | **C 客户端** | 无网关改动，`src` 内接线 | copy、hotkeys、changelog、context 渲染、theme 预览（omp 主题） |
 | **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | OMFG、cleanse、ratchet、prewalk、auto-graph、in-process extensions、annotation、collab、pause freeze-all、desktop-only 面板（§10） |
 
+注：本表的 **N** 只覆盖 `docs/omp-ui-panels.json` 里面板实际调用的方法；附录 B 的 36 个 N 档
+命令是 omp 命令表的完整对齐契约（多数由客户端派生或尚无 producer），不参与面板覆盖门。
+
 ## 4. 新方法契约（重点）
 
 所有类继承 `Params` / `Result` / `Payload`；`extra="forbid"`；新增后跑
@@ -737,6 +784,7 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 | 客户端协议分叉 | omp 自有 `{type:"prompt"}` 帧与 JSON-RPC 并存 | `rpc-client.ts` 保留但不接网关；`gateway-client.ts` 是唯一传输 |
 | 错误码两套 | canonical `data.reason` vs legacy 数字码 | 客户端一个映射函数归一，网关不造第二套 |
 | D 项长期悬空 | “待设计”变成永久 unsupported | P6 每项必须有决定与验收；UI 只显示真实状态 |
+| 为接数据而改 UI | 字段/事件对不上时，倾向改 omp 组件、键位或默认值 | §0.1 硬约束：差异只许在客户端映射层归一；主界面按 §2.3 逐项回归 |
 
 ## 12. 验收
 
@@ -761,4 +809,8 @@ scripts/run_tests.sh tests/gateway/test_promoted_usage.py tests/gateway/test_pro
 7. `omp-ui/src`：`gateway-client.ts` + `AgentSession`/`SessionManager` 接线后 `bun run check`
    通过，smoke 无 FAIL；
 8. §10 的每个 D 项都有 ADR/决定；决定为“不做”的由 `runtime.describe.panels` 返回
-   `supported:false` 与原因。
+   `supported:false` 与原因；
+9. **主界面交互回归（§0.1）**：接入前后 §2.3 的纵向结构、transcript 区块、composer、HUD/实时行、
+   状态行、默认键位表、slash 面板与显示默认值逐项一致；Hermes 数据只填充值，不改变控制流；
+10. **别名归属（附录 A.0.1/B.0.1）**：Hermes 契约没有为对齐 omp 命名而新增的同义字段；P 档的
+    字段改名、枚举映射、信封解包与单位换算全部位于 `omp-ui/src/modes/rpc/`。

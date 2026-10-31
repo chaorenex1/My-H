@@ -1,7 +1,7 @@
-import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
-import type { OAuthProvider } from "@oh-my-pi/pi-ai/oauth/types";
+import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "../../vendor/agent/src/index.ts";
+import type { CompactionOutcome } from "../../vendor/agent/src/compaction.ts";
+import type { Model, UsageReport } from "../../vendor/ai/src/index.ts";
+import type { OAuthProvider } from "../../vendor/ai/src/registry/oauth/types.ts";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
@@ -14,7 +14,7 @@ import {
 	logger,
 	normalizePathForComparison,
 	sanitizeText,
-} from "@oh-my-pi/pi-utils";
+} from "../../vendor/utils/src/index.ts";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	discoverAdvisorConfigs,
@@ -153,8 +153,8 @@ import { cfgTaskAgentModelOverrides } from "../../task/settings";
 /** First-use boundary for provider auth catalog and dialog components. */
 async function loadProviderAuthUi() {
 	const [{ PASTE_CODE_LOGIN_PROVIDERS }, oauth, loginDialog, logoutSelector, oauthSelector] = await Promise.all([
-		import("@oh-my-pi/pi-ai"),
-		import("@oh-my-pi/pi-ai/oauth"),
+		import("../../vendor/ai/src/index.ts"),
+		import("../../vendor/ai/src/registry/oauth/index.ts"),
 		import("@oh-my-pi/pi-tui/overlays/login-dialog"),
 		import("@oh-my-pi/pi-tui/overlays/logout-account-selector"),
 		import("@oh-my-pi/pi-tui/overlays/oauth-selector"),
@@ -1208,6 +1208,14 @@ export class SelectorController {
 
 	/** /login round-trip for a locked provider; reopen the hub on that provider only after a successful login. */
 	async #loginThenReopenModelHub(providerId: string): Promise<void> {
+		if (this.ctx.session.gateway) {
+			// Same rule as `/login`: the authority owns credentials, so the hub must not start a
+			// second local OAuth flow (or write its token store) from this client.
+			this.ctx.showWarning(
+				"Provider credentials are managed by Hermes; add or refresh them there, then reopen /model.",
+			);
+			return;
+		}
 		const succeeded = await this.#handleOAuthLogin(providerId);
 		if (succeeded) {
 			this.#showModelHub({ initialProviderId: providerId });
@@ -1805,6 +1813,46 @@ export class SelectorController {
 				scopeLabel: false,
 				showCwd: true,
 			};
+		} else if (this.ctx.session.gateway) {
+			// The authority owns the session table: the picker lists `session.list` rows and selecting
+			// one resumes that session over a fresh gateway connection (no local session files).
+			const gateway = this.ctx.session.gateway;
+			let rows;
+			try {
+				rows = await gateway.listSessions();
+			} catch (error) {
+				this.ctx.showError(
+					`Failed to list Hermes sessions: ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return;
+			}
+			if (rows.length === 0) {
+				this.ctx.showWarning("No Hermes sessions found");
+				return;
+			}
+			sessions = rows.map(row => {
+				const started = typeof row.started_at === "number" ? row.started_at : 0;
+				const date = new Date(started > 1_000_000_000_000 ? started : started * 1000);
+				const id = row.resolved_id ?? row.id;
+				return {
+					path: id,
+					id,
+					cwd: "",
+					title: row.title || undefined,
+					created: date,
+					modified: date,
+					messageCount: row.message_count ?? 0,
+					size: 0,
+					firstMessage: row.preview ?? "",
+					allMessagesText: row.preview ?? "",
+				} satisfies SessionInfo;
+			});
+			onSelectSession = session => this.handleResumeGatewaySession(session.id);
+			selectorOptions = {
+				title: "Resume Hermes Session",
+				scopeLabel: false,
+				showCwd: false,
+			};
 		} else {
 			const [loadedSessions, pinnedIds] = await Promise.all([
 				SessionManager.listForPicker(
@@ -2042,6 +2090,25 @@ export class SelectorController {
 		);
 		if (continuation) this.ctx.showWarning(formatSessionContinuationNotice(continuation));
 		if (modelFallbackWarning) this.ctx.showWarning(modelFallbackWarning);
+		return true;
+	}
+
+	/**
+	 * Resume a Hermes session chosen from `session.list`.
+	 *
+	 * The gateway owns the session, so the switch pairs a new connection resumed on that id and
+	 * replays its snapshot; the local `SessionManager` is only the shell's replay view.
+	 */
+	async handleResumeGatewaySession(sessionId: string): Promise<boolean> {
+		await this.ctx.prepareSessionSwitch();
+		this.ctx.resetObserverRegistry();
+		if (!(await this.ctx.session.switchGatewaySession(sessionId))) return false;
+		this.ctx.clearTransientSessionUi();
+		this.#refreshSessionTerminalTitle();
+		this.ctx.updateEditorBorderColor();
+		await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
+		await this.ctx.reloadTodos();
+		this.ctx.showStatus("Resumed session");
 		return true;
 	}
 
@@ -2295,6 +2362,16 @@ export class SelectorController {
 	}
 
 	async showOAuthSelector(mode: "login" | "logout", providerId?: string): Promise<void> {
+		if (this.ctx.session.gateway) {
+			// The authority owns provider credentials; running omp's OAuth flow here would write a
+			// second, local credential store that nothing in this session ever reads.
+			this.ctx.showWarning(
+				mode === "login"
+					? "Provider credentials are managed by Hermes; add or refresh them there, then reopen /model."
+					: "Provider credentials are managed by Hermes; remove them there.",
+			);
+			return;
+		}
 		if (providerId) {
 			if (mode === "login") {
 				await this.#handleOAuthLogin(providerId);

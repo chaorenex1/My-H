@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import { disambiguateDisplayLabels, replaceTabs, shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { formatBytes, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatBytes, sanitizeText } from "../vendor/utils/src/index.ts";
 import { InternalUrlRouter, type LocalFileEntry, type LocalProtocolOptions, listLocalFiles } from "../internal-urls";
 import type { SessionManager } from "../session/session-manager";
 import { getEditorCommand, openEditorOnPath } from "../utils/external-editor";

@@ -11,8 +11,8 @@ import {
 	TUI,
 } from "@oh-my-pi/pi-tui";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
-import chalk from "@oh-my-pi/pi-utils/chalk";
-import type { StreamChatMessage, TspSpan } from "@oh-my-pi/pi-wire";
+import chalk from "../vendor/utils/src/chalk.ts";
+import type { StreamChatMessage, TspSpan } from "../vendor/wire/src/index.ts";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { col, kbd, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { StreamConsoleEvent, StreamMuxHost } from "./streamer";

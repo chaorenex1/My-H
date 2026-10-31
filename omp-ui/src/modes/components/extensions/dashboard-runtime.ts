@@ -1,5 +1,5 @@
 import type { ExtensionDashboardRuntime } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
-import { getMCPConfigPath } from "@oh-my-pi/pi-utils";
+import { getMCPConfigPath } from "../../../vendor/utils/src/index.ts";
 import { parseRuleAgents, parseRuleConditionAndScope } from "../../../capability/rule";
 import type { Settings } from "../../../config/settings";
 import { getAllProvidersInfo, isForeignUserProvider, isUserSourceEnabled } from "../../../discovery";

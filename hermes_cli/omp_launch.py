@@ -1,9 +1,13 @@
 """``hermes omp``: launch the omp-rendered TUI (``omp-ui/``, a Bun project).
 
-``omp-ui`` is a client of the profile gateway, exactly like ``ui-tui``: it attaches to the
-canonical WebSocket and never opens ``state.db`` itself. This module only prepares the Bun
-workspace and the environment; the UI itself is omp's ``InteractiveMode`` in
-``omp-ui/coding-agent/hermes/``, driven over the gateway by ``omp-ui/coding-agent/hermes/main.ts``.
+The UI is omp's own ``InteractiveMode`` from the vendored shell in ``omp-ui/src``; this module
+only prepares the Bun workspace and the environment, then replaces the CLI with
+``omp-ui/src/main.ts`` (the Hermes entry: argv → gateway session → InteractiveMode, without omp's
+own CLI command layer or local agent). The shell pairs with this install's profile gateway and
+talks JSON-RPC to it. Its **agent directory** (``config.yml``, ``keybindings.yml``, the session /
+model / history DBs) is redirected under the Hermes home; omp's machine-global runtime artifacts
+(``logs/``, ``stats.db``, ``install-id``, the native cache) still resolve under ``~/.omp`` because
+``PI_CONFIG_DIR`` is a directory *name* joined to the user's home, not a path.
 
 Why Bun: the ``@oh-my-pi/pi-tui`` packages publish TypeScript sources (``exports`` point at
 ``src/*.ts``), so no build step exists and Node cannot load them.
@@ -57,7 +61,11 @@ def _workspace_digest(ui_dir: Path) -> str:
 
 
 def _ensure_dependencies(ui_dir: Path, bun: str) -> None:
-    """``bun install`` once per lockfile, not once per launch (it costs seconds and the network)."""
+    """``bun install`` once per lockfile, not once per launch (it costs seconds and the network).
+
+    ``--production`` keeps the launcher to runtime dependencies (``@oh-my-pi/pi-tui``); the
+    typecheck-only dev dependencies are installed by ``bun install`` when running ``check``.
+    """
     digest = _workspace_digest(ui_dir)
     marker = ui_dir / "node_modules" / _INSTALL_MARKER
     try:
@@ -67,7 +75,7 @@ def _ensure_dependencies(ui_dir: Path, bun: str) -> None:
     if current == digest:
         return
     print("omp-ui: installing Bun dependencies…", file=sys.stderr)
-    completed = subprocess.run([bun, "install", "--ignore-scripts"], cwd=str(ui_dir), check=False)
+    completed = subprocess.run([bun, "install", "--ignore-scripts", "--production"], cwd=str(ui_dir), check=False)
     if completed.returncode != 0:
         sys.exit("omp-ui: `bun install` failed; fix the error above and retry `hermes omp`.")
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -87,13 +95,22 @@ def _require_terminal() -> None:
     sys.exit(1)
 
 
+def _hermes_scoped_agent_dir() -> Path:
+    """omp's agent dir (config, sessions, auth) under the active Hermes home."""
+    from hermes_constants import get_hermes_home
+
+    path = get_hermes_home() / "omp-ui" / "agent"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def cmd_omp(args) -> int:
-    """Replace the CLI with ``bun omp-ui/coding-agent/hermes/main.ts`` in the caller's cwd."""
+    """Replace the CLI with ``bun omp-ui/src/main.ts`` in the caller's cwd."""
     ui_dir = omp_ui_dir()
-    entry = ui_dir / "coding-agent" / "hermes" / "main.ts"
+    entry = ui_dir / "src" / "main.ts"
     if not entry.is_file():
         print(
-            f"omp-ui workspace missing: {entry}\n"
+            f"omp-ui shell missing: {entry}\n"
             "`hermes omp` ships with a source checkout (`omp-ui/` next to `ui-tui/`), not with "
             "prebuilt installs — use `hermes --tui` there.\n"
             "In a checkout, recover it with `git restore -- omp-ui` or `hermes update --force`.",
@@ -115,25 +132,22 @@ def cmd_omp(args) -> int:
     _ensure_dependencies(ui_dir, bun)
 
     env = os.environ.copy()
-    # The shell runs the checkout's own bootstrap helper, with the interpreter this CLI runs on:
-    # a profile installed with a different venv must not be bootstrapped by a global python.
+    # The shell pairs with this install's gateway: the launcher names the interpreter and root.
     env["HERMES_AGENT_ROOT"] = str(project_root())
     env["HERMES_PYTHON"] = sys.executable
-    # Labels the omp welcome lockup with this install's version instead of the renderer's.
+    # omp ignores PI_CODING_AGENT_DIR when a profile is active, so a profile env var inherited
+    # from the caller's shell must not drag the shell back to ~/.omp/profiles/<p>/agent.
+    env.pop("OMP_PROFILE", None)
+    env.pop("PI_PROFILE", None)
+    env["PI_CODING_AGENT_DIR"] = str(_hermes_scoped_agent_dir())
+    # Labels the welcome lockup with this install's version instead of the renderer's.
     from hermes_cli import __version__ as hermes_version
 
     env["HERMES_VERSION"] = hermes_version
-    env.pop("HERMES_OMP_RESUME", None)
-    if getattr(args, "resume", None):
-        env["HERMES_OMP_RESUME"] = args.resume
-    if getattr(args, "no_start", False):
-        env.pop("HERMES_OMP_START", None)
-    else:
-        env["HERMES_OMP_START"] = "1"
 
     argv = [bun, str(entry)]
     if getattr(args, "resume", None):
-        argv += ["--resume", args.resume]
+        argv.append(f"--resume={args.resume}")
     try:
         return subprocess.call(argv, cwd=os.getcwd(), env=env)
     except KeyboardInterrupt:

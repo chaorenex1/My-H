@@ -5,19 +5,30 @@
   "type": "module",
   "description": "Hermes' terminal UI rendered with omp's (@oh-my-pi/pi-tui) components.",
   "scripts": {
-    "ui": "bun app/main.ts",
-    "smoke": "bun app/smoke.ts",
-    "render": "bun app/render.ts",
-    "preview": "bun app/preview.ts",
     "check": "tsc --noEmit -p tsconfig.json",
-    "native": "bun coding-agent/hermes/main.ts",
-    "smoke:native": "bun coding-agent/hermes/smoke.ts"
+    "check:imports": "bun scripts/check-imports.ts",
+    "test": "bun test"
   },
   "dependencies": {
-    "@oh-my-pi/pi-tui": ">=18.14.0"
+    "@oh-my-pi/pi-natives": "18.14.1",
+    "@oh-my-pi/pi-tui": "18.14.1"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.4",
-    "typescript": "^7.0.2"
+    "@huggingface/transformers": "4.3.0",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.220.0",
+    "@opentelemetry/context-async-hooks": "2.11.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "0.220.0",
+    "@opentelemetry/exporter-metrics-otlp-proto": "0.220.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "0.220.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.220.0",
+    "@opentelemetry/sdk-metrics": "2.11.0",
+    "@opentelemetry/sdk-trace-base": "2.11.0",
+    "@opentelemetry/sdk-trace-node": "2.11.0",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2",
+    "fastembed": "3.0.0",
+    "onnxruntime-node": "1.26.0"
   }
 }

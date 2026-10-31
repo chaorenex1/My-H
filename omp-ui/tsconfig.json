@@ -1,22 +1,41 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
-    "module": "preserve",
+    "target": "ES2024",
+    "module": "ESNext",
+    "lib": ["ES2024", "DOM.AsyncIterable"],
     "moduleResolution": "bundler",
-    "lib": ["ES2023"],
-    "types": ["bun"],
+    "moduleDetection": "force",
+    "types": ["bun", "assets"],
+    "typeRoots": ["./types", "./node_modules/@types"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": false
+    "allowArbitraryExtensions": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": false,
+    "paths": {
+      "@oh-my-pi/pi-agent-core": ["./src/vendor/agent/src/index.ts"],
+      "@oh-my-pi/pi-agent-core/*": ["./src/vendor/agent/src/*", "./src/vendor/agent/src/*/index.ts"],
+      "@oh-my-pi/omptype": ["./src/vendor/omptype/src/index.ts"],
+      "@oh-my-pi/omptype/*": ["./src/vendor/omptype/src/*", "./src/vendor/omptype/src/*/index.ts"],
+      "@oh-my-pi/pi-ai": ["./src/vendor/ai/src/index.ts"],
+      "@oh-my-pi/pi-ai/*": ["./src/vendor/ai/src/*", "./src/vendor/ai/src/*/index.ts"],
+      "@oh-my-pi/pi-catalog": ["./src/vendor/catalog/src/index.ts"],
+      "@oh-my-pi/pi-catalog/*": ["./src/vendor/catalog/src/*", "./src/vendor/catalog/src/*/index.ts"],
+      "@oh-my-pi/pi-utils": ["./src/vendor/utils/src/index.ts"],
+      "@oh-my-pi/pi-utils/*": ["./src/vendor/utils/src/*", "./src/vendor/utils/src/*/index.ts"],
+      "@oh-my-pi/pi-wire": ["./src/vendor/wire/src/index.ts"],
+      "@oh-my-pi/pi-wire/*": ["./src/vendor/wire/src/*", "./src/vendor/wire/src/*/index.ts"],
+      "@oh-my-pi/snapcompact": ["./src/vendor/snapcompact/src/index.ts"],
+      "@oh-my-pi/snapcompact/*": ["./src/vendor/snapcompact/src/*", "./src/vendor/snapcompact/src/*/index.ts"],
+      "@oh-my-pi/omp-stats": ["./src/vendor/stats/src/index.ts"],
+      "@oh-my-pi/omp-stats/*": ["./src/vendor/stats/src/*", "./src/vendor/stats/src/*/index.ts"],
+      "@oh-my-pi/pi-mnemopi": ["./src/vendor/mnemopi/src/index.ts"],
+      "@oh-my-pi/pi-mnemopi/*": ["./src/vendor/mnemopi/src/*", "./src/vendor/mnemopi/src/*/index.ts"]
+    }
   },
-  "include": [
-    "app/**/*.ts",
-    "coding-agent/hermes/**/*.ts",
-    "src/modes/rpc/gateway-client.ts",
-    "src/modes/rpc/gateway-client.test.ts",
-    "src/modes/rpc/gateway-socket.ts",
-    "src/modes/rpc/gateway-socket.test.ts"
-  ]
+  "include": ["src/**/*.ts", "scripts/**/*.ts"]
 }

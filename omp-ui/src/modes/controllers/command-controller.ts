@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CompactionCancelledError, type CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
+import { CompactionCancelledError, type CompactionOutcome } from "../../vendor/agent/src/compaction.ts";
 import {
 	getEnvApiKey,
 	getProviderDetails,
@@ -9,7 +9,7 @@ import {
 	resolveUsedFraction,
 	type UsageLimit,
 	type UsageReport,
-} from "@oh-my-pi/pi-ai";
+} from "../../vendor/ai/src/index.ts";
 import {
 	type Component,
 	Loader,
@@ -21,8 +21,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
-import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-pi/pi-utils";
-import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
+import { formatDuration, logger, Snowflake, sanitizeText } from "../../vendor/utils/src/index.ts";
+import { getActiveProfile, getConfigDirName } from "../../vendor/utils/src/dirs.ts";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
@@ -53,7 +53,7 @@ import { continuesConversation } from "../utils/conversation-position";
 import { ContextViewer } from "@oh-my-pi/pi-tui/overlays/context-viewer";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
-import type { TspText } from "@oh-my-pi/pi-wire";
+import type { TspText } from "../../vendor/wire/src/index.ts";
 import { computeSessionContextBreakdown } from "../../session/context-usage-runtime";
 import { buildSessionContextView } from "../../session/context-view";
 import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/hotkeys-markdown";
@@ -383,7 +383,7 @@ export class CommandController {
 		try {
 			// Lazy: the stats dashboard (server + sqlite) loads on demand only,
 			// matching src/cli/stats-cli.ts, to keep CLI startup fast.
-			const { formatStatsDashboardUrl, startServer } = await import("@oh-my-pi/omp-stats");
+			const { formatStatsDashboardUrl, startServer } = await import("../../vendor/stats/src/index.ts");
 			const { hostname, port } = await startServer();
 			const url = `${formatStatsDashboardUrl(hostname, port)}/#/traces?s=${encodeURIComponent(sessionFile)}`;
 			this.openInBrowser(url);

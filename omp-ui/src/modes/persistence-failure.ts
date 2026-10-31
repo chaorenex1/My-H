@@ -1,4 +1,4 @@
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { sanitizeText } from "../vendor/utils/src/index.ts";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { SessionContinuation } from "../session/session-listing";
 import type { SessionPersistenceNotice } from "../session/session-manager";

@@ -21,6 +21,74 @@
 
 omp 的 74 个命令按 `commands.ts` 的 `name` 逐一核对，不按 omp 的 slash 命令名核对。
 
+## B.0.1 硬约束：三档都要有契约定义，P 档别名在 omp-ui 转换
+
+本附录与 `docs/omp-ui-panels-gateway-plan.md` §0.1 同源：
+
+1. **交互不变**：omp 的命令表、控制器与选择器是契约；本附录只定义数据，不描述改 UI。
+2. **F/P/N 三档都必须有定义**：
+   - **F**：Hermes 方法已覆盖；只做命名/信封别名。
+   - **P**：Hermes 有功能对应，但字段缺失、语义不等或方法名不同。必须同时给出**客户端映射规则**
+     和 Hermes 需补的**语义**字段；不得只写“需对齐”。
+   - **N**：Hermes 没有对应方法。必须给出完整 wire 定义（method + params/result + 错误码 +
+     `session_id`/`profile` 作用域），**即使当前没有 handler**。未落地时由
+     `runtime.describe.panels` 广告 `supported:false`，UI 保持原交互并标 `pending`/`unsupported`。
+3. **P 档别名在 omp-ui 侧转换**：`type`→`method`、平铺参数→`params`、`result`→`data`、
+   `error.message`→`error`、`error.data.reason`→`code`、字段改名、枚举映射与单位换算，全部由
+   `omp-ui/src/modes/rpc/` 完成并在 B.0.2 登记。Hermes 契约保持原生命名，**不得**为对齐 omp
+   命名新增**仅做字段改名**的同义方法（如另建一个只是重命名 `session.resume` 的 `get_state`）；
+   `session.state`（B.3.2）因含无来源字段（`is_compacting` 等）而成立，不属于此列。
+   本条**只约束别名**：`新增字段/方法`是 Hermes 的语义补项，不受本条限制；已落地的 omp 形状
+   投影（`commands.catalog.entries`、`btw.history.records`）保留，规则只约束新增/变更。
+4. **单向投影**：客户端不把 omp 的 UI 状态（面板选中项、草稿、轮换顺序）写回 Hermes 去改变渲染。
+5. **禁止伪造**：N 档不得用本地假数据把面板标成 `ok`；能力缺失就以 `unsupported` 呈现。
+
+## B.0.2 P 档别名转换清单（omp-ui 侧）
+
+| 组 | omp 命令/字段 | Hermes 原生 | 客户端转换 |
+|---|---|---|---|
+| 请求信封 | `{id?,type,...}` | `{jsonrpc,id,method,params}` | `type`→`method`、平铺字段→`params`；补 `session_id`/`profile`/`request_id` |
+| 响应信封 | `{type:"response",id,command,success,data?,error?,code?}` | `{jsonrpc,id,result}` / `{jsonrpc,id,error:{code,message,data.reason}}` | `result`→`data`；由有无 `result` 派生 `success`；`error.message`→`error`；`data.reason`→`code`；`command` 按 `id` 回填 |
+| 协商 | `protocolVersion` | `client.capabilities.protocol_version` | 字段改名（已落地，见 B.18） |
+| prompt | `message` / `images` / `streamingBehavior` | `prompt.submit.text` / `attachments` / busy 路径 | `message`→`text`；`images` 走 `image.attach_bytes`（URL 无对应）；`streamingBehavior` 由客户端决定 `queued` 或先 `session.steer` |
+| prompt 回执 | `id` / `agentInvoked` | `admission_id` / `AdmissionStatus` | `id`↔`admission_id`；`agentInvoked` 由准入结果派生 |
+| steer / follow_up | `message` / `images` | `session.steer.text` / `prompt.submit{queued:true}` | `message`→`text`；`follow_up` 别名到 `prompt.submit` |
+| 队列删除 | `message` / `queue` | `prompt.cancel.admission_id` | 用 `queue.updated` 的 id 定位（不做文本寻址） |
+| 新建/打开 | `parentSession` / `sessionDir` | `parent_session_id` / `workspace` | 字段改名；`provider`/`modelId` 在 resume 无对应 |
+| 切换会话 | `sessionPath` | `session.resume.session_id` | 客户端用 `session.list` 解析 stored id |
+| 导出 | `outputPath` | `session.export` 返回 `content` | 客户端落盘到 `outputPath` |
+| 历史 | `get_entries.messages` / `get_messages` | `session.history.entries` / `messages` | 客户端投影；`entryId` = durable `row_id` |
+| 分支 | `branch.entryId` / `fork.entryId` | `session.mutate{through_message_id}` / `session.branch_whole` | `entryId`→`through_message_id`；`text`/`cancelled` 客户端从结果派生 |
+| 重命名 | `name` | `session.mutate{rename}` / `session.title` | `name`→`title` |
+| 压缩 | `customInstructions` | `session.compress.focus_topic` | 字段改名；压缩结果由客户端投影 |
+| 模型 | `modelId` | `session.mutate.payload.model` | 字段改名；`ModelInfo` 由 `model.options.models` 投影 |
+| 推理档 | `level` | `session.mutate{reasoning}.effort` | `off`→`"none"`、`inherit`→省略字段 |
+| 快速模式 | `enabled` | `config.set{key:"fast"}` | `active` 从 `session.info` 派生 |
+| goal | `op` / `objective` | `session.control` 动作 / `GoalSnapshot.title` | `get`→`session.control.read`；`op`→动作名；`objective`↔`title`；`{goal,state}` 客户端投影 |
+| 命令目录 | `commands[]` | `commands.catalog.entries` | 条目字段映射；`source` 枚举按 B.8.1 投影 |
+| bash | `command` / `output` / `exitCode` | `shell.exec.command` / `stdout`+`stderr` / `code` | `output` 由客户端拼接 `stdout`+`\n`+`stderr`；`exitCode`→`code` |
+| 统计 | `tokens{}` / `cost` / `credits` | `session.stats` 扁平字段 / `cost_usd` | 客户端组装 `tokens`/`cost`；无来源字段置空 |
+| 子代理 | `id` / `index` / `status` | `subagent.list.subagent_id` / `task_index` / `status` | 重命名；`aborted`→`interrupted` |
+| 子代理取消 | `found` | `subagent.interrupt` | `cancelled = found`（注意 `found:false` 表示已结束） |
+| 语音 | `captureId` | `voice.record.capture_id` | 字段改名 |
+| BTW | `question` / `recordId` / `records` | `prompt.btw.text` / `record_id` / `btw.history.records` | 字段改名；`items`↔`records` |
+| 登录 | `providerId` | `model.options.providers[].slug` / `auth.*` | `slug`↔`id` |
+| 登出账户 | `credentialId` / `type` | `auth.accounts.credential_id` / `type` | 数值↔字符串；`api_key`/`oauth` 枚举校验 |
+| 登出 | `providerId` / `credentialId` | `model.disconnect.slug` | `providerId`→`slug`；`credentialId` 见 B.14（未落地） |
+
+“补项”指 Hermes 确实没有的数据，新增字段用 Hermes 原生命名（可为 `None`，handler 未落地时保持空值）。
+
+## B.0.3 复核结论（2026-11-01）
+
+- **覆盖**：`wire/commands.ts` 的 74 个命令与 B.16 矩阵逐项一致（脚本核对集合相等，无缺项、无多项）。
+- **补齐的定义缺口**：`set_host_tools`、`set_host_uri_schemes`、`cycle_model`、
+  `cycle_thinking_level`（B.7.4）；`get_branch_messages`、`get_last_assistant_text` 与
+  `session.tree.*` / `session.entry.label`（B.5.2 的完整定义）；其余 N/P 项集中在 B.15.1。
+- **按实现修正档位**：`negotiate_protocol` N→P（能力已由 `client.capabilities` 承载）、
+  `get_session_lease` N→F、`get_logout_accounts` N→P（`credentialId` 数值 vs `credential_id` 字符串、
+  `type` 枚举 vs 字符串，需客户端转换；B.14/B.18）。
+- **统计**：F 4、P 34、N 36（共 74）。
+
 ## B.1 两端已有的协议定义
 
 | 侧 | 业务 RPC 定义 | 生成/消费 |
@@ -93,7 +161,7 @@ Hermes：
 
 ## B.3 协议协商与会话状态
 
-### B.3.1 `negotiate_protocol` → **N（建议并入能力协商）**
+### B.3.1 `negotiate_protocol` → **P（能力已并入 `client.capabilities`）**
 
 omp：`params {protocolVersion:int}` → `data {protocolVersion:int}`。
 
@@ -121,6 +189,10 @@ result += {protocol_version: int, supported_protocol_versions: int[],
 
 B. 新增 `protocol.negotiate`：`params {protocol_version}` → `result {protocol_version}`（与 omp 字段
 完全一致），由 `runtime.describe` 广告。若目标只是 omp-ui 单客户端，A 更省一次往返。
+
+**已选 A 并落地**（B.18）：`client.capabilities` 与 `gateway.ready` 都携带协议版本与帧上限。
+omp 侧 `gateway-client.ts` 把 `negotiate_protocol` 映射到 `client.capabilities`，因此档位由 N 升为 P
+（功能对应，方法名与信封不同）。
 
 ### B.3.2 `get_state` → **P（建议新增 `session.state`）**
 
@@ -172,17 +244,17 @@ session.state {session_id} -> SessionStateProjection
 `session.control.read` + `config.get{key:"full"}`），但 `is_compacting`/`has_pending_async_work`/
 `is_settled`/`dump_tools` 在任何现有结果里都没有，仍属**新增**。
 
-### B.3.3 `get_session_lease` → **N**
+### B.3.3 `get_session_lease` → **F（已落地 `session.lease`）**
 
 omp：`params {sessionIds:string[]}` → `data {held:string[],unknown:string[]}`。
-Hermes 无租约探测方法（租约概念在 `active_lease_io` 内部）。建议：
 
 ```text
-session.lease {session_ids: string[]} -> {held: string[], unknown: string[]}
+session.lease {session_ids: string[], profile?} -> {held: string[], unknown: string[]}
 ```
 
-若只是为 omp 的 `--continue` 选择器，也可用 `session.active_list` 的 `id` 集合近似；但
-`unknown` 语义（探测失败）无法表达。
+已落地（B.18）：`gateway/session_lease.py` 用 `active_session_registry_snapshot(strict=True)`；registry
+不可证明存活时全部进 `unknown`，不拿 authority 会话冒充租约。omp 侧只做 `sessionIds`→`session_ids`
+别名与信封转换，档位 F。
 
 ## B.4 Prompt、队列与中断
 
@@ -270,6 +342,23 @@ session.resume result += {cancelled?: bool, resumed?: bool, session_file?: strin
 | `set_session_name {name}` | `session.title {title}` | **F** | `name`→`title` **别名**；结果 `title` 一致（Hermes 多 `session_key`/`pending`） |
 | `handoff {customInstructions?}` | `handoff.request {platform}` | N | 语义不同（Hermes 是移交到消息平台 home channel，不是新会话）。**新增** `session.handoff {custom_instructions?}` → `{session_id,saved_path?}` |
 
+N 档完整定义（尚无 handler；UI 保持原交互并标 `pending`/`unsupported`）：
+
+```text
+session.tree                    {session_id} -> {tree: JsonValue[], leaf_id: string|null}
+session.tree.navigate           {session_id, entry_id, summarize?: bool, custom_instructions?: string,
+                                 request_id, expected_revision}
+                                -> {cancelled: bool, aborted?: bool, editor_text?: string}
+session.tree.navigate.abort     {session_id} -> {cancelled: bool}
+session.entry.label             {session_id, entry_id, label?: string, request_id?}
+                                -> {entry_id: string, label?: string}
+session.handoff                 {session_id, custom_instructions?: string, request_id}
+                                -> {session_id: string, saved_path?: string}
+# 以下两条优先由客户端派生（不新增服务端方法）；若服务端实现，契约固定为：
+session.tree.branch_messages    {session_id} -> {messages: [{entry_id: string, text: string}]}
+session.last_assistant_text     {session_id} -> {text: string|null}
+```
+
 ### B.5.3 压缩
 
 | omp | Hermes | 状态 | 处理 |
@@ -278,7 +367,7 @@ session.resume result += {cancelled?: bool, resumed?: bool, session_file?: strin
 | `set_auto_compaction {enabled}` | 无 | N | **新增** `session.policy {auto_compaction?:bool}`，或 `config.set {key:"auto_compaction"}`（当前 setter 无此 key） |
 | `set_cache_warming {mode}` | 无 | N | **新增** `session.policy {cache_warming?:"off"/"streaming"/"idle"}` |
 | `set_auto_retry {enabled}` | 无 | N | **新增** `session.policy {auto_retry?:bool}` |
-| `abort_retry` | 无 | N | **新增** `retry.abort {session_id}` |
+| `abort_retry` | 无 | N | **新增** `retry.abort {session_id}` → `{cancelled: bool}`（`cancelled:false` 表示没有可取消的退避等待） |
 
 ### B.5.4 `AgentMessage` ↔ `TranscriptMessage` 字段映射
 
@@ -388,6 +477,34 @@ session.todos.set {session_id, phases: TodoPhase[]} -> {todo_phases: TodoPhase[]
 | `set_interrupt_mode {mode:"immediate"/"wait"}` | 工具中断策略 | `session.policy {interrupt_mode?}` |
 | `set_event_filter {events:string[] or null,messageUpdates?}` | 只转发列出的会话事件 | **新增** `session.events.filter {session_id,events,message_updates}`；Hermes 侧 `message.delta` 无 full/delta 投影，`message_updates` **新增** |
 | `set_subagent_subscription {level:"off"/"progress"/"events"}` | 子代理帧转发级别 | **新增** `subagent.subscribe {session_id,level}` |
+
+### B.7.4 Host 注册与派生命令 → **N（契约先定义，当前不落地）**
+
+这三组命令在 Hermes 没有对应能力；按 B.0.1 仍给出完整定义，避免客户端映射悬空：
+
+```text
+# 宿主工具/URI 注册：Hermes 的工具与 URI 全部在服务端解析，注册没有接收方。
+# 当前决定：不落地。客户端本地 no-op（返回空集）并把 host 能力标 unsupported，
+# 不发请求，也不伪造 server_request（A.13）。
+session.host.tools.register        {session_id, tools: [HostToolDefinition]}
+                                  -> {tool_names: string[]}
+session.host.uri_schemes.register  {session_id, schemes: [HostUriSchemeDefinition]}
+                                  -> {schemes: string[]}
+
+# 模型/推理轮换：轮换顺序是客户端状态，不是 Hermes 状态。
+# 当前决定：客户端用 model.options + session.mutate 派生；若实现则用以下契约。
+session.model.cycle     {session_id, direction?: "next"|"prev"}
+                       -> {model?: ModelInfoEntry, thinking_level?: string} | null
+session.thinking.cycle  {session_id, direction?: "next"|"prev"} -> {level?: string} | null
+```
+
+`HostToolDefinition {name,label?,description,parameters,hidden?,loadMode?,readsSkillUris?}`、
+`HostUriSchemeDefinition {scheme,description?,writable?,immutable?}` 与 omp 侧同名类型一致；
+`ModelInfoEntry` 复用 `model.options.models` 的条目，档位枚举见 B.6.3。
+
+派生契约（不新增方法）：`cycle_model` = 当前模型在 `model.options.models` 中的下一个（尾回卷，空则
+`null`）+ `session.mutate{model}`；`cycle_thinking_level` = 当前档位在
+`model.options.models[].thinking.levels` 中的下一个 + `session.mutate{reasoning}`。
 
 ## B.8 命令目录
 
@@ -518,8 +635,8 @@ Hermes 已有 `voice.toggle {action:status|on|off|tts}`、`voice.tts {text}`、`
 |---|---|---|---|
 | `get_login_providers` → `{providers:[{id,name,available,authenticated}]}` | `model.options` → `providers[{slug,name,authenticated,auth_type,...}]` | P | `slug`→`id` 别名；`available` **新增**（omp 表示“此 provider 当前可登录”） |
 | `login {providerId}` → `{providerId}` | 无（只有 `model.save_key`/`model.disconnect`；MCP 有 OAuth 流程） | N | **新增** `auth.login.start {provider_id}` → `{flow_id,auth_url}` + `auth.login.poll {flow_id}` → `{status:"pending"/"approved"/"error",provider_id,error?}`；OAuth 的 `open_url`/`input` 复用附录 A.12 |
-| `get_logout_accounts {providerId}` → `{accounts:LogoutAccount[]}` | 无 | N | **新增** `auth.accounts {provider_id}` → `{accounts:[{credential_id,provider,label,detail,type:"api_key"/"oauth",active}]}` |
-| `logout {providerId,credentialId}` | `model.disconnect {slug}` | P | 粒度不同：Hermes 删该 provider **全部**凭据；omp 按 `credentialId` 删一条。**新增** `credential_id` 到 `model.disconnect`，并保留全删为 `credential_id` 缺省 |
+| `get_logout_accounts {providerId}` → `{accounts:LogoutAccount[]}` | `auth.accounts {provider_id,profile?}` → `{accounts:[{credential_id,provider,label,detail,type,active}]}` | **P** | 已落地（B.18）；`providerId`→`provider_id` 别名；客户端须转换 `credentialId:number.integer`↔`credential_id:string` 与 `type:'api_key'\|'oauth'`↔`type:string`（枚举校验）。token 从不进入结果 |
+| `logout {providerId,credentialId}` | `model.disconnect {slug}` | P | 粒度不同：Hermes 删该 provider **全部**凭据；omp 按 `credentialId` 删一条。**新增** `credential_id?: string` 到 `model.disconnect`（缺省即全删），`credentialId` 由客户端从 `number` 转字符串 |
 
 ## B.15 其它
 
@@ -528,11 +645,52 @@ Hermes 已有 `voice.toggle {action:status|on|off|tts}`、`voice.tts {text}`、`
 | `predict_word {text,cursor}` → `{suffix}` | 无 | N | **新增** `predict.word {session_id,text,cursor}` → `{suffix:string or null}` |
 | `predict_word_feedback {text,cursor,suggestion,accepted}` | 无 | N | **新增** `predict.word.feedback` |
 
+### B.15.1 其余 N/P 项的完整 wire 定义
+
+B.7.3 / B.9 / B.11 / B.12 / B.13 / B.14 的表格只给结论；这里补齐字段级定义
+（`session_id` 统一由信封提供，写方法另带 `request_id`）：
+
+```text
+session.ask_dialog     {session_id, enabled: bool} -> {enabled: bool}
+
+session.policy         {session_id, auto_compaction?: bool, cache_warming?: "off"|"streaming"|"idle",
+                        auto_retry?: bool, slow_mode?: bool, slow_mode_scope?: string,
+                        steering_mode?: "all"|"one-at-a-time", follow_up_mode?: "all"|"one-at-a-time",
+                        interrupt_mode?: "immediate"|"wait"}
+                      -> {applied: JsonValue}          # 只回显实际写入的键
+
+session.events.filter  {session_id, events: string[]|null, message_updates?: "full"|"delta"}
+                      -> {events: string[]|null, message_updates?: "full"|"delta"}
+subagent.subscribe     {session_id, level: "off"|"progress"|"events"} -> {level: string}
+subagent.messages      {session_id, subagent_id?, session_file?, from_byte?: int}
+                      -> {session_file: string, from_byte: int, next_byte: int, reset: bool,
+                          entries: JsonValue[], messages: JsonValue[]}
+session.bash.abort     {session_id, process_id?: string} -> {cancelled: bool}
+btw.cancel             {session_id, record_id?: string} -> {cancelled: bool}
+predict.word           {session_id, text: string, cursor: int} -> {suffix: string|null}
+predict.word.feedback  {session_id, text: string, cursor: int, suggestion: string, accepted: bool}
+                      -> {ok: bool}
+auth.login.start       {provider_id: string} -> {flow_id: string, auth_url?: string}
+auth.login.poll        {flow_id: string} -> {status: "pending"|"approved"|"error",
+                                           provider_id: string, error?: string}
+voice.live.start       {session_id, voice?: string, instructions?: string} -> {voice: string}
+voice.live.connect     {session_id, sdp_offer: string, voice?: string, instructions?: string}
+                      -> {voice: string, sdp_answer: string}
+voice.live.stop        {session_id} -> {stopped: bool}
+voice.live.mute        {session_id, muted?: bool} -> {muted: bool}
+```
+
+`shell.exec` 的未落地补项字段类型：`output: string`、`cancelled: bool`、`timed_out: bool`、
+`truncated: bool`、`total_lines/total_bytes/output_lines/output_bytes: int`、`artifact_id?: string`、
+`artifact_elided_bytes?: int`、`artifact_error?: string`、`working_dir?: string`、`images?: JsonValue[]`。
+`get_subagent_messages` 的 `entries[]/messages[]` 需要结构化 JSONL 事件日志（B.18），在此之前只保证
+byte 偏移与文本 tail。
+
 ## B.16 汇总矩阵
 
 | 命令 | Hermes 对应 | 状态 |
 |---|---|---|
-| `negotiate_protocol` | `client.capabilities`（需扩字段） | N |
+| `negotiate_protocol` | `client.capabilities`（协议版本组） | P |
 | `prompt` | `prompt.submit` | P |
 | `steer` | `session.steer` | P |
 | `follow_up` | `prompt.submit{queued}` | P |
@@ -577,7 +735,7 @@ Hermes 已有 `voice.toggle {action:status|on|off|tts}`、`voice.tts {text}`、`
 | `bash` | `shell.exec` | P |
 | `abort_bash` | — | N |
 | `get_session_stats` | `session.stats` | P |
-| `get_session_lease` | — | N |
+| `get_session_lease` | `session.lease` | **F** |
 | `export_html` | `session.export` | P |
 | `switch_session` | `session.resume` | P |
 | `branch` | `session.mutate{branch}` / `session.branch` | P |
@@ -593,20 +751,21 @@ Hermes 已有 `voice.toggle {action:status|on|off|tts}`、`voice.tts {text}`、`
 | `get_messages_page` | `session.history`（需分页字段） | P |
 | `get_login_providers` | `model.options` | P |
 | `login` | — | N |
-| `get_logout_accounts` | — | N |
+| `get_logout_accounts` | `auth.accounts` | P |
 | `logout` | `model.disconnect` | P |
 | `predict_word` / `predict_word_feedback` | — | N |
 | `btw` | `prompt.btw` | P |
 | `btw_cancel` | — | N |
 | `get_btw_history` | `btw.history` | P |
 
-统计：**F 3**、**P 32**、**N 39**（共 74）。
+统计（2026-11-01 复核）：**F 4**、**P 34**、**N 36**（共 74）。修正项见 B.0.3。
 
 ## B.17 契约改动清单
 
-按“先别名、后新增”排序；每项都必须落在 `tui_gateway/contracts/*.py` 并重新生成。
+按 B.0.1 分层：**Hermes 只补语义字段/方法**；命名、枚举与信封别名不在此清单，统一在 B.0.2 的
+客户端映射。每项都必须落在 `tui_gateway/contracts/*.py` 并重新生成；已落地子集见 B.18。
 
-**只加字段/别名（P 项，低风险）**
+**Hermes 语义字段补项（P 项，低风险）**
 
 1. `session.resume`/`session.create`：`provider`、`model_id`、`session_file`、`resumed`、`cancelled`。
 2. `session.history`：`entries`、`leaf_id`、`cursor`、`limit`、`next_cursor`、`total_messages`、`since`。
@@ -627,17 +786,22 @@ Hermes 已有 `voice.toggle {action:status|on|off|tts}`、`voice.tts {text}`、`
 11. `prompt.submit`：`agent_invoked`、`streaming_behavior`；`images`/`attachments` 的 URL 变体。
 12. `voice.record`：`capture_id`、`text`（stop 时）。
 
-**新增方法（N 项）**
+**新增方法（N 项；已落地的三条见 B.18）**
 
 ```text
-protocol.negotiate / client.capabilities 扩展
-session.state
+# 已落地
+client.capabilities 扩展        # 取代 protocol.negotiate
 session.lease
+auth.accounts
+
+# 仍待定义/落地
+session.state
 prompt.promote_queued
 prompt.abort_submit
 prompt.abort_restore
 session.tree / session.tree.navigate / session.tree.navigate.abort
 session.entry.label
+session.tree.branch_messages / session.last_assistant_text   # 可选；默认客户端派生
 session.handoff
 session.todos.set
 session.policy            # auto_compaction / cache_warming / auto_retry / slow_mode / 三种 queue 模式
@@ -645,13 +809,14 @@ session.ask_dialog
 session.events.filter
 subagent.subscribe
 subagent.messages         # 若不在 subagent.tail 上扩字段
-session.thinking.cycle
 retry.abort
 session.bash.abort
 voice.live.start / voice.live.connect / voice.live.stop / voice.live.mute
 btw.cancel
-auth.login.start / auth.login.poll / auth.accounts
+auth.login.start / auth.login.poll
 predict.word / predict.word.feedback
+session.host.tools.register / session.host.uri_schemes.register   # 定义保留，当前不落地
+session.model.cycle / session.thinking.cycle                      # 定义保留，默认客户端派生
 ```
 
 **不建议新增（由客户端派生）**
@@ -659,8 +824,10 @@ predict.word / predict.word.feedback
 - `get_branch_messages`：`session.history` 的 `role=user` + `row_id` 已足够；
 - `get_last_assistant_text`：`session.history` 最后一条 assistant；
 - `cycle_model` / `cycle_thinking_level`：`model.options` + `set_model`/`set_thinking_level` 已足够，
-  避免把“轮换顺序”变成服务端状态；
-- `promote_queued_message` 若产品接受“先 cancel 再 submit”，可不新增（但会改变队列位置语义）。
+  避免把“轮换顺序”变成服务端状态（派生规则见 B.7.4）；
+- `promote_queued_message` 若产品接受“先 cancel 再 submit”，可不新增（但会改变队列位置语义）；
+- `set_host_tools` / `set_host_uri_schemes`：Hermes 在服务端执行/解析，注册无接收方；客户端本地
+  no-op 并标 `unsupported`，不伪造 `host.tool.call`（A.13）。
 
 **验收**
 
@@ -687,7 +854,7 @@ scripts/run_tests.sh tests/tui_gateway/contracts/
 | F | `abort` / `steer_subagent` / `set_session_name` | 既有 `session.interrupt`/`subagent.steer`/`session.mutate{rename}` 不变 | 已由 A/L 两条路径服务，无需改动；命名差异留在客户端别名层 |
 | P | `get_entries` / `get_messages` / `get_messages_page` | `SessionHistoryParams += since/cursor/limit`；`SessionHistoryResult += entries/leaf_id/next_cursor/total_messages`；新增 `HistoryEntry` | `gateway/session_tui_ops.py::session_history` 与 sidecar 同名 handler：`db.get_messages_as_conversation(..., include_row_ids=True)` 投影后按 `row_id` 分页；`entry_id` 就是 durable `row_id`，`leaf_id` 取全量最大 `row_id` |
 | P | `get_session_stats` | `SessionStats += session_id/tokens/context_usage/cost_usd/user_messages/assistant_messages/tool_calls/tool_results/total_messages/routed_models`；新增 `TokenUsage`/`ContextUsage` | `gateway/session_usage.py::stats`：token/context 取 agent 的 `session_*` 计数；角色计数用 `SessionDB.message_role_counts`（active display 行），`tool_call_count`/`cost_usd` 取 `sessions` 行（actual 优先、estimate 兜底），`routed_models` 取 `session_model_usage` 的 `SUM(api_call_count)`；每个 DB 读独立降级为 `null` |
-| P | `get_available_commands` | `CommandsCatalogResult += entries`；新增 `CommandCatalogEntry` | `tui_gateway/command_discovery.py::command_catalog`：由 `pairs`/`canon`/`commands`/`SUBCOMMANDS`/`skills` 投影出 name/description/aliases/source(`builtin|quick|plugin|skill`)/argument_mode/hint/subcommands；authority 与 sidecar 共用 |
+| P | `get_available_commands` | `CommandsCatalogResult += entries`；新增 `CommandCatalogEntry` | `tui_gateway/command_discovery.py::command_catalog`：由 `pairs`/`canon`/`commands`/`SUBCOMMANDS`/`skills` 投影出 name/description/aliases/source(`builtin\|quick\|plugin\|skill`)/argument_mode/hint/subcommands；authority 与 sidecar 共用 |
 | P | `get_available_models` / `get_login_providers` | `ModelOptionsResult += models`；新增 `ModelInfoEntry`/`ModelCost`/`ModelThinking` | `hermes_cli/inventory.py::project_model_infos`，由 `gateway/session_config.py::model_options` 与 sidecar `methods_complete.model.options` 调用：`agent.models_dev.get_model_info(..., allow_network=False)` 提供 name/modalities/context_window/max_output/数值 cost；`capabilities[model].reasoning` 与 `route_supported_efforts` 提供 thinking.levels |
 | P | `bash` | `ShellExecResult += output/cancelled/timed_out/truncated/total_lines/total_bytes/output_lines/output_bytes/artifact_*/working_dir/images` | `gateway/session_shell.py::_run`：total_* 取**切片前**子进程输出，output_* 取实际过线的（redacted+sliced）文本，`working_dir = policy.cwd`；`cancelled` 恒 false（没有取消句柄）、超时仍以 `command_timeout` 错误返回故 `timed_out` 恒 false、artifact_* 恒 null（无 spill）——原因见下表 |
 | P | `get_subagents` | `SubagentSnapshot += index/agent/description/task/assignment/session_file/last_update/progress/parent_tool_call_id` | `tools/delegate_tool_child_run.py::_register_child` 写 `task_index`/`agent_role`/`last_update`，`delegate_tool_progress` 在每次工具进度刷新 `last_update`；`methods_subagents._snapshot_row` 与 `gateway/session_ancillary._subagent_snapshot` 做同一投影（description/task/assignment 都是真实 `goal`；`progress` 由 `tool_count/last_tool/status` 组成）。`session_file`/`parent_tool_call_id` 运行时目前不持有，恒为 null（可选键已声明，等有来源再填） |
@@ -695,12 +862,13 @@ scripts/run_tests.sh tests/tui_gateway/contracts/
 | P | `cancel_subagent` | `SubagentInterruptResult += cancelled` | 两条路径都用中断是否被接受（= `found`）填 `cancelled` |
 | P | `dictation_start` / `dictation_stop` | `VoiceRecordParams += capture_id`；`VoiceRecordResult += capture_id` | `tui_gateway/methods_voice.py::voice.record`：start 生成/回显 capture id 并记住，stop 返回并清空；不匹配时 `busy`/`capture_mismatch` |
 | P | `get_btw_history` | `BtwHistoryResult += records`；新增 `BtwHistoryRecord` | `gateway/session_btw_history.py`：把既有 oldest-first `items` 反向投影为 newest-first `records`，`created_at_ms` 由存储的 ISO 解析，`status="completed"`（该 store 只写已完成答案） |
-| N | `get_session_lease` | 新增 `session.lease {session_ids, profile?} -> {held, unknown}`（`contracts/lease_auth.py`） | `gateway/session_lease.py`：`active_session_registry_snapshot(registry_home=<profile home>, strict=True)`；registry 不可证明存活时全部进 `unknown`。不拿 `authority.sessions` 冒充租约 |
-| N | `get_logout_accounts` | 新增 `auth.accounts {provider_id, profile?} -> {accounts:[{credential_id,provider,label,detail,type,active}]}` | `gateway/session_auth_accounts.py`：`agent.credential_pool.load_pool(provider_id).entries()` + `peek()`；只出非密标识，token 从不进入结果 |
+| **F** | `get_session_lease` | 新增 `session.lease {session_ids, profile?} -> {held, unknown}`（`contracts/lease_auth.py`） | `gateway/session_lease.py`：`active_session_registry_snapshot(registry_home=<profile home>, strict=True)`；registry 不可证明存活时全部进 `unknown`。不拿 `authority.sessions` 冒充租约 |
+| **P** | `get_logout_accounts` | 新增 `auth.accounts {provider_id, profile?} -> {accounts:[{credential_id,provider,label,detail,type,active}]}` | `gateway/session_auth_accounts.py`：`agent.credential_pool.load_pool(provider_id).entries()` + `peek()`；只出非密标识，token 从不进入结果 |
 
 生成物已重新生成：`omp-ui/src/modes/rpc/gateway-contract.generated.ts`、`gateway-contract.openrpc.json`
-（`scripts/gen_gateway_contracts.py`）。F 档三条与 `protocol.negotiate`（并发在
-`client.capabilities` 的 `protocol_version` 组）无需再改。
+（`scripts/gen_gateway_contracts.py`）。F 档四条（含本次改判的 `session.lease`）无需再改；
+`auth.accounts` 为 P（`credential_id`/`type` 需客户端转换），`negotiate_protocol` 由
+`client.capabilities` 的 `protocol_version` 组承载，档位为 P，omp 侧映射见 B.0.2。
 
 ### 仍未落地（没有真实 producer 或运行时原语）
 

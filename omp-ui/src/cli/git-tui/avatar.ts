@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getAvatarCacheDir, logger } from "@oh-my-pi/pi-utils";
+import { getAvatarCacheDir, logger } from "../../vendor/utils/src/index.ts";
 
 const AVATAR_PX = 64;
 const FETCH_TIMEOUT_MS = 5_000;

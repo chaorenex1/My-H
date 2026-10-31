@@ -1,4 +1,4 @@
-import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthCredentialProvider } from "../vendor/ai/src/registry/oauth/index.ts";
 import { runProviderSetupWizard as runProviderWizard } from "@oh-my-pi/pi-tui/setup/lazy";
 import type { SetupHost, SetupScene } from "@oh-my-pi/pi-tui/setup/scenes/types";
 import {

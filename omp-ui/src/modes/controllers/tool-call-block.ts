@@ -1,4 +1,4 @@
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool } from "../../vendor/agent/src/index.ts";
 import { isReplyWrite } from "@oh-my-pi/pi-tui/chat/reply-write";
 import { ToolExecutionComponent, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { createReplyWriteComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";

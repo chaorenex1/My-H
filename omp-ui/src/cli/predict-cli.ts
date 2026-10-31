@@ -28,8 +28,8 @@ import {
 	WordCompletionProvider,
 	type WordPredictionBackend,
 } from "@oh-my-pi/pi-tui/prompt/word-completion";
-import chalk from "@oh-my-pi/pi-utils/chalk";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import chalk from "../vendor/utils/src/chalk.ts";
+import type { TspSpan } from "../vendor/wire/src/index.ts";
 import { closeDaemonClients } from "../launch/client";
 import type { TextPredictMethod } from "../predict/protocol";
 import { closeTextPrediction, requestTextPrediction } from "../predict/client";

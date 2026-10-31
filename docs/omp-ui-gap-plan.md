@@ -1,4 +1,19 @@
-# omp-ui 差异分析与补全行动计划
+# omp-ui 差异分析与补全行动计划（已废弃）
+
+> **文档状态：已废弃（2026-11-01）。**
+>
+> 本文不再作为执行依据，也不得按本文继续派工；保留仅供追溯。现行位置：
+>
+> | 主题 | 现行文档 |
+> |---|---|
+> | 面板接通、网关契约、能力协商、阶段 | `docs/omp-ui-panels-gateway-plan.md` |
+> | 实时 RPC（server → client）对齐 | `docs/appendix-omp-ui-realtime-rpc.md` |
+> | 业务 RPC（client → server）对齐 | `docs/appendix-omp-ui-business-rpc.md` |
+> | vendor 来源、依赖规则 R1–R5、本地补丁、重放脚本 | `omp-ui/src/VENDORED.md` |
+> | 客户端入口与网关接线 | `omp-ui/src/main.ts`、`omp-ui/src/modes/rpc/gateway-*.ts` |
+>
+> 仍可引用的事实：§1 的基线测量、§5 的 G1–G4 落地记录、§9 的网关实测结论——它们只作历史证据，
+> 与现行文档冲突时以现行文档为准。
 
 > **2026-10-31 方向重定（第二次修正）。**
 >
@@ -68,11 +83,11 @@
 
 ```
 omp-ui/
-├── package.json                 # 只保留 @oh-my-pi/pi-tui（+ bun types）
+├── package.json                 # @oh-my-pi/pi-tui + @oh-my-pi/pi-natives（+ bun types）
 ├── tsconfig.json                # include: src
 └── src/
-    ├── cli.ts                   # 入口参数（Hermes 模式）
-    ├── main.ts                  # 装配：Hermes 模式 → 网关会话；不再构建本地 Agent
+    ├── main.ts                  # Hermes 入口：argv → InteractiveMode（不经 omp CLI）
+    ├── cli.ts                   # 上游 omp CLI；仅保留为 worker-host 回退，不作入口
     ├── session/
     │   ├── agent-session.ts     # ★就地重写：网关客户端实现的 AgentSession（同路径/类名/导出）
     │   ├── session-manager.ts   # ★就地重写：网关历史/树/entry（同路径/类名/导出）
@@ -201,10 +216,12 @@ G3 的第一步是跑一个构造探针：`new Agent()`、`new GoalRuntime(host)
 
 ### 4.5 入口
 
-- `src/main.ts`：启动时判断 Hermes 模式（`HERMES_OMP=1` 或 `--hermes`），把 omp 配置根指向
-  Hermes 作用域（原 `config-home.ts`），构造网关 `AgentSession` 与 `InteractiveMode`。
-- `src/cli.ts`：透传该开关；omp 原本地 agent 装配保留在文件里（未走的路径由 smoke 标记）。
-- `hermes_cli/omp_launch.py`：entry 改为 `src/cli.ts`，环境变量不变。
+- `src/main.ts`：Hermes 入口。自行 `parseArgs` 后直接 `runRootCommand` → `InteractiveMode`；
+  不加载 omp 的 CLI 命令表/子命令/profile 开关/预绘制分发。网关 `AgentSession` 与 `InteractiveMode`
+  的装配仍在 G3。
+- `src/cli.ts`：上游 omp CLI 原样保留，仅作为 worker 回退宿主（spawn 的 worker 以隐藏 argv
+  选择符重新进入它）；`hermes omp` 不经过它。
+- `hermes_cli/omp_launch.py`：entry 改为 `src/main.ts`，环境变量不变。
 
 ## 5. 迁移阶段
 
@@ -212,14 +229,55 @@ G3 的第一步是跑一个构造探针：`new Agent()`、`new GoalRuntime(host)
 |---|---|---|
 | **G0** | 本文落盘；`app/`、`hermes/` 冻结 | 方向记录在案 |
 | **G1** | 按需补齐 `src` 的缺失相对模块；按需复制 `vendor/`；生成 manifest | 纯度门“未解析相对模块” = 0 |
-| **G2** | `exports` 表驱动的导入改写；R1–R5 | `check:imports` 通过；deps 只剩 tui |
+| **G2** | `exports` 表驱动的导入改写；R1–R5 | `check:imports` 通过；deps 只剩 tui + natives |
 | **G3** | 就地重写 `agent-session.ts`、`session-manager.ts`；新增 `modes/rpc/gateway-client.ts`；壳文件接线 | `tsc` 通过；真实网关 + 测试终端渲染 welcome/status/一轮对话 |
-| **G4** | `main.ts`/`cli.ts` Hermes 分支；`omp_launch.py` 指向 src | PTY 实跑 `hermes omp` |
+| **G4** | `main.ts` 直接入口（`omp_launch.py` 指向 src） | PTY 实跑 `hermes omp` |
 | **G5** | `src/smoke.ts` 状态机；迁移旧 40 条检查 | `ok/pending/unsupported` 三段，无 `FAIL` |
 | **G6** | 删除 `omp-ui/app/`、`omp-ui/coding-agent/hermes/` | 仓库内无引用 |
 | **G7** | 清理与文档 | 见 §11 |
 
 G6 之前不删旧目录，避免 `hermes omp` 出现无入口空窗。
+
+**G1/G2 状态（已落地）**：`omp-ui/src` 是 `packages/coding-agent/src` 在 `6a86df853` 的逐字节
+快照（1456 个 `.ts` 加数据文件；重放脚本 `omp-ui/scripts/sync-upstream.py`）。除 `@oh-my-pi/pi-tui`
+与 `@oh-my-pi/pi-natives` 外的 `@oh-my-pi/*` 依赖按 import 闭包 vendor 到 `src/vendor/`（752 个文件，
+含 pi-tui 自己的 peer import 种子），所有 specifier 改写为相对路径；`pi-natives` 从 package.json
+装入（平台 `.node` 走其 `optionalDependencies`，版本随壳所需符号固定为 18.14.1）；`tsconfig.json` 的
+`paths` 让壳与 pi-tui 内部指向同一份 vendored 模块（`const enum`/类只有一个身份）。
+`src/VENDORED.md` 记录来源、布局、入口补丁与 assets 迁移（R2）。原 `app/`、
+`coding-agent/hermes/` 从未进入本仓库快照，G6 无对象。验证：`bun run check:imports`（2164 文件，
+0 未解析，R1–R3/R5 干净）、`bun run check` 通过、`bun src/main.ts --version` 输出 shell 版本、
+`bun test src/modes/rpc/gateway-client.test.ts src/modes/rpc/gateway-socket.test.ts` 31 通过。
+
+**G4 入口（已落地）**：`hermes_cli/omp_launch.py` 的 entry 已改为 `omp-ui/src/main.ts`，
+`--resume` 透传，omp 的 agent 目录（配置/会话/auth）指向 `<HERMES_HOME>/omp-ui/agent`
+（`PI_CODING_AGENT_DIR`），不再读写 `~/.omp`；`--no-start` 随旧网关启动语义一并移除。
+`HERMES_OMP_START` / `HERMES_OMP_RESUME` 不再设置。omp 的 CLI 命令表/子命令/profile 开关/
+预绘制分发不在 `hermes omp` 路径上（`src/cli.ts` 仅作 worker 回退宿主）。
+
+**G3 主界面（已落地，2026-11-01）**：`src/main.ts` 不再走 `runRootCommand`/`createAgentSession`。
+它构建最小本地依赖（`Settings`、只读 catalog `ModelRegistry`、内存 `SessionManager`、`Agent`），
+通过 `src/modes/rpc/gateway-session.ts` 连接配对网关，`session.create`/`session.resume` 取得快照，
+把历史灌进 shell，再 `AgentSession.attachGateway()` 让网关成为**唯一的回合来源**。没有
+“omp 模式 / Hermes 模式”开关：`hermes omp` 就是网关客户端，`src/cli.ts` 的本地路径只留给被 spawn 的
+worker 宿主，后续按使用情况删除。
+
+已通的数据：prompt/steer/follow-up/中断（带 generation 重试）、`message.*`、reasoning、
+`tool.start/progress/complete`（`result` 从 JSON 字符串投影为 `AgentToolResult`）、`turn.*`、
+`prompt.result`、`session.settled`、`queue.updated`、`todo.updated`、`session.info`、`session.usage`；
+状态行的模型、上下文 token/window、cost；`command.dispatch` 处理 omp 未本地拦截的 slash；
+历史/`--resume`；本地 `SessionManager` 只做用量与上下文记账，不再写第二份 transcript。
+
+模型面板（`/model`/`Alt+M`/`Ctrl+P`）：`model.options` 的 provider/model 行经
+`modes/rpc/gateway-models.ts` 装进 `GatewayModelRegistry`（只替换行、只装内存可用标记，
+不落密钥库；`ignoreLocalModelConfig` 保持 Hermes 侧凭据/路由为唯一真源），并把
+`getAll`/`getAvailable`/`find` 限定为 authority 广告的 provider——bundled 的 `local`/`web`
+等行不再进入选择器或模型轮换；选择仍走 `session.mutate operation=model`。`/resume` 走
+`session.list`，选中后 `AgentSession.switchGatewaySession()` 以新连接 resume 该 stored id
+并重放快照（本地 `SessionManager` 重置后只作回放视图），`--resume` 与选择器共用同一条连接路径。
+
+未接（下一步）：approval/clarify 对话框（当前 deny/cancel 并给 notice）、`/tree`/branch/rewind/compact
+（仍改本地 SessionManager）、子代理/JOBS/usage 面板的其余字段、login/MCP/skills/plugins/cron 面板。
 
 ## 6. Smoke 标记规范
 
@@ -445,7 +503,7 @@ Auto-thinking 在 Hermes 有部分等价物（MoA/refine、模型与配置选择
 | natives import 期失败 | 顶层 `loadNative()` 无绑定即抛；`interactive-mode`/`procmgr` 值导入会杀死壳；单个 `.node` 119MB | §3 补丁把加载失败降级为调用期 `Unsupported`；`HERMES_OMP_NATIVE_DIR` 可指真实绑定 |
 | `tsc` 性能 | 50 万行 + vendor | 增量 tsconfig / `skipLibCheck` |
 | tui 版本耦合 | 壳 import tui 内部路径，锁 18.14.x | 升级必须跑 smoke + render |
-| 上游漂移 | vendor 后有本地修改 | `sync-upstream.sh` 输出 diff；`VENDORED.md` 列出补丁 |
+| 上游漂移 | vendor 后有本地修改 | `sync-upstream.py` 重放并在 `VENDORED.md` 列出补丁 |
 | 许可证 | omp 为 MIT | 保留 `LICENSE` 与文件头；manifest 记录来源 |
 
 ## 11. 验收
@@ -453,6 +511,7 @@ Auto-thinking 在 Hermes 有部分等价物（MoA/refine、模型与配置选择
 ```bash
 cd omp-ui
 bun install --ignore-scripts
+python scripts/sync-upstream.py       # 可选：从 checkout 重建 src + vendor
 bun run check            # tsc --noEmit（含 src）
 bun run check:imports    # R1–R5 + 相对模块解析 = 0
 HERMES_OMP_START=1 bun src/smoke.ts   # ok/pending/unsupported 三段

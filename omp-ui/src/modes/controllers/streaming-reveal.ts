@@ -1,7 +1,7 @@
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { presentNarrationAsAnswer } from "@oh-my-pi/pi-ai/utils/narration";
+import type { AssistantMessage } from "../../vendor/ai/src/index.ts";
+import { presentNarrationAsAnswer } from "../../vendor/ai/src/utils/narration.ts";
 import { type Component, getSegmenter } from "@oh-my-pi/pi-tui";
-import { LRUCache } from "@oh-my-pi/pi-utils/lru";
+import { LRUCache } from "../../vendor/utils/src/lru.ts";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 

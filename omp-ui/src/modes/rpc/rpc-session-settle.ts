@@ -3,7 +3,7 @@
  * `agent_end`) from "the session is done" (nothing live, queued, or running in
  * the background that could inject a message and wake it again).
  */
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "../../vendor/utils/src/index.ts";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSessionSettled, type SessionSettleHost, waitForSessionSettlement } from "../../session/session-settle";
 import type { RpcSessionSettledFrame } from "./rpc-types";

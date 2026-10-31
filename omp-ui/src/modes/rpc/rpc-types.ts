@@ -4,8 +4,8 @@
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
-import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
+import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "../../vendor/agent/src/index.ts";
+import type { CompactionResult } from "../../vendor/agent/src/compaction.ts";
 import type {
 	AssistantMessage,
 	AssistantMessageEvent,
@@ -15,7 +15,7 @@ import type {
 	TextContent,
 	ThinkingContent,
 	ToolExample,
-} from "@oh-my-pi/pi-ai";
+} from "../../vendor/ai/src/index.ts";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { AgentSessionEvent, SessionStats } from "../../session/agent-session";

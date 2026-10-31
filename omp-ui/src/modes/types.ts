@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
+import type { AgentMessage } from "../vendor/agent/src/index.ts";
+import type { CompactionOutcome } from "../vendor/agent/src/compaction.ts";
+import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "../vendor/ai/src/index.ts";
 import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
-import type { TspText } from "@oh-my-pi/pi-wire";
+import type { TspText } from "../vendor/wire/src/index.ts";
 import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import type { CollabController } from "../collab/controller";
 import type { CollabGuestLink } from "../collab/guest";

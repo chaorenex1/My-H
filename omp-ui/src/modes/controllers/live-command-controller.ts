@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger } from "@oh-my-pi/pi-utils";
+import type { AssistantMessage } from "../../vendor/ai/src/index.ts";
+import { logger } from "../../vendor/utils/src/index.ts";
 import { LiveSessionController, type LiveSessionControllerOptions, type LiveTranscript } from "../../live/controller";
 import { LIVE_MODEL } from "../../live/protocol";
 import { LiveVisualizer } from "@oh-my-pi/pi-tui/apps/live-visualizer";

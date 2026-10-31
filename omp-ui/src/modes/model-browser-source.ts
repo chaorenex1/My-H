@@ -1,4 +1,4 @@
-import { type Model, resolveModelServiceTier, type ServiceTier, shouldSendServiceTier } from "@oh-my-pi/pi-ai";
+import { type Model, resolveModelServiceTier, type ServiceTier, shouldSendServiceTier } from "../vendor/ai/src/index.ts";
 import type { ModelHubSource } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { findActiveModelPreset, getModelPresetNames } from "../config/model-presets";
 import { resolveModelRoleValue, rolePriorityDefaults } from "../config/model-resolver";

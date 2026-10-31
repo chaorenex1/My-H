@@ -4,10 +4,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
-import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
+import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "../vendor/agent/src/index.ts";
+import type { CompactionOutcome } from "../vendor/agent/src/compaction.ts";
+import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "../vendor/ai/src/index.ts";
+import { modelsAreEqual } from "../vendor/catalog/src/models.ts";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import type {
 	AutocompleteProvider,
@@ -54,7 +54,7 @@ import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh
 import type { WorkingRowSpec } from "@oh-my-pi/pi-tui/components/loader";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/key-hint-format";
 import { thinkingLevelWord } from "@oh-my-pi/pi-tui/status-line/segments";
-import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "@oh-my-pi/pi-wire";
+import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "../vendor/wire/src/index.ts";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	$env,
@@ -69,8 +69,8 @@ import {
 	prompt,
 	sanitizeText,
 	setProjectDir,
-} from "@oh-my-pi/pi-utils";
-import chalk from "@oh-my-pi/pi-utils/chalk";
+} from "../vendor/utils/src/index.ts";
+import chalk from "../vendor/utils/src/chalk.ts";
 import { pickTableChart } from "../auto-graph/planner";
 import { restartArgv } from "../cli/flag-tables";
 import type { CollabGuestLink } from "../collab/guest";

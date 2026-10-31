@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
-import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import type { AgentMessage } from "../../vendor/agent/src/index.ts";
+import type { AssistantMessage, ImageContent, Usage } from "../../vendor/ai/src/index.ts";
+import { getStreamingPartialJson } from "../../vendor/ai/src/utils/block-symbols.ts";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { QueuedMessagesBand } from "@oh-my-pi/pi-tui/prompt/queued-messages";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger } from "../../vendor/utils/src/index.ts";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { InternalUrlRouter } from "../../internal-urls";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../collab/protocol";

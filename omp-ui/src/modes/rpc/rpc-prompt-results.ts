@@ -8,10 +8,10 @@
  * started or joined. Hosts correlate on the command `id` instead of inferring
  * ownership of an `agent_end` that carries no prompt identity.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import * as AIError from "@oh-my-pi/pi-ai/error";
-import { stripRawHttpRequestDiagnostics } from "@oh-my-pi/pi-ai/utils/http-inspector";
+import type { AgentMessage } from "../../vendor/agent/src/index.ts";
+import type { AssistantMessage } from "../../vendor/ai/src/index.ts";
+import * as AIError from "../../vendor/ai/src/error/index.ts";
+import { stripRawHttpRequestDiagnostics } from "../../vendor/ai/src/utils/http-inspector.ts";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import type { CostCapRefusal } from "../../session/cost-gate";
 import { isSessionSettled, type SessionSettleState } from "../../session/session-settle";

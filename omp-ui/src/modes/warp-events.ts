@@ -1,9 +1,9 @@
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage } from "../vendor/agent/src/index.ts";
 import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/terminal-capabilities";
-import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { VERSION } from "../vendor/utils/src/dirs.ts";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions/types";
 import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 

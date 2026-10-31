@@ -20,6 +20,76 @@
 
 判定按“omp 字段集合 ⊆ Hermes 可提供字段集合（经别名）”执行，不按事件名相似度。
 
+## A.0.1 硬约束：三档都要有契约定义，P 档别名在 omp-ui 转换
+
+本附录与 `docs/omp-ui-panels-gateway-plan.md` §0.1 同源，是判定与落地的规则：
+
+1. **交互不变**：omp 的帧类型、渲染与交互是契约；本附录的输出只用于 `omp-ui/src/modes/rpc/` 的
+   映射层。任何“为了对上 Hermes 而改 omp 渲染/键位/默认值”的方案都判无效。
+2. **F/P/N 三档都必须有定义**：
+   - **F**：Hermes 现有契约已覆盖；映射为恒等（允许命名差异），不新增字段。
+   - **P**：Hermes 有对应事件/请求，但语义或字段不全。必须同时给出**客户端别名/映射规则**和
+     **Hermes 需补的语义字段**（类型、可选性、作用域），不得只写“需对齐”。
+   - **N**：Hermes 没有。必须给出完整 wire 定义（事件名 + payload 字段/类型/可选性；或服务端
+     请求 method + params/result + 错误码 + 作用域），**即使当前没有 producer**。未落地时由
+     `runtime.describe.panels` 广告 `supported:false`，UI 保持原交互并标 `pending`/`unsupported`。
+3. **P 档别名在 omp-ui 侧转换**：字段改名、枚举映射、信封解包（`params.type`/`params.payload`）、
+   单位与结构换算，全部由客户端完成并在 A.0.2 登记。Hermes 契约保持原生命名，**不得**为对齐 omp
+   命名新增同义字段（例如不新增 `message` 去重复 `text`）。
+   本条**只约束别名**：`新增字段/事件`（A.3.1 的 `protocol_version`、A.4.2 的 `message_id`/
+   `content_index`、A.5 的 `is_error` 等）是 Hermes 的语义补项，不受本条限制。已落地的 omp 形状
+   投影（`queue.updated`、`commands.catalog.entries`、`prompt.result.error`）保留；规则只约束
+   **新增/变更**，不回改既有契约。
+4. **单向投影**：转换只做 Hermes → omp；客户端不把 omp 的交互状态写回 Hermes 以改变渲染或默认值。
+5. **禁止伪造**：N 档不得用空事件、假数据或客户端 stub 冒充“已接通”。
+
+## A.0.2 P 档别名转换清单（omp-ui 侧）
+
+| 组 | omp 侧 | Hermes 原生 | 客户端转换 |
+|---|---|---|---|
+| 信封 | `type` + 平铺字段 | `params.type` + `params.payload` | `unwrapEvent()`；`session_id`/`seq` 提升为帧元数据 |
+| 连接 | `ready.protocolVersion` / `maxFrameBytes` … | `gateway.ready.protocol_version` / `max_frame_bytes` … | 重命名；保存 `replay_epoch` 供重连比较 |
+| 错误/提示 | `extension_error.error`、`rpc_frame_error.error` | `error.message` | `error`→`message`；`original_type` 等缺项见 A.3.2 |
+| 提示 | `notice {level,message}` | `notification.show {text,level,kind}` | `message`→`text`；`warning`→`warn` |
+| 回合 | `agent_start.resumedToolCallIds`、`agent_end.isTerminal/yielded/awaitingAsyncWork` | `turn.start.resumed_tool_call_ids`、`turn.end` | 重命名；缺失语义由 A.4.1 补项或客户端派生 |
+| 消息开始 | `message_start.message`（快照） | `message.start`（无快照） | 客户端以 `message_id` 构造空 `AgentMessage` 壳 |
+| 文本增量 | `text_delta {contentIndex,delta,partial}` | `message.delta {text,content_index}` | `delta`→`text`、`contentIndex`→`content_index`；`partial` 用 complete 的 `partial` |
+| 块边界 | `text_start/text_end/image_end` | `message.block_start/block_end` | `kind`/`content_index` 直传，客户端组装 `content` |
+| 思考 | `thinking_start/delta/end` | `reasoning.delta` / `reasoning.available` | `delta`→`text`；end→available |
+| 工具参数流 | `toolcall_start/delta/end` | `tool.generating {name}` | delta 归入 `tool.args_delta`（N 契约） |
+| 结束 | `done.reason` / `error.reason` | `message.complete.stop_reason`（omp 词表）/ `status`（Hermes 原生） | `reason`→`stop_reason` 直传；只有 Hermes `status`（complete/error/interrupted）需映射，二者不混用 |
+| 消息结束 | `message_end.message`（快照 + usage） | `message.complete.text/usage` | 客户端累积成 `AgentMessage`；`totalTokens`→`total`、`reasoningTokens`→`reasoning`、`cacheRead/Write`→`cache_read/cache_write` |
+| 工具 | `toolCallId` / `toolName` / `isError` | `tool_id` / `name` / `is_error` | 重命名 |
+| 工具进度 | `partialResult` / `update` | `tool.progress {progress,...}` | `tool.update`/`tool.stream` 为 N 契约；未落地时不渲染流式细节 |
+| 队列 | `queue_update` | `queue.updated` | 直传（`steering`/`follow_up`/`live_steered` 同形） |
+| Goal | `objective` / `state` | `control.goal` / `session.control.update` | `objective`↔`title`；`enabled/mode/reason` 见 A.7.2 补项 |
+| Todo | `attempt` / `maxAttempts` | `todo.updated {todos,revision}` | 提醒帧字段为语义补项；`todo_auto_clear` 用 `reason:"auto_clear"` |
+| 模型 | `model_changed` | `session.info` | 客户端把 `session.info` 投影为 `model_changed` |
+| 推理档 | `thinkingLevel` / `configured` / `resolved` | `session.info.reasoning_effort` | `thinkingLevel`↔`reasoning_effort`；`configured/resolved` 为补项 |
+| 目录 | `available_commands_update.commands` | `commands.changed`（信号，无数组） | 收到信号后重取 `commands.catalog` 并投影为 `AvailableSlashCommand[]` |
+| 命令输出 | `command_output.text` | `command.output.text` | 直传 |
+| 子代理 | `id` / `index` / `status` | `subagent.*.subagent_id` / `task_index` / `status` | 重命名；`aborted`→`interrupted` |
+| 语音 | `live_phase.phase`、`captureId` | `voice.status.state`、`capture_id` | `phase`↔`state`；`captureId`→`capture_id` |
+| 扩展 UI | `extension_ui_request.method` | 每用途一个 JSON-RPC 方法 | `method` 选择请求种类；`id`↔`id`；`questions[].id`→`qid`、`options`→`choices` |
+| ask 应答 | `answers[]` | `clarify.answers{}` | 数组↔map；`selected_options`+`custom_input` 走 `answer_details`（A.12） |
+| 取消 | `cancelled:"true"` | `request.cancel` | 映射为 `{id,error:{code:4404}}` 或统一 `result.cancelled` |
+| Host | `host_tool_call` / `host_uri_request` | 无 | N 契约；能力未广告时客户端本地拒绝，不发请求 |
+
+契约**只补语义**：上表“补项”指 Hermes 确实没有的数据，新增字段使用 Hermes 原生命名（可为 `None`，
+producer 未落地时保持空值）。
+
+## A.0.3 复核结论（2026-11-01）
+
+- **覆盖**：omp 侧基线是 `wire/events.ts` 的 33 个 `AgentSessionEvent`，加上 `frames.ts` 的
+  `ready`、`prompt_result`、`session_settled`、`extension_ui_request`、host 请求/应答与
+  `rpc_chunk`；本附录逐族覆盖，无未归类帧。
+- **本次检查修正**：
+  1. 回合组按已落地的 `turn.start`/`turn.end`/`prompt.result`/`session.settled` 重新分档
+     （A.4.1、A.4.3；计数见 A.14）；
+  2. `available_commands_update` 按实际实现改为 `commands.changed` 信号 + 客户端重取目录（A.8）；
+  3. `command_output` 已有 `command.output`，改判 F；
+  4. 明确 `AgentMessage` 快照由客户端合成，不由 Hermes 返回同义结构（A.4.2），与 A.0.1 第 3 条一致。
+
 ## A.1 两端已有的协议定义
 
 | 侧 | 定义位置 | 生成物 | 覆盖 |
@@ -154,21 +224,24 @@ Hermes `notice {message}` 只用于能力刷新；通用提示走 `notification.
 
 | omp 帧 | Hermes | 状态 | 说明 |
 |---|---|---|---|
-| `agent_start {resumedToolCallIds?}` | 无 | N | 建议 `turn.start` |
-| `agent_end {messages,messageCount?,isTerminal?,yielded?,awaitingAsyncWork?,telemetry?,coverage?}` | `message.complete {text,usage,status,...}` | P | 终态可映射到 `message.complete`；`messages` 数组、`resumedToolCallIds`、`isTerminal`、`yielded`、`awaitingAsyncWork` **新增** |
-| `turn_start {}` | 无 | N | 建议 `turn.start` |
-| `turn_end {message,toolResults}` | 无 | N | 建议 `turn.end` |
+| `agent_start {resumedToolCallIds?}` | `turn.start {resumed_tool_call_ids?,message_id?}` | P | 契约已存在（A.15）；Hermes 从不恢复中途工具调用，`resumed_tool_call_ids` 恒为空——语义不等，不是别名问题 |
+| `agent_end {messages,messageCount?,isTerminal?,yielded?,awaitingAsyncWork?,telemetry?,coverage?}` | `turn.end {status,message?,tool_results,message_id?}` | P | `messages` 数组与 `isTerminal`/`yielded`/`awaitingAsyncWork`/`telemetry`/`coverage` 仍缺（语义补项）；终态可由 `turn.end` + `prompt.result` + `session.settled` 派生 |
+| `turn_start {}` | `turn.start` | F | 已落地 |
+| `turn_end {message,toolResults}` | `turn.end` | F | 契约字段同义且已落地；但实际 emitter 目前不填 `message`、`tool_results` 为空（A.15），客户端用 `message.complete` 重建——F 指契约对应，不代表数据已填充 |
 
-建议新增（与 omp 字段一一对应）：
+契约（已落地，见 A.15）：
 
 ```text
-event("turn.start", TurnStartPayload)      # {resumed_tool_call_ids?: str[]}
-event("turn.end", TurnEndPayload)          # {message: AgentMessage, tool_results: ToolResultMessage[]}
+event("turn.start", TurnStartPayload)
+  # {resumed_tool_call_ids?: str[], message_id?: str}      # resumed_* 恒空
+event("turn.end", TurnEndPayload)
+  # {status?: "complete"|"error"|"interrupted", message?: JsonValue,
+  #  tool_results: JsonValue[], message_id?: str}
 ```
 
-`agent_start`/`agent_end` 与 `turn_start`/`turn_end` 在 omp 是两层（run / turn）；Hermes 目前只有
-`message.start`/`message.complete`，两层都不足。若只补一层，用 `turn.start`/`turn.end` 承载
-`turn_*`，`agent_*` 的 `resumed_tool_call_ids`/`is_terminal` 并入 `message.complete`。
+`agent_start`/`agent_end` 与 `turn_start`/`turn_end` 在 omp 是两层（run / turn）；Hermes 用
+`turn.start`/`turn.end` 承载 `turn_*`，`agent_*` 独有的 run 级字段（`isTerminal`/`yielded`/
+`awaitingAsyncWork`）在 A.14 列为语义补项，由客户端从 `prompt.result`/`session.settled` 派生。
 
 ### A.4.2 消息生命周期
 
@@ -182,45 +255,46 @@ event("turn.end", TurnEndPayload)          # {message: AgentMessage, tool_result
 
 | omp | 类型 | Hermes | 处理 |
 |---|---|---|---|
-| `message` | `AgentMessage` | — | **新增** `message`（完整快照），或在 `message.delta` 的首帧携带 |
-| `messageId` | string | — | **新增** `message_id`；注意 `turn_id` 是**回合**身份，不能替代消息身份 |
+| `message` | `AgentMessage` | — | **客户端合成**（A.0.1 第 3 条）：用 `message_id` 建空 `AgentMessage` 壳，由 delta / `message.block_end` 填充；Hermes 不返回同义快照 |
+| `messageId` | string | `message_id`（已落地） | 别名；注意 `turn_id` 是**回合**身份，不能替代消息身份 |
 
 字段映射（`message_update`，omp 的 `assistantMessageEvent` 是判别联合）：
 
 | omp `assistantMessageEvent.type` | 语义 | Hermes | 处理 |
 |---|---|---|---|
 | `start` | 助手消息开始 | `message.start` | 字段映射 |
-| `text_start` | 文本块开始 | 无 | **新增** `message.block_start {kind:"text",content_index}` |
-| `text_delta {contentIndex,delta,partial}` | 文本增量 | `message.delta {text,rendered?,verbose?,turn_id?,segment?,offset?}` | `delta`→`text` 别名；**新增** `message_id`、`content_index`、`partial` |
-| `text_end {contentIndex,content}` | 文本块结束 | `message.interim`（仅工具前插入语） | P：块结束语义缺失，**新增** `message.block_end {kind:"text",content_index,content}` |
-| `thinking_start/delta/end` | 推理流 | `reasoning.delta {text,rendered?,verbose?}` / `reasoning.available {text}` | `delta`→`text` 别名；**新增** `content_index`、`message_id`；`thinking_end` 用 `reasoning.available` |
-| `toolcall_start/delta/end` | 工具参数流 | `tool.generating {name}` / `tool.start` | `toolcall_delta` 无对应；**新增** `tool.args_delta {tool_id,name,delta}` 或让 `tool.generating` 携带 `delta` |
-| `image_end {contentIndex,content,partial}` | 图片块 | 无 | **新增** `message.block_end {kind:"image",content_index,content}` |
-| `done {reason,message}` | 助手消息结束 | `message.complete` | `reason`→`status` 需映射；**新增** `message`、`message_id`、`stop_reason` |
-| `error {reason,error}` | 助手消息失败 | `message.complete {status:"error",error,error_surface}` | P；**新增** `message_id`、`message` |
+| `text_start` | 文本块开始 | `message.block_start` | 已落地；`kind:"text"`、`content_index`、`message_id?` |
+| `text_delta {contentIndex,delta,partial}` | 文本增量 | `message.delta {text,content_index,message_id,...}` | `delta`→`text`、`contentIndex`→`content_index`（已落地）；`partial` 取 `message.complete.partial` |
+| `text_end {contentIndex,content}` | 文本块结束 | `message.block_end` | 已落地；`kind:"text"`、`content_index`、`content`、`message_id?` |
+| `thinking_start/delta/end` | 推理流 | `reasoning.delta {text,rendered?,verbose?}` / `reasoning.available {text}` | `delta`→`text` 已落地；`message_id`/`content_index` 仍是语义补项，客户端先用当前消息 id + 单块索引本地维护；`thinking_end`→`reasoning.available` |
+| `toolcall_start/delta/end` | 工具参数流 | `tool.generating {name}` / `tool.start` | `toolcall_delta` 无对应；N 契约：`event("tool.args_delta", {tool_id, name, delta, index?})`（未落地） |
+| `image_end {contentIndex,content,partial}` | 图片块 | `message.block_end`（`kind` 字段已有） | `kind:"image"` 无 producer（当前只发 text 块）；定义保留 |
+| `done {reason,message}` | 助手消息结束 | `message.complete {status,stop_reason,message_id,partial}` | `reason`→`stop_reason` 直传（同一 omp 词表）；`status` 另按 `complete/error/interrupted` 映射；`message` 快照由客户端累积 |
+| `error {reason,error}` | 助手消息失败 | `message.complete {status:"error",error,error_surface}` | P；`message_id` 已落地；`message` 快照由客户端合成 |
 
 字段映射（`message_end` → `message.complete`）：
 
 | omp | Hermes | 处理 |
 |---|---|---|
-| `message` | `text`（仅正文） | **新增** `message` 快照；`usage` 从 `message.usage` 提升为 `usage` |
-| `messageId` | — | **新增** `message_id` |
-| `message.usage` | `usage`（`Usage`） | omp `Usage{input,output,cacheRead,cacheWrite,totalTokens,contextTokens?,premiumRequests?,reasoningTokens?,orchestration?,cttl?,server?,credits?,cost:{...}}` → Hermes `Usage{model,input,output,reasoning,prompt,completion,total,calls,...,cache_read,cache_write,...,cost_usd}`：`totalTokens`→`total`、`reasoningTokens`→`reasoning`、`cacheRead/Write`→`cache_read/cache_write`；`cost` 对象 → `cost_usd`（需**新增** `cost` 对象或客户端换算）；`orchestration/cttl/server/credits` → Hermes 无，**新增** `metadata` |
-| `message.stopReason` | `status`（`complete/error/interrupted`） | 枚举不等价，需映射：`stop/length/toolUse`→`complete`，`error`→`error`，`aborted`→`interrupted` |
+| `message` | `text`（仅正文） | 客户端累积成 `AgentMessage` 快照（A.0.1 第 3 条）；`usage` 从 `message.usage` 提升为帧级 `usage` |
+| `messageId` | `message_id`（已落地） | 别名 |
+| `message.usage` | `usage`（`Usage`） | 客户端映射：omp `Usage{input,output,cacheRead,cacheWrite,totalTokens,contextTokens?,premiumRequests?,reasoningTokens?,orchestration?,cttl?,server?,credits?,cost:{...}}` → Hermes `Usage{model,input,output,reasoning,prompt,completion,total,calls,...,cache_read,cache_write,...,cost_usd}`；`totalTokens`→`total`、`reasoningTokens`→`reasoning`、`cacheRead/Write`→`cache_read/cache_write`、`cost` 对象只可得总价（`cost_usd`）；`orchestration/cttl/server/credits` 无来源，客户端置空并保留字段 |
+| `message.stopReason` | `stop_reason`（omp 词表，已落地）/ `status`（Hermes 原生） | `stopReason`→`stop_reason` **直传**（`stop/length/toolUse/error/aborted` 同词表，已由 Hermes 单向投影）；只有 `status` 需要 `complete/error/interrupted` 映射，二者不混用 |
 
-**结论：P（大量字段需新增）。** 如果目标是 omp 现有 UI 不改渲染层，建议 Hermes 在
-`message.start` / `message.delta` / `message.complete` 上补齐 `message_id`、`message`（快照）、
-`content_index`、`partial`、`stop_reason`，并新增 `message.block_start` / `message.block_end`；
-`assistantMessageEvent` 的嵌套结构可由客户端用这四个原语重建。
+**结论：P（关键字段已落地，剩余为语义补项 + 客户端合成）。** A.15 已落地 `message_id`、
+`content_index`、`partial`、`stop_reason` 与 `message.block_start`/`message.block_end`。仍缺的是
+思考块的 `content_index`、`image` 块与工具参数流；`AgentMessage` 快照和 `assistantMessageEvent`
+的嵌套结构一律由客户端用 `message.start` / `message.delta` / `message.block_*` / `message.complete`
+重建，不在 Hermes 复制 omp 的消息模型。
 
 ### A.4.3 `prompt_result` 与 `session_settled`
 
-| omp | Hermes | 状态 |
-|---|---|---|
-| `prompt_result {id?,agentInvoked,status,error?,sessionSettled}` | 无（`prompt.submit` 回执 + `message.complete`） | N |
-| `session_settled {}` | 无 | N |
+| omp | Hermes | 状态 | 说明 |
+|---|---|---|---|
+| `prompt_result {id?,agentInvoked,status,error?,sessionSettled}` | `prompt.result {admission_id,agent_invoked,status,error?,session_settled}` | P | 已落地；`id`→`admission_id` 客户端别名；`session_settled` 恒 false，真正的 settle 由独立 `session.settled` 表达（语义拆分） |
+| `session_settled {}` | `session.settled {idle_since?}` | F | 已落地 |
 
-建议新增：
+契约（已落地，见 A.15）：
 
 ```text
 event("prompt.result", PromptResultPayload)
@@ -268,7 +342,18 @@ event("tool.stream", ToolStreamPayload)  # {tool_id, name, update?}
 ## A.6 压缩、重试、缓存预热、模型回退
 
 omp 的这四组帧在 Hermes **都没有事件**；现有能力是 `status.update {kind,text}`（`kind` 可为
-`compacting`）与 `session.compress` 的同步结果。全部判 **N**，建议新增：
+`compacting`）与 `session.compress` 的同步结果。全部判 **N**，按下面的映射新增契约：
+
+| omp 帧 | Hermes 契约事件 | 字段映射 |
+|---|---|---|
+| `auto_compaction_start` / `manual_compaction_start` | `compaction.start` | `reason`/`action` 直传；manual 用 `manual:true` + `mode` |
+| `auto_compaction_end` / `manual_compaction_end` | `compaction.end` | `aborted`/`will_retry`/`error_message`/`skipped`；manual 用 `manual:true` |
+| `auto_retry_start` | `retry.start` | `attempt`/`max_attempts`/`delay_ms`/`error_message` |
+| `retry_fallback_applied` / `retry_fallback_succeeded` | 同名事件（`retry.fallback_applied` / `retry.fallback_succeeded`） | 直传 |
+| `auto_retry_end` | `retry.end` | `success`/`attempt`/`final_error`/`retry_errors` |
+| `cache_warming_start` / `cache_warming_end` | `cache_warming.start` / `cache_warming.end` | `phase`/`provider`/`model`；end 带 `outcome`/`usage` |
+
+契约定义：
 
 ```text
 event("compaction.start", CompactionStartPayload)
@@ -352,13 +437,13 @@ omp `todo_reminder {todos:TodoItem[],attempt,maxAttempts}`；Hermes `todo.update
 | `config_update {model?,thinkingLevel?}` | `session.info` | P | 字段别名；Hermes `session.info.model` 是 `str`，omp 是 `ModelInfo` 对象 |
 | `config_warnings_changed {}` | `session.info`（`SessionLiveInfo.credential_warning`；canonical 快照的 `info.config_warning`） | P | 无独立事件；**新增** `warnings: string[]` 到 `session.info` 或事件 `config.warnings` |
 | `session_info_update {title?,sessionId}` | `session.title {session_id,title}` | **F** | `sessionId`→`session_id`、`title`→`title`；字段一一对应 |
-| `available_commands_update {commands}` | 无事件（`commands.catalog` 为拉取式；`skills.changed {}` 仅信号） | P | **新增** `commands.changed {commands:[AvailableSlashCommand]}`，或在 `skills.changed` 上**新增** `commands` 字段 |
-| `command_output {text}` | 无事件（`command.dispatch` 同步 `output`） | N | **新增** `command.output {text, name?}` |
+| `available_commands_update {commands}` | `commands.changed {}`（信号，无数组；`commands.catalog` 为拉取式） | P | 已落地 `commands.changed {commands?: JsonValue[]}`，payload 恒不带数组；客户端收到信号后重取 `commands.catalog`，把 `entries` 投影为 `AvailableSlashCommand[]`（A.0.2） |
+| `command_output {text}` | `command.output {text,name?}` | **F** | 已落地；`text` 同义，`name?` 为 Hermes 多出字段 |
 
 `AvailableSlashCommand`（omp）：`{name,aliases?,description?,input?{hint?},subcommands?[{name,description?,usage?}],source:"builtin"|"skill"|"extension"|"custom"|"mcp_prompt"|"file"}`。
 Hermes `CommandsCatalogResult` 是 `pairs/categories/skills/plugin_commands` 的**分组形状**；
-字段级无法直接对应，建议新增一个 `entries: AvailableSlashCommand[]` 投影（见附录 B `get_available_commands`），
-事件直接复用该数组。
+字段级无法直接对应；`commands.catalog` 已投影 `entries`（B.8.1，已落地），`commands.changed` 只作
+信号，客户端重取目录后复用该数组，不在事件里复制命令列表。
 
 ## A.9 子代理
 
@@ -469,29 +554,30 @@ omp 的 `HostToolResultPayload`：`{content:UserContent[],details?,isError?,usel
 |---|---:|---:|---:|---:|
 | 传输分片（`rpc_chunk`） | 1 | 0 | 0 | 1 |
 | 信封/连接 | 4 | 0 | 4 | 0 |
-| 回合与消息 | 9 | 0 | 4 | 5 |
+| 回合与消息 | 9 | 3 | 6 | 0 |
 | 工具 | 4 | 0 | 3 | 1 |
 | 压缩/重试/缓存 | 8 | 0 | 0 | 8 |
 | 队列/Goal/Todo | 4 | 0 | 2 | 2 |
-| 模型/配置/目录 | 7 | 1 | 5 | 1 |
+| 模型/配置/目录 | 7 | 2 | 5 | 0 |
 | 子代理 | 3 | 0 | 2 | 1 |
 | Live/Dictation | 7 | 0 | 6 | 1 |
 | BTW/IRC/Advisor/TTSR | 6 | 0 | 1 | 5 |
 | 扩展 UI 请求 | 12 | 0 | 5 | 7 |
 | Host tools/URI | 4 | 0 | 0 | 4 |
 
-按 omp 的类型族计数；`extension_ui_response` 与 host 的 `*_result` 入站帧不单列，其字段对齐见
-A.12/A.13。
+按 omp 的类型族计数（2026-11-01 复核后的分档，改动见 A.0.3）；`extension_ui_response` 与 host 的
+`*_result` 入站帧不单列，其字段对齐见 A.12/A.13。每档都保留了完整 wire 定义，N 档不等于“无契约”。
 
-**Hermes 侧需要新增的契约（按优先级）：**
+**Hermes 侧需要新增的契约（按优先级；已落地项见 A.15）：**
 
-1. **消息流补字段**（不改事件名）：`message.start`/`message.delta`/`message.complete` 增加
-   `message_id`、`message`、`content_index`、`partial`、`stop_reason`；新增 `message.block_start`/`block_end`。
-2. **回合原语**：`turn.start`/`turn.end`、`prompt.result`、`session.settled`。
-3. **工具补字段**：`tool.complete.is_error`、`tool.progress.partial_result`、`tool.start.intent`；
-   新增 `tool.update`/`tool.stream`。
-4. **压缩/重试/预热**：`compaction.*`、`retry.*`、`cache_warming.*`（8 个事件）。
-5. **队列/目录/输出**：`queue.updated`、`commands.changed`、`command.output`。
+1. **消息流补字段**（不改事件名）：已落地 `message_id`、`content_index`、`partial`、`stop_reason`、
+   `message.block_start`/`block_end`；`message` 快照**不由 Hermes 提供**，由客户端合成（见 A.4.2）。
+   仍缺：思考块的 `content_index`、`image` 块、工具参数流 `tool.args_delta`。
+2. **回合原语**：`turn.start`/`turn.end`、`prompt.result`、`session.settled`——已落地。
+3. **工具补字段**：`tool.complete.is_error` 已落地；`tool.progress.partial_result`、`tool.start.intent`
+   与 `tool.update`/`tool.stream` 仍缺。
+4. **压缩/重试/预热**：`compaction.*`、`retry.*`、`cache_warming.*`（8 个事件）契约已定义，无 producer。
+5. **队列/目录/输出**：`queue.updated`、`commands.changed`（信号）、`command.output`——已落地。
 6. **子代理补字段**：`agent/agent_source/description/task/assignment/session_file/parent_tool_call_id/detached`；
    可选 `subagent.event`。
 7. **UI 请求**：`ui.select`/`ui.confirm`/`ui.input`/`ui.editor`/`ui.widget`/`ui.editor_text`/`ui.open_url`；

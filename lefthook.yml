@@ -2,7 +2,10 @@ pre-commit:
   jobs:
     - name: lint python
       glob: "*.py" # glob filter
-      run: ruff check --config ./ruff.pre-commit.toml {staged_files}
+      # --force-exclude: ruff ignores `exclude` for paths named on the command line,
+      # and {staged_files} names them (the vendored omp-ui/src snapshot must stay
+      # byte-identical, so it cannot be ruff-fixed).
+      run: ruff check --force-exclude --config ./ruff.pre-commit.toml {staged_files}
 
     - name: lint web
       root: web/

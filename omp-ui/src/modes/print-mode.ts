@@ -5,10 +5,10 @@
  * - `omp -p "prompt"` - text output
  * - `omp --mode json "prompt"` - JSON event stream
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { presentNarrationAsAnswer } from "@oh-my-pi/pi-ai/utils/narration";
-import { $flag, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "../vendor/agent/src/index.ts";
+import type { ImageContent } from "../vendor/ai/src/index.ts";
+import { presentNarrationAsAnswer } from "../vendor/ai/src/utils/narration.ts";
+import { $flag, logger, postmortem, sanitizeText } from "../vendor/utils/src/index.ts";
 import { HINDSIGHT_NOTICE_SOURCE } from "../hindsight/state";
 import type { MCPManager } from "../mcp/manager";
 import { resolveMCPTimeoutMs } from "../mcp/timeout";

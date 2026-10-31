@@ -6,7 +6,7 @@ import type {
 	ToolCallContent,
 	ToolCallLocation,
 	ToolKind,
-} from "@oh-my-pi/pi-utils/acp";
+} from "../../vendor/utils/src/acp.ts";
 import { InternalUrlRouter } from "../../internal-urls/router";
 import { extractUriScheme } from "../../internal-urls/parse";
 import type { SchemeSpec } from "../../internal-urls/types";

@@ -4,7 +4,7 @@
  * `AgentSession`) can route through the client when it advertises the
  * relevant capabilities at `initialize` time.
  */
-import { RequestError } from "@oh-my-pi/pi-utils/acp";
+import { RequestError } from "../../vendor/utils/src/acp.ts";
 import type {
 	PermissionOption as AcpPermissionOption,
 	TerminalHandle as AcpTerminalHandle,
@@ -13,7 +13,7 @@ import type {
 	RequestPermissionRequest,
 	RequestPermissionResponse,
 	ToolCallUpdate,
-} from "@oh-my-pi/pi-utils/acp";
+} from "../../vendor/utils/src/acp.ts";
 import type {
 	ClientBridge,
 	ClientBridgeCapabilities,

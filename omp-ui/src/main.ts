@@ -6,10 +6,10 @@
  */
 import * as fsSync from "node:fs";
 import * as os from "node:os";
-import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
-import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
-import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
+import type { ThinkingLevel } from "./vendor/agent/src/thinking.ts";
+import type { ImageContent, Model } from "./vendor/ai/src/index.ts";
+import { getModelPricingStatus } from "./vendor/catalog/src/models.ts";
+import { isEnoent, isEnotdir } from "./vendor/utils/src/index.ts";
 import {
 	APP_NAME,
 	directoryIsMissing,
@@ -19,12 +19,12 @@ import {
 	normalizePathForComparison,
 	setProjectDir,
 	VERSION,
-} from "@oh-my-pi/pi-utils/dirs";
-import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
-import * as logger from "@oh-my-pi/pi-utils/logger";
-import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
+} from "./vendor/utils/src/dirs.ts";
+import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "./vendor/utils/src/env.ts";
+import * as logger from "./vendor/utils/src/logger.ts";
+import * as postmortem from "./vendor/utils/src/postmortem.ts";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
-import chalk from "@oh-my-pi/pi-utils/chalk";
+import chalk from "./vendor/utils/src/chalk.ts";
 import { reset as resetCapabilities } from "./capability";
 import {
 	type Args,
@@ -139,7 +139,6 @@ import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
 import { type RestoreOutcome, restoreSession } from "./task/restore";
 import { createTelemetryExportConfig, initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { cfgTelemetryOtlpExportEnabled } from "./telemetry-settings";
-import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { automaticThinkingLevel, concreteThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -2894,8 +2893,21 @@ export async function runRootCommand(
 	}
 }
 
+/**
+ * Hermes entry (`hermes omp` runs this file).
+ *
+ * The gateway client composition lives in `modes/rpc/hermes-entry.ts` (outside the vendored
+ * snapshot) so a refresh of `src/` only has to restore this delegator. See that module for the
+ * startup order and the plan §2.3 main-screen assembly.
+ */
 export async function main(args: string[]): Promise<void> {
-	registerLocalInferenceApi();
-	const { runCli } = await import("./cli");
-	await runCli(args.length === 0 ? ["launch"] : args);
+	const { runHermesOmp } = await import("./modes/rpc/hermes-entry");
+	await runHermesOmp(args);
+}
+
+if (import.meta.main) {
+	main(process.argv.slice(2)).catch(async error => {
+		const { fatal } = await import("./vendor/utils/src/postmortem.ts");
+		fatal(error);
+	});
 }

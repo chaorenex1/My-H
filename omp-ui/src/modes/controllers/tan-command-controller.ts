@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { prompt, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import type { AgentMessage } from "../../vendor/agent/src/index.ts";
+import type { AssistantMessage, ImageContent, TextContent } from "../../vendor/ai/src/index.ts";
+import { prompt, Snowflake, untilAborted } from "../../vendor/utils/src/index.ts";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
 import tanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
