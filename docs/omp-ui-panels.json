@@ -1,0 +1,1623 @@
+{
+  "schema_version": 1,
+  "generated_by": "scripts/gen_panel_inventory.py from gateway/panel_inventory.py — DO NOT EDIT",
+  "status_legend": {
+    "A": "authority-served: a gateway/* handler serves it and the contract is declared",
+    "L": "legacy sidecar only: the contract exists, but the authority does not serve it yet",
+    "M": "missing: no contract and no handler"
+  },
+  "panel_legend": {
+    "ready": "every method/event is authority-served and nothing is pending",
+    "client": "no gateway surface; the client owns the whole panel",
+    "pending": "work remains (promotion/new method/contract extension); see note",
+    "partial": "some capability exists, but a design gap remains (P6); see note",
+    "unsupported": "no backend or no design; the client must not render a live entry"
+  },
+  "panels": [
+    {
+      "id": "model_hub",
+      "title": "Model hub / picker / browser",
+      "status": "pending",
+      "supported": false,
+      "note": "model.options metadata (E) and the credential methods' promotion (P) are pending",
+      "methods": [
+        {
+          "name": "model.options",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "config.get",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.mutate",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "model.save_key",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "model.disconnect",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "session_selector",
+      "title": "Session selector",
+      "status": "pending",
+      "supported": false,
+      "note": "session.list query/pin/preview (E) and session.most_recent promotion (P) are pending",
+      "methods": [
+        {
+          "name": "session.list",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "session.active_list",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.most_recent",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "session.mutate",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "tree_selector",
+      "title": "Tree selector",
+      "status": "pending",
+      "supported": false,
+      "note": "branch summarize/instructions payload (E) is pending",
+      "methods": [
+        {
+          "name": "session.history",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "session.info",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.mutate",
+          "access": "write",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "rewind_selector",
+      "title": "Rewind selector",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "session.history",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.mutate",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "copy_selector",
+      "title": "Copy selector",
+      "status": "client",
+      "supported": true,
+      "note": "",
+      "methods": [],
+      "events": []
+    },
+    {
+      "id": "theme_selector",
+      "title": "Theme selector / skin",
+      "status": "pending",
+      "supported": false,
+      "note": "skin.list does not exist yet (N); config.get/set are served",
+      "methods": [
+        {
+          "name": "skin.list",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "config.get",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "config.set",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "settings_menu",
+      "title": "Settings menu",
+      "status": "pending",
+      "supported": false,
+      "note": "config.schema does not exist yet (N)",
+      "methods": [
+        {
+          "name": "config.schema",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "config.get",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "config.set",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "thinking_effort",
+      "title": "Thinking / effort",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "model.options",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.mutate",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "usage_dashboard",
+      "title": "Usage dashboard",
+      "status": "pending",
+      "supported": false,
+      "note": "session.usage, billing.state and usage.bars are sidecar-only (P)",
+      "methods": [
+        {
+          "name": "session.usage",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "session.stats",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "billing.state",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "usage.bars",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "jobs_panel",
+      "title": "Jobs panel / job tree",
+      "status": "pending",
+      "supported": false,
+      "note": "process.list stats fields (E), spawn_tree promotion (P) and process events are pending",
+      "methods": [
+        {
+          "name": "process.list",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "spawn_tree.list",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "process.stop",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "process.kill",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": [
+        {
+          "name": "process.started",
+          "status": "M"
+        },
+        {
+          "name": "process.updated",
+          "status": "M"
+        },
+        {
+          "name": "process.ended",
+          "status": "M"
+        },
+        {
+          "name": "spawn_tree.changed",
+          "status": "M"
+        }
+      ]
+    },
+    {
+      "id": "agent_hub",
+      "title": "Agent Hub / dashboard / transcript",
+      "status": "pending",
+      "supported": false,
+      "note": "subagent.config (N) and delegation.status promotion (P) are pending",
+      "methods": [
+        {
+          "name": "subagent.list",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "subagent.tail",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "delegation.status",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subagent.steer",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "subagent.interrupt",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "delegation.pause",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "subagent.config",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "subagent.spawn_requested",
+          "status": "A"
+        },
+        {
+          "name": "subagent.start",
+          "status": "A"
+        },
+        {
+          "name": "subagent.thinking",
+          "status": "A"
+        },
+        {
+          "name": "subagent.tool",
+          "status": "A"
+        },
+        {
+          "name": "subagent.progress",
+          "status": "A"
+        },
+        {
+          "name": "subagent.complete",
+          "status": "A"
+        }
+      ]
+    },
+    {
+      "id": "mcp_manager",
+      "title": "MCP manager / add wizard",
+      "status": "pending",
+      "supported": false,
+      "note": "the whole mcp.* family is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "mcp.catalog",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.list",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.status",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.add",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.remove",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.set_api_key",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.oauth.start",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.oauth.poll",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.oauth.callback",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "mcp.servers.oauth.cancel",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "extensions_center",
+      "title": "Extensions center",
+      "status": "pending",
+      "supported": false,
+      "note": "hooks.list/toggle (N) and plugins.manage promotion (P) are pending; Hermes has no in-process extension registry",
+      "methods": [
+        {
+          "name": "plugins.list",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "hooks.list",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "plugins.manage",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "hooks.toggle",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "hooks.changed",
+          "status": "M"
+        }
+      ]
+    },
+    {
+      "id": "git_tui",
+      "title": "Git TUI",
+      "status": "pending",
+      "supported": false,
+      "note": "the git.* contract is not implemented yet (N)",
+      "methods": [
+        {
+          "name": "git.status",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.diff",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.log",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.branches",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.stage",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.unstage",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "git.commit",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "context_viewer",
+      "title": "Context viewer",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "session.context_breakdown",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.history",
+          "access": "read",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "hotkeys_sheet",
+      "title": "Hotkeys sheet",
+      "status": "client",
+      "supported": true,
+      "note": "",
+      "methods": [],
+      "events": []
+    },
+    {
+      "id": "changelog",
+      "title": "Changelog",
+      "status": "pending",
+      "supported": false,
+      "note": "runtime.describe does not carry a version yet (E); the changelog content is client-side",
+      "methods": [
+        {
+          "name": "runtime.describe",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "debug_selector",
+      "title": "Debug selector",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "runtime.describe",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.info",
+          "access": "read",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "btw_panel",
+      "title": "BTW panel / history",
+      "status": "pending",
+      "supported": false,
+      "note": "btw.history does not exist yet (N)",
+      "methods": [
+        {
+          "name": "btw.history",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "prompt.btw",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": [
+        {
+          "name": "btw.complete",
+          "status": "A"
+        }
+      ]
+    },
+    {
+      "id": "omfg",
+      "title": "OMFG",
+      "status": "unsupported",
+      "supported": false,
+      "note": "no Hermes backend: the omp rule-forging workflow has no gateway equivalent (P6)",
+      "methods": [],
+      "events": []
+    },
+    {
+      "id": "plan_review",
+      "title": "Plan review / save / TOC",
+      "status": "pending",
+      "supported": false,
+      "note": "session.plan.* does not exist yet (N)",
+      "methods": [
+        {
+          "name": "session.plan.read",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "session.plan.save",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "session.plan.approve",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "session.plan.updated",
+          "status": "M"
+        }
+      ]
+    },
+    {
+      "id": "annotation_overlay",
+      "title": "Annotation overlay",
+      "status": "unsupported",
+      "supported": false,
+      "note": "no annotation backend; storage and protocol are undesigned (P6)",
+      "methods": [],
+      "events": []
+    },
+    {
+      "id": "pause_screen",
+      "title": "Pause screen",
+      "status": "partial",
+      "supported": false,
+      "note": "delegation.pause only gates new spawns; freezing in-flight turns needs a new primitive (P6)",
+      "methods": [
+        {
+          "name": "session.control.read",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "delegation.pause",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "session_info_overlay",
+      "title": "Session info overlay",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "session.info",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.stats",
+          "access": "read",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "transcript_browser",
+      "title": "Transcript browser / outline",
+      "status": "pending",
+      "supported": false,
+      "note": "session.history pagination/outline extension (E) is pending",
+      "methods": [
+        {
+          "name": "session.history",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "skill_picker",
+      "title": "Skill picker",
+      "status": "pending",
+      "supported": false,
+      "note": "skills.manage promotion (P) is pending",
+      "methods": [
+        {
+          "name": "skills.manage",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "commands.catalog",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "complete.slash",
+          "access": "read",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "autoresearch",
+      "title": "Autoresearch / cleanse / ps-top / live",
+      "status": "partial",
+      "supported": false,
+      "note": "cleanse/autoresearch have no Hermes backend (P6); ps-top needs process.list stats (E)",
+      "methods": [
+        {
+          "name": "process.list",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "voice.record",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "voice.toggle",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "voice.tts",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "billing_subscription",
+      "title": "Billing / subscription",
+      "status": "pending",
+      "supported": false,
+      "note": "billing, subscription and usage.bars are sidecar-only (P)",
+      "methods": [
+        {
+          "name": "billing.state",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "billing.auto_reload",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "billing.charge_status",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "usage.bars",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subscription.state",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subscription.preview",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "billing.charge",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "billing.keep_going_on_credits",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "billing.step_up",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subscription.change",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subscription.upgrade",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "subscription.resume",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "connectors",
+      "title": "Connectors",
+      "status": "pending",
+      "supported": false,
+      "note": "the account/policy methods are sidecar-only (P)",
+      "methods": [
+        {
+          "name": "connectors.list",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.catalog",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.accounts",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.tools",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.policy.get",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.operation.status",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "connectors.connect",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "connectors.accounts.remove",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "connectors.accounts.rename",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "vault",
+      "title": "Vault",
+      "status": "pending",
+      "supported": false,
+      "note": "vault.* is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "vault.list",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.sources",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.add",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.remove",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.unlock",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.lock",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "vault.source.set",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "profiles",
+      "title": "Profiles / multiplex",
+      "status": "pending",
+      "supported": false,
+      "note": "profiles.* except profiles.list is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "profiles.list",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "profiles.describe",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "profiles.create",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "profiles.configure",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "profiles.set_asset",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "rollback_checkpoints",
+      "title": "Rollback / checkpoints",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "rollback.list",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "rollback.diff",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "rollback.restore",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "pets",
+      "title": "Pets",
+      "status": "pending",
+      "supported": false,
+      "note": "pet.* is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "pet.gallery",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "pet.info",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "pet.cells",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "pet.select",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "pet.hatch",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "pet.generate",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "cron",
+      "title": "Cron",
+      "status": "pending",
+      "supported": false,
+      "note": "cron.manage promotion (P) is pending",
+      "methods": [
+        {
+          "name": "cron.manage",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "cron.status",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "cron.submit",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "cron.cancel",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "cron.manage",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "auth_login",
+      "title": "Login / logout / provider auth",
+      "status": "pending",
+      "supported": false,
+      "note": "model.save_key/model.disconnect promotion (P) is pending",
+      "methods": [
+        {
+          "name": "model.options",
+          "access": "read",
+          "status": "A",
+          "change": [
+            "E"
+          ]
+        },
+        {
+          "name": "config.get",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "model.save_key",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "model.disconnect",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "approvals",
+      "title": "Approvals / ask / sudo / secret",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "approval.respond",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "clarify.respond",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "todo_hud",
+      "title": "Todo HUD",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [],
+      "events": [
+        {
+          "name": "todo.updated",
+          "status": "A"
+        }
+      ]
+    },
+    {
+      "id": "goal_loop",
+      "title": "Goal / loop bars",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "session.control.read",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.control",
+          "access": "write",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.automation",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": [
+        {
+          "name": "session.control.update",
+          "status": "A"
+        }
+      ]
+    },
+    {
+      "id": "i18n",
+      "title": "i18n",
+      "status": "pending",
+      "supported": false,
+      "note": "i18n.* is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "i18n.languages",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "i18n.catalog",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "shared_metrics",
+      "title": "Shared metrics consent",
+      "status": "pending",
+      "supported": false,
+      "note": "shared_metrics.* is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "shared_metrics.status",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "shared_metrics.set",
+          "access": "write",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "kanban_board",
+      "title": "Kanban (read-only board)",
+      "status": "pending",
+      "supported": false,
+      "note": "kanban.run is served; the kanban.board snapshot and kanban.changed are not (N)",
+      "methods": [
+        {
+          "name": "kanban.run",
+          "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "kanban.board",
+          "access": "read",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "kanban.changed",
+          "status": "M"
+        }
+      ]
+    },
+    {
+      "id": "spawn_tree_replay",
+      "title": "Spawn-tree replay / diff",
+      "status": "pending",
+      "supported": false,
+      "note": "spawn_tree.* is sidecar-only (P)",
+      "methods": [
+        {
+          "name": "spawn_tree.list",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "spawn_tree.load",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        },
+        {
+          "name": "spawn_tree.save",
+          "access": "read",
+          "status": "L",
+          "change": [
+            "P"
+          ]
+        }
+      ],
+      "events": []
+    },
+    {
+      "id": "moa",
+      "title": "MoA display",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [
+        {
+          "name": "config.set",
+          "access": "write",
+          "status": "A",
+          "change": []
+        }
+      ],
+      "events": [
+        {
+          "name": "moa.aggregating",
+          "status": "A"
+        },
+        {
+          "name": "moa.phase",
+          "status": "A"
+        },
+        {
+          "name": "moa.progress",
+          "status": "A"
+        },
+        {
+          "name": "moa.reference",
+          "status": "A"
+        }
+      ]
+    },
+    {
+      "id": "collab",
+      "title": "Collab / QR / LIVE",
+      "status": "unsupported",
+      "supported": false,
+      "note": "omp collab has no Hermes protocol mapping; groups.* hosted rooms are desktop-only (P6)",
+      "methods": [],
+      "events": []
+    },
+    {
+      "id": "review_summary",
+      "title": "Review summary",
+      "status": "ready",
+      "supported": true,
+      "note": "",
+      "methods": [],
+      "events": [
+        {
+          "name": "review.summary",
+          "status": "A"
+        }
+      ]
+    }
+  ]
+}

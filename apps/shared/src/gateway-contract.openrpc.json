@@ -26023,6 +26023,53 @@
         "title": "PaneRevealPayload",
         "type": "object"
       },
+      "PanelCapability": {
+        "additionalProperties": false,
+        "description": "One client panel's readiness (``gateway/panel_inventory.py``).\n\n``status`` is the panel-level verdict the client renders; ``methods`` is what it may call\nTODAY (authority-served only), so a pending panel never sends a request that answers\n``-32601``. The full planned matrix lives in ``docs/omp-ui-panels.json``.",
+        "properties": {
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "client",
+              "pending",
+              "partial",
+              "unsupported"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "supported",
+          "status",
+          "methods"
+        ],
+        "title": "PanelCapability",
+        "type": "object"
+      },
       "Params": {
         "additionalProperties": false,
         "description": "Client\u2192server method params / server\u2192client request params. Unknown keys are rejected.",
@@ -36077,6 +36124,13 @@
           "session_create": {
             "$ref": "#/components/schemas/SessionCreateDescriptor"
           },
+          "panels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PanelCapability"
+            },
+            "title": "Panels",
+            "type": "object"
+          },
           "skin": {
             "anyOf": [
               {
@@ -36094,7 +36148,8 @@
           "profile_id",
           "authority_epoch",
           "capabilities",
-          "session_create"
+          "session_create",
+          "panels"
         ],
         "title": "RuntimeDescribeResult",
         "type": "object"

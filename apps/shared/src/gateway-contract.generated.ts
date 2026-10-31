@@ -4953,11 +4953,19 @@ export interface RuntimeDescribeResult {
   authority_epoch: number
   capabilities: string[]
   session_create: SessionCreateDescriptor
+  panels: Record<string, PanelCapability>
   skin?: SkinPayload | null
 }
 export interface SessionCreateDescriptor {
   sources: string[]
   parameters: string[]
+}
+/** One client panel's readiness (``gateway/panel_inventory.py``). ``status`` is the panel-level verdict the client renders; ``methods`` is what it may call TODAY (authority-served only), so a pending panel never sends a request that answers ``-32601``. The full planned matrix lives in ``docs/omp-ui-panels.json``. */
+export interface PanelCapability {
+  supported: boolean
+  status: 'ready' | 'client' | 'pending' | 'partial' | 'unsupported'
+  methods: string[]
+  reason?: string | null
 }
 /** ``tui_gateway/change_watcher.py::resolve_skin`` — the resolved active skin (``HermesSkin``). ``{}`` when the skin engine failed to load. Colour maps are token → colour string. */
 export interface SkinPayload {

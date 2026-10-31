@@ -355,12 +355,28 @@ class SessionCreateDescriptor(Result):
     parameters: list[str]
 
 
+class PanelCapability(Result):
+    """One client panel's readiness (``gateway/panel_inventory.py``).
+
+    ``status`` is the panel-level verdict the client renders; ``methods`` is what it may call
+    TODAY (authority-served only), so a pending panel never sends a request that answers
+    ``-32601``. The full planned matrix lives in ``docs/omp-ui-panels.json``.
+    """
+
+    supported: bool
+    status: Literal["ready", "client", "pending", "partial", "unsupported"]
+    methods: list[str]
+    reason: str | None = None
+
+
 class RuntimeDescribeResult(Result):
     instance_id: str
     profile_id: str
     authority_epoch: int
     capabilities: list[str]
     session_create: SessionCreateDescriptor
+    #: Panel id → readiness, so a client marks unsupported panels before its first call.
+    panels: dict[str, PanelCapability]
     #: The owning profile's resolved skin (``resolve_skin()``, main's ``gateway.ready.skin``).
     skin: SkinPayload | None = None
 
