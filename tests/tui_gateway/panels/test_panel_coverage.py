@@ -110,6 +110,26 @@ def test_every_method_status_is_true_of_the_wire(tmp_path):
     assert not problems, "\n".join(problems)
 
 
+def test_sidecar_methods_are_executable_through_the_adapter():
+    """L is not merely "declared": the in-process adapter must actually run it for this grant.
+
+    ``legacy_fallback_allowed`` is the real gate — process-global verbs and the session/prompt/
+    message namespaces the authority owns answer ``-32601`` even though ``METHODS`` declares them,
+    so advertising one as adapter-served would be a lie the client only discovers at call time.
+    """
+    from gateway.runtime_bootstrap import _PURPOSE_CAPABILITIES
+    from tui_gateway.ws_legacy_fallback import legacy_fallback_allowed
+
+    actor = SimpleNamespace(capabilities=_PURPOSE_CAPABILITIES["interactive"])
+    problems = [
+        f"{panel.id}: {method.name} is L but the adapter refuses it"
+        for panel in panel_inventory.PANELS
+        for method in panel.methods
+        if method.status == SIDECAR and not legacy_fallback_allowed(actor, method.name)
+    ]
+    assert not problems, "\n".join(problems)
+
+
 def test_every_event_status_is_declared():
     problems = [
         f"{panel.id}: {event.name} says {event.status}, wire says "
