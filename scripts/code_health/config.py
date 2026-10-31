@@ -40,10 +40,25 @@ METRIC_FIX = {
 
 PY_EXCLUDE = ("website/*", "*/node_modules/*", "node_modules/*")
 TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts")
+# omp-ui/src is a byte-identical snapshot of the upstream oh-my-pi shell
+# (omp-ui/src/VENDORED.md): every remedy here is an edit, and the next
+# `omp-ui/scripts/sync-upstream.py` reverts it. The Hermes-owned modules beside the snapshot
+# (the gateway client and its tests, written here, never copied from upstream) stay measured.
+OMP_SNAPSHOT = ("omp-ui/src/*",)
+OMP_OWNED = (
+    "omp-ui/src/modes/rpc/hermes-entry.ts",
+    "omp-ui/src/modes/rpc/gateway-session.ts",
+    "omp-ui/src/modes/rpc/gateway-session.test.ts",
+    "omp-ui/src/modes/rpc/gateway-models.ts",
+    "omp-ui/src/modes/rpc/gateway-models.test.ts",
+)
 TESTS = ("tests/*", "*/tests/*", "tests-js/*", "*/conftest.py")
 # One-shot processes that serve a single profile (CI/release scripts, skill scripts run as a
 # child with a scoped env, installers): the profile-scope rules don't apply to them.
-SINGLE_PROFILE = TESTS + ("scripts/*", "skills/*", "optional-skills/*", "evals/*", "setup.py")
+SINGLE_PROFILE = TESTS + ("scripts/*", "skills/*", "optional-skills/*", "evals/*", "setup.py",
+                          # omp-ui's toolchain (snapshot refresh, import checker) is a dev-side
+                          # Bun workspace: it never serves a profile it would need to scope to.
+                          "omp-ui/scripts/*")
 
 
 @dataclass(frozen=True)
@@ -168,10 +183,14 @@ def rule_applies(rule: Rule, path: str) -> bool:
     return not _matches(path, rule.exclude)
 
 
+def _vendored(path: str) -> bool:
+    return _matches(path, OMP_SNAPSHOT) and not _matches(path, OMP_OWNED)
+
+
 def in_scope(path: str) -> str | None:
     """Language of a tracked path the engine measures, or None."""
     if path.endswith(".py"):
-        return None if _matches(path, PY_EXCLUDE) else "py"
+        return None if _matches(path, PY_EXCLUDE) or _vendored(path) else "py"
     if path.endswith((".ts", ".tsx", ".mts", ".cts")):
-        return None if _matches(path, TS_EXCLUDE) else "ts"
+        return None if _matches(path, TS_EXCLUDE) or _vendored(path) else "ts"
     return None

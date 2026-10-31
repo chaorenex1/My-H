@@ -71,7 +71,15 @@ SKIP_DIRS = {
 # Pruned only directly under the repo root.
 ROOT_SKIP_DIRS = {".github"}
 # Pruned as repo-relative paths.
-SKIP_REL_DIRS = {Path("website/i18n"), Path("website/build"), Path("website/node_modules")}
+SKIP_REL_DIRS = {
+    Path("website/i18n"),
+    Path("website/build"),
+    Path("website/node_modules"),
+    # omp-ui/src is a byte-identical snapshot of the upstream oh-my-pi shell
+    # (omp-ui/src/VENDORED.md): its `/tmp` defaults are upstream's, and a fix here would be
+    # reverted by omp-ui/scripts/sync-upstream.py. Same class as website/node_modules.
+    Path("omp-ui/src"),
+}
 
 SKIP_FILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock"}
 SKIP_FILE_PATTERNS = (
