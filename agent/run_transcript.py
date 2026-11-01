@@ -1,20 +1,20 @@
-"""Append-only JSONL history for named in-process agent runs.
+"""Append-only JSONL history for one named in-process agent session.
 
-Every named run appends to one file::
+Every agent session owns exactly one file::
 
-    <HERMES_HOME>/sessions/<agent>/<session_id>.jsonl
+    <HERMES_HOME>/sessions/<agent>/<agent_session_id>.jsonl
 
-``<agent>`` is the name the caller gave the run, so two agents never share a file and a
-continuing agent reads its own earlier turns back with :func:`read_history` (host
-``conversation_history`` shape; the system prompt is excluded because the host owns it). The file
-is the history, not a mirror of ``state.db``: SQLite keeps the main conversation, this keeps what
-a peer agent said and did across runs of the same session.
+``<agent>`` is the name the caller gave the run; ``agent_session_id`` identifies one agent
+conversation and is minted per call (there is no implicit continuation — a caller that wants to
+carry a conversation forward passes ``continue_from`` and reads this module's
+:func:`read_history` itself). The file is the history, not a mirror of ``state.db``: SQLite keeps
+the main conversation, this keeps what a peer agent said and did.
 
 One JSON object per line, append-only, never rewritten. Rows are ``{"kind": "run"|"msg", ...}``:
-a ``run`` header per accepted run, then the run's messages (``role``, ``text``, ``tool_calls``,
+one ``run`` header, then the messages (``role``, ``text``, ``tool_calls``,
 ``tool_call_id``/``name``/``result``, reasoning). Each message row carries ``fp`` — a content
-fingerprint used to drop a history prefix the file already holds, because a continuing run is
-handed its merged history and appends it again.
+fingerprint used to drop a history prefix the file already holds, because a run continuing from
+another session's history is handed its merged messages and appends them again.
 
 Writes are serialized per file. Read paths stay forgiving: a truncated final line is skipped,
 never raised.
@@ -62,9 +62,10 @@ def _stem(value: Any, fallback: str) -> str:
     return f"{clean}_{digest}"
 
 
-def path_for(agent: str, session_id: str, *, home: Optional[Path] = None) -> Path:
-    """The file one agent's run history for one session lands on (no file is created)."""
-    return sessions_dir(home) / _stem(agent, "agent") / f"{_stem(session_id, 'session')}.jsonl"
+def path_for(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> Path:
+    """The file one agent session's history lands on (no file is created)."""
+    return (sessions_dir(home) / _stem(agent, "agent")
+            / f"{_stem(agent_session_id, 'agent-session')}.jsonl")
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -120,7 +121,7 @@ def fingerprint(role: str, text: str, *, tool_call_id: str = "", name: str = "")
     return "v1:" + digest.hexdigest()[:32]
 
 
-def _message_rows(message: Mapping[str, Any], run_id: str) -> list[dict[str, Any]]:
+def _message_rows(message: Mapping[str, Any], agent_session_id: str) -> list[dict[str, Any]]:
     """One host message -> the row(s) it becomes. Non-conversation roles are dropped."""
     role = str(message.get("role") or "")
     if role not in {"user", "assistant", "tool"}:
@@ -128,7 +129,8 @@ def _message_rows(message: Mapping[str, Any], run_id: str) -> list[dict[str, Any
     text = _text(message.get("content"))
     tool_call_id = str(message.get("tool_call_id") or "")
     name = str(message.get("name") or "")
-    row: dict[str, Any] = {"kind": "msg", "role": role, "text": text, "run_id": run_id,
+    row: dict[str, Any] = {"kind": "msg", "role": role, "text": text,
+                           "agent_session_id": agent_session_id,
                            "fp": fingerprint(role, text, tool_call_id=tool_call_id, name=name)}
     if role == "tool":
         row.update({"tool_call_id": tool_call_id, "name": name, "result": text, "text": ""})
@@ -144,7 +146,8 @@ def _message_rows(message: Mapping[str, Any], run_id: str) -> list[dict[str, Any
     reasoning = message.get("reasoning_content") or message.get("reasoning")
     if str(reasoning or "").strip():
         body = str(reasoning)
-        rows.append({"kind": "msg", "role": "reasoning", "text": body, "run_id": run_id,
+        rows.append({"kind": "msg", "role": "reasoning", "text": body,
+                         "agent_session_id": agent_session_id,
                      "fp": fingerprint("reasoning", body)})
     return rows
 
@@ -203,13 +206,14 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _system_row(system_message: str, run_id: str) -> Optional[dict[str, Any]]:
+def _system_row(system_message: str, agent_session_id: str) -> Optional[dict[str, Any]]:
     """The run's system prompt as one row per distinct text, or ``None`` for no prompt."""
     text = str(system_message or "")
     if not text.strip():
         return None
     digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:32]
-    return {"kind": "msg", "role": "system", "text": text, "run_id": run_id,
+    return {"kind": "msg", "role": "system", "text": text,
+            "agent_session_id": agent_session_id,
             "hash": digest, "fp": fingerprint("system", text)}
 
 
@@ -231,24 +235,23 @@ def _append(path: Path, rows: Iterable[Mapping[str, Any]]) -> int:
     return len(payload)
 
 
-def record(agent: str, session_id: str, messages: Iterable[Mapping[str, Any]], *,
-           run_id: str = "", model: str = "", provider: str = "",
+def record(agent: str, agent_session_id: str, messages: Iterable[Mapping[str, Any]], *,
+           model: str = "", provider: str = "",
            system_message: str = "", usage: Optional[Mapping[str, Any]] = None,
            home: Optional[Path] = None) -> dict[str, Any]:
-    """Append one run to its agent stream, dropping a history prefix the file already holds.
+    """Append one run to its agent session's stream, dropping a history prefix it already holds.
 
-    A continuing run is handed the file's own earlier messages as ``history``; those come back in
-    ``messages``. Matching fingerprints are removed once (multiset), so the file grows by what
-    happened this run, not by the length of the prompt. Returns ``{"path", "written", "appended"}``.
-    Raises ``OSError`` when the write itself fails: the caller decides whether that is fatal.
+    A run continuing from another session is handed that history as ``messages``; matching
+    fingerprints are removed once (multiset), so the file grows by what happened this run, not by
+    the length of the prompt. Returns ``{"path", "written", "appended"}``. Raises ``OSError`` when
+    the write itself fails: the caller decides whether that is fatal.
     """
-    path = path_for(agent, session_id, home=home)
-    run_id = str(run_id or f"run-{int(time.time() * 1000)}")
+    path = path_for(agent, agent_session_id, home=home)
     incoming: list[dict[str, Any]] = []
     for message in messages or ():
         if isinstance(message, Mapping):
-            incoming.extend(_message_rows(message, run_id))
-    system = _system_row(system_message, run_id)
+            incoming.extend(_message_rows(message, agent_session_id))
+    system = _system_row(system_message, agent_session_id)
     with _lock_for(path):
         tail = _tail_rows(path)
         seen: dict[str, int] = {}
@@ -266,8 +269,8 @@ def record(agent: str, session_id: str, messages: Iterable[Mapping[str, Any]], *
         new_system = system is not None and system["hash"] not in _known_systems(tail)
         if not kept and not new_system:
             return {"path": str(path), "written": False, "appended": 0}
-        header = {"kind": "run", "run_id": run_id, "agent": str(agent or ""),
-                  "session_id": str(session_id or ""), "ts": _iso(),
+        header = {"kind": "run", "agent_session_id": str(agent_session_id or ""),
+                  "agent": str(agent or ""), "ts": _iso(),
                   "model": str(model or ""), "provider": str(provider or ""),
                   "usage": dict(usage or {}), "messages": len(kept)}
         payload = [header]
@@ -278,15 +281,15 @@ def record(agent: str, session_id: str, messages: Iterable[Mapping[str, Any]], *
     return {"path": str(path), "written": True, "appended": appended - 1 - int(new_system)}
 
 
-def read_events(agent: str, session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
-    """Every parsed row of one agent stream; an unreadable or missing file is an empty list."""
-    return _read_rows(path_for(agent, session_id, home=home))
+def read_events(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
+    """Every parsed row of one agent session; an unreadable or missing file is an empty list."""
+    return _read_rows(path_for(agent, agent_session_id, home=home))
 
 
-def read_history(agent: str, session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
-    """One agent stream as host ``conversation_history`` messages (system prompt excluded)."""
+def read_history(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
+    """One agent session as host ``conversation_history`` messages (system prompt excluded)."""
     messages: list[dict[str, Any]] = []
-    for row in read_events(agent, session_id, home=home):
+    for row in read_events(agent, agent_session_id, home=home):
         if str(row.get("kind") or "") != "msg":
             continue
         role = str(row.get("role") or "")

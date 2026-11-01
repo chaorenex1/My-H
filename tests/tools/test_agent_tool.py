@@ -84,10 +84,14 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
     assert data["system_prompt_source"] == "argument"
     assert data["transcript_written"] is True
 
+    assert "session_id" not in data, "the payload carries one identity, not two"
+    assert data["subject"] == "Find the cause."
+
     path = Path(data["transcript_path"])
-    assert path == get_hermes_home() / "sessions" / "researcher" / "s1.jsonl"
+    assert path == (get_hermes_home() / "sessions" / "researcher"
+                    / f"{data['agent_session_id']}.jsonl")
     assert path.is_file()
-    rows = run_transcript.read_events("researcher", "s1")
+    rows = run_transcript.read_events("researcher", data["agent_session_id"])
     assert [row["role"] for row in rows if row.get("kind") == "msg"] == ["system", "user",
                                                                         "assistant"]
 
@@ -102,7 +106,7 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
     assert agent.closed is True
 
 
-def test_each_agent_and_session_gets_a_distinct_history_file():
+def test_each_call_gets_its_own_agent_session_and_history_file():
     first = _call(agent_name="researcher", user_prompts="a", background=False)
     second = _call(agent_name="writer", user_prompts="b", background=False)
     third = _call(agent_name="researcher", user_prompts="c", background=False,
@@ -113,15 +117,35 @@ def test_each_agent_and_session_gets_a_distinct_history_file():
     assert Path(second["transcript_path"]).parent.name == "writer"
 
 
-def test_a_second_run_reads_the_first_run_back_as_history():
+def test_a_second_run_does_not_inherit_the_first_without_continue_from():
     _call(agent_name="researcher", user_prompts="first", background=False)
-    _call(agent_name="researcher", user_prompts="second", background=False)
+    second = _call(agent_name="researcher", user_prompts="second", background=False)
+
+    assert _FakeAgent.instances[-1].history is None, "continuation is explicit, never implicit"
+    rows = run_transcript.read_events("researcher", second["agent_session_id"])
+    assert [row["text"] for row in rows if row.get("kind") == "msg" and row["role"] == "user"] \
+        == ["second"], "each agent session owns its own transcript"
+
+
+def test_continue_from_seeds_the_new_session_from_a_prior_transcript():
+    first = _call(agent_name="researcher", user_prompts="first", background=False)
+    second = _call(agent_name="researcher", user_prompts="second", background=False,
+                   continue_from=first["agent_session_id"])
 
     history = _FakeAgent.instances[-1].history or []
     assert [row["content"] for row in history] == ["first", "the answer"]
-    rows = run_transcript.read_events("researcher", "s1")
+    assert second["agent_session_id"] != first["agent_session_id"]
+    rows = run_transcript.read_events("researcher", second["agent_session_id"])
     assert [row["text"] for row in rows if row.get("kind") == "msg" and row["role"] == "user"] \
-        == ["first", "second"], "the replayed prefix is not written twice"
+        == ["second"], "the replayed prefix is not written twice"
+
+
+def test_continue_from_an_unknown_session_is_refused_before_any_run():
+    data = _call(agent_name="researcher", user_prompts="go", background=False,
+                 continue_from="researcher-missing")
+
+    assert "continue_from not found" in data["error"]
+    assert _FakeAgent.instances == []
 
 
 def test_an_agent_definition_file_beats_the_argument_and_loses_its_front_matter(tmp_path):
@@ -238,15 +262,19 @@ def test_a_background_run_returns_a_job_and_delivers_one_completion(monkeypatch)
     job = _call(agent_name="researcher", user_prompts="Investigate the failure.")
 
     assert job["status"] == "running" and job["background"] is True
-    assert job["agent_name"] == "researcher" and job["queue_position"] == 0
+    assert job["agent_session_id"].startswith("researcher-")
+    assert job["subject"] == "Investigate the failure." and job["queue_position"] == 0
     event = wait_until(lambda: not events.empty() and events.get(), what="a completion event")
     assert event["type"] == "async_delegation"
     assert event["session_key"] == "s1" and event["delegation_id"] == job["job_id"]
+    assert event["agent_session_id"] == job["agent_session_id"]
+    assert event["subject"] == job["subject"]
     assert event["status"] == "completed" and event["role"] == "agent"
     assert event["summary"] == "the answer"
     assert event["goal"] == "Investigate the failure."
     assert Path(job["transcript_path"]).is_file()
-    assert run_transcript.read_history("researcher", "s1")[-1]["content"] == "the answer"
+    assert run_transcript.read_history(
+        "researcher", job["agent_session_id"])[-1]["content"] == "the answer"
 
 
 def test_a_background_run_needs_a_calling_session():
@@ -304,8 +332,9 @@ def test_the_tool_is_registered_in_its_own_toolset():
 
     entry = registry.get_entry("agent")
     assert entry is not None and entry.toolset == "agents"
-    assert TOOLSETS["agents"]["tools"] == ["agent"]
-    assert "agent" in _HERMES_CORE_TOOLS
+    assert TOOLSETS["agents"]["tools"] == ["agent", "agent_out"]
+    assert "agent" in _HERMES_CORE_TOOLS and "agent_out" in _HERMES_CORE_TOOLS, (
+        "the default bundle hands out agent_session_id, so it must also carry the reader")
 
 
 # -- the definition contract ---------------------------------------------------

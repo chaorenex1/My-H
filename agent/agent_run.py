@@ -75,6 +75,8 @@ class AgentRunResult:
     model: str
     provider: str
     toolsets: tuple[str, ...]
+    #: The one identifier ``agent_out`` and the transcript path are keyed on.
+    agent_session_id: str = ""
     #: The conversation loop's messages, tool calls included. Empty when the host returned none.
     messages: tuple[dict[str, Any], ...] = ()
     #: Token/cost counters the host attached to the turn result; empty when none were reported.
@@ -87,7 +89,8 @@ class AgentRunResult:
 
     def as_dict(self) -> dict[str, Any]:
         """The tool/plugin JSON face: ``messages`` stay out (they are history, not an answer)."""
-        data = {"answer": self.answer, "api_calls": self.api_calls, "model": self.model,
+        data = {"answer": self.answer, "agent_session_id": self.agent_session_id,
+                "api_calls": self.api_calls, "model": self.model,
                 "provider": self.provider, "toolsets": list(self.toolsets),
                 "usage": dict(self.usage), "transcript_path": self.transcript_path,
                 "transcript_written": self.transcript_written}
@@ -294,19 +297,19 @@ def _account(session_id: str, task: str, result: AgentRunResult) -> None:
         release_or_close(db)
 
 
-def _record_history(agent_name: str, history_session: str, messages: tuple[dict[str, Any], ...],
-                    *, run_id: str, model: str, provider: str, system: str,
+def _record_history(agent_name: str, agent_session_id: str, messages: tuple[dict[str, Any], ...],
+                    *, model: str, provider: str, system: str,
                     usage: Mapping[str, Any]) -> tuple[str, bool]:
     """Write this run's history; a write failure is reported, never raised into a finished run."""
-    path = run_transcript.path_for(agent_name, history_session)
+    path = run_transcript.path_for(agent_name, agent_session_id)
     try:
-        info = run_transcript.record(agent_name, history_session, messages, run_id=run_id,
+        info = run_transcript.record(agent_name, agent_session_id, messages,
                                      model=model, provider=provider, system_message=system,
                                      usage=usage)
         return str(info["path"]), bool(info["written"])
     except Exception:  # health: allow BLE001 -- the answer stands; only the audit trail failed
         logger.warning("agent_run: history write failed for %s/%s", agent_name,
-                       history_session, exc_info=True)
+                       agent_session_id, exc_info=True)
         return str(path), False
 
 
@@ -316,6 +319,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         project_dir: Optional[str] = None, all_tools: bool = False, read_only: bool = False,
         history: Optional[Sequence[Mapping[str, Any]]] = None, session_id: str = "",
         layer: str = "", history_session: str = "", account_task: str = "",
+        agent_session_id: str = "",
         skip_memory: bool = True, skip_context_files: bool = True,
         skip_background_review: bool = True, load_soul_identity: bool = False,
         extra_tools: Optional[Sequence[Mapping[str, Any]]] = None, cache_scope: str = "",
@@ -324,10 +328,11 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         meta: Optional[Mapping[str, Any]] = None, record_history: bool = True) -> AgentRunResult:
     """Run one agent loop on *message* and return its answer. Never leaves an agent open.
 
-    ``history`` is the prior conversation for a continuing peer; system rows are dropped (the
-    host owns the system prompt). ``session_id`` keeps this run's host session distinct from the
-    caller's; an empty value lets the host mint one. ``layer`` names the run for history and
-    ``meta`` carries identifiers only. ``all_tools`` passes every host tool; otherwise
+    ``history`` is the prior conversation a caller explicitly continues from; system rows are
+    dropped (the host owns the system prompt). ``session_id`` keeps this run's host session
+    distinct from the caller's; an empty value lets the host mint one. ``agent_session_id`` is the
+    identifier the transcript, the ``agent_session`` row and ``agent_out`` are keyed on; an empty
+    value mints one. ``layer`` names the agent and ``meta`` carries identifiers only. ``all_tools`` passes every host tool; otherwise
     ``toolsets`` is the exact surface (an empty list is "no tools"). ``reasoning_effort`` pins a
     level when given (it outranks config for this run). ``worktree`` runs in a fresh git worktree
     off HEAD: the run's tools start there, and the tree is inspected, pruned or archived after.
@@ -355,8 +360,9 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
     system = "\n\n".join(segments)
     agent_name = str(layer or (meta or {}).get("agent") or "agent").strip() or "agent"
     history_key = str(history_session or session_id or "").strip()
-    run_id = f"{agent_name}-{int(time.time() * 1000)}-{next(_SEQUENCE)}"
-    task_id = run_id
+    agent_session_id = (str(agent_session_id or "").strip()
+                        or f"{agent_name}-{int(time.time() * 1000)}-{next(_SEQUENCE)}")
+    task_id = agent_session_id
     cwd = str(project_dir) if project_dir else None
     worktree_info = _attach_worktree(cwd or "", agent_name) if worktree else None
     if worktree_info is not None:
@@ -409,6 +415,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         usage = _usage(result)
         peer = AgentRunResult(
             answer=(result.get("final_response") or "").strip(),
+            agent_session_id=agent_session_id,
             api_calls=int(result.get("api_calls") or 0),
             model=final_model,
             provider=final_provider,
@@ -416,8 +423,8 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
             messages=messages,
             usage=usage,
         )
-        if record_history and history_key:
-            path, written = _record_history(agent_name, history_key, messages, run_id=run_id,
+        if record_history:
+            path, written = _record_history(agent_name, agent_session_id, messages,
                                             model=final_model, provider=final_provider,
                                             system=system, usage=usage)
             peer = replace(peer, transcript_path=path, transcript_written=written)

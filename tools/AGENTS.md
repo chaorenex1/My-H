@@ -143,6 +143,13 @@ teardown, kills the worker cgroup) runs only after that PID kill in `kill()`, or
 proven dead/recycled (`session.exited`, `_signal_kill` recycled-PID path, checkpoint recovery) —
 it is never the first signal a live parent receives.
 
+## Named agents (`tools/agent_tool.py`, `tools/agent_out_tool.py`)
+
+`agents` toolset. One `agent` call = one agent session: the tool mints `agent_session_id` and a
+unique `subject`, returns only those, and writes `sessions/<agent>/<agent_session_id>.jsonl`. No
+implicit continuation (`continue_from` seeds it). The `agent_session` row is inserted pre-dispatch
+and settled by the finishing thread; `agent_out` reads final_response / artifact / history.
+
 ## Delegation (`tools/delegate_tool.py`)
 
 Spawns a subagent with isolated context + terminal session; the parent waits for the summary unless

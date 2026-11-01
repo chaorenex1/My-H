@@ -6,13 +6,14 @@ normally decides. The run uses the host's model route, the requested toolsets (a
 Unlike a layer/background task, a custom agent keeps the host's memory and context files and
 loads the operator soul by default; those are the flags the caller can turn off.
 
-Every run's conversation is appended to the native agent history, one file per agent::
+Every run is one agent session with its own native history file::
 
-    <HERMES_HOME>/sessions/<agent_name>/<session_id>.jsonl
+    <HERMES_HOME>/sessions/<agent_name>/<agent_session_id>.jsonl
 
-where ``session_id`` is the provider session that called the tool. A later run of the same agent
-in the same session reads that file back as its ``conversation_history``, so the agent continues
-its own thread instead of starting cold.
+The tool mints ``agent_session_id`` and its unique ``subject`` and returns them; the transcript,
+the ``agent_session`` row and ``agent_out`` are all keyed on that id. Runs never continue each
+other implicitly: a caller that wants the previous conversation passes ``continue_from`` with its
+``agent_session_id``.
 
 By default the agent runs in the background: the tool returns a job handle immediately and the
 finished run is pushed onto the host's background-completion queue
@@ -50,7 +51,8 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -467,6 +469,8 @@ class _Run:
 
     agent: str
     session_key: str
+    agent_session_id: str
+    subject: str
     user_prompt: str
     system_prompt: str
     prompt_source: str
@@ -493,9 +497,34 @@ def _payload_dict(value: Any) -> dict[str, Any]:
     return to_dict() if callable(to_dict) else {}
 
 
-def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
-            error: Optional[BaseException]) -> None:
-    """Hand a finished run to the host's completion queue. Never raises: the run already happened."""
+def _new_agent_session_id(agent_name: str) -> str:
+    """One agent session = one run = one transcript file; the id is minted here, never reused."""
+    return f"{agent_name}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+
+def _begin_session_row(agent_session_id: str, run: _Run) -> str:
+    """Insert the row before dispatch so the id the tool returns resolves immediately."""
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- a run must not depend on the store
+        logger.debug("agent: no session store for agent_session", exc_info=True)
+        return run.subject
+    try:
+        return db.begin_agent_session(
+            agent_session_id=agent_session_id, agent_name=run.agent, subject=run.subject,
+            transcript_path=str(run.path), parent_session_id=run.session_key)
+    except Exception:  # health: allow BLE001 -- the run stands; only the lookup row is lost
+        logger.warning("agent: agent_session row was not written for %s",
+                       agent_session_id, exc_info=True)
+        return run.subject
+    finally:
+        release_or_close(db)
+
+
+def _settle(run: _Run, value: Any, error: Optional[BaseException]) -> tuple[str, str]:
+    """Record the settled row and return ``(status, body)``. Never raises."""
     payload = _payload_dict(value) if value is not None else {}
     if error is not None:
         status = "stalled" if isinstance(error, TimeoutError) else "error"
@@ -503,11 +532,48 @@ def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
     else:
         status = "completed"
         body = str(payload.get("answer") or "")
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- a run must not depend on the store
+        logger.debug("agent: no session store to settle %s", run.agent_session_id, exc_info=True)
+        return status, body
+    try:
+        db.finish_agent_session(
+            run.agent_session_id, status=status, final_response=body,
+            transcript_path=str(payload.get("transcript_path") or run.path))
+    except Exception:  # health: allow BLE001 -- the run already happened
+        logger.warning("agent: agent_session row was not settled for %s",
+                       run.agent_session_id, exc_info=True)
+    finally:
+        release_or_close(db)
+    return status, body
+
+
+def _continued_history(args: dict[str, Any], agent_name: str) -> list[dict[str, Any]]:
+    """The history an explicit ``continue_from`` names; an unknown id is a refused call."""
+    source = _text(args.get("continue_from"))
+    if not source:
+        return []
+    rows = run_transcript.read_history(agent_name, source)
+    if not rows:
+        raise ValueError(f"continue_from not found: {source}")
+    return rows
+
+
+def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
+            error: Optional[BaseException]) -> None:
+    """Hand a finished run to the host's completion queue. Never raises: the run already happened."""
+    payload = _payload_dict(value) if value is not None else {}
+    status, body = _settle(run, value, error)
     event: dict[str, Any] = {
         "type": "async_delegation",
         "session_key": run.session_key,
         "session_id": job.job_id,
         "delegation_id": job.job_id,
+        "agent_session_id": run.agent_session_id,
+        "subject": run.subject,
         "status": status,
         "summary": _summary(body, run.path),
         "goal": run.goal,
@@ -549,6 +615,7 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "project_dir": run.project_dir,
         "history": history,
         "layer": run.agent,
+        "agent_session_id": run.agent_session_id,
         "history_session": run.session_key,
         "meta": {"agent": run.agent, "parent": "", "depth": run.depth},
         "skip_memory": flags.get("skip_memory", False),
@@ -569,7 +636,7 @@ def _payload(result: agent_run.AgentRunResult, run: _Run) -> dict[str, Any]:
         "all_tools": run.all_tools,
         "system_prompt_source": run.prompt_source,
         "context_files": run.context_count,
-        "transcript_path": str(run.path),
+        "transcript_path": str(payload.get("transcript_path") or run.path),
     })
     if run.shadowed:
         payload["definition_shadowed"] = True
@@ -594,6 +661,7 @@ class _Call:
     worktree: bool
     flags: dict[str, bool]
     project: Optional[Path]
+    subject: str
 
 
 #: Host defaults per knob; a definition overrides them, a caller argument overrides both.
@@ -662,13 +730,13 @@ def _validate(args: dict[str, Any]) -> _Call:
         flags={key: bool(knobs[key]) for key in
                ("skip_memory", "skip_context_files", "skip_background_review",
                 "load_soul_identity")},
-        project=project)
+        project=project, subject=_text(args.get("subject")))
 
 
 
 def agent_tool(args: dict[str, Any], *, session_id: str = "",
                task_id: Optional[str] = None, **_: Any) -> str:
-    """Run one named agent (background by default) and return a JSON payload."""
+    """Run one named agent (background by default) and return its identity payload."""
     try:
         call = _validate(args)
     except ValueError as exc:
@@ -678,20 +746,17 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
         return tool_error(f"agent recursion limit ({MAX_DEPTH}) reached")
     try:
         context, context_count = _context_files(args, call.project)
+        history = _continued_history(args, call.agent)
     except ValueError as exc:
         return tool_error(str(exc))
 
     name = call.agent
     parent_session = str(session_id or "").strip()
-    history_key = parent_session or f"{name}-{int(time.time() * 1000)}"
-    path = run_transcript.path_for(name, history_key)
-    history: list[dict[str, Any]] = []
-    if parent_session:
-        try:  # this agent's own earlier runs, read back from its stream
-            history = run_transcript.read_history(name, parent_session)
-        except Exception:  # health: allow BLE001 -- a history read must not stop the run
-            logger.debug("agent: history read failed", exc_info=True)
-    run = _Run(agent=name, session_key=parent_session, user_prompt=call.user_prompt,
+    agent_session_id = _new_agent_session_id(name)
+    path = run_transcript.path_for(name, agent_session_id)
+    run = _Run(agent=name, session_key=parent_session, agent_session_id=agent_session_id,
+               subject=call.subject or _goal(call.user_prompt),
+               user_prompt=call.user_prompt,
                system_prompt=call.definition.body, prompt_source=call.definition.source,
                context=context, context_count=context_count,
                provider_name=call.provider_name, model_name=call.model_name,
@@ -700,37 +765,44 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
                goal=_goal(call.user_prompt), depth=depth + 1, read_only=call.read_only,
                max_iterations=call.max_iterations, reasoning_effort=call.reasoning_effort,
                worktree=call.worktree, shadowed=call.definition.shadowed, flags=call.flags)
+    subject = _begin_session_row(agent_session_id, run)
+    run = replace(run, subject=subject)
 
     if not call.background:
         token = _DEPTH.set(depth + 1)
         try:
-            result = agent_run.run(call.user_prompt, **_params(run, history or None))
+            result = agent_run.run(call.user_prompt, **_params(run, history))
         except Exception as exc:  # the tool loop gets a message, not a traceback
             logger.warning("agent %s failed: %s", name, exc, exc_info=True)
+            _settle(run, None, exc)
             return tool_error(f"agent run failed: {exc}")
         finally:
             _DEPTH.reset(token)
+        _settle(run, result, None)
         payload = _payload(result, run)
         payload.pop("status", None)
-        return json.dumps({"agent_name": name, "session_id": history_key, **payload})
+        return json.dumps({"agent_session_id": agent_session_id, "subject": subject,
+                           "status": "completed", **payload})
 
     if not parent_session:
+        _settle(run, None, ValueError("background run without a calling session"))
         return tool_error("agent needs the calling session for a background run; "
                           "pass background=false to run it inline")
     token = _DEPTH.set(depth + 1)
     try:
         job = agent_loop_service.service().submit(
-            lambda: agent_run.run(call.user_prompt, **_params(run, history or None)),
+            lambda: agent_run.run(call.user_prompt, **_params(run, history)),
             label=name, session_key=parent_session,
             on_settle=lambda settled, value, error: _notify(run, settled, value, error))
     except agent_loop_service.AgentLoopQueueFull as exc:
+        _settle(run, None, exc)
         return tool_error(str(exc))
     finally:
         _DEPTH.reset(token)
     return json.dumps({
-        "agent_name": name,
+        "agent_session_id": agent_session_id,
+        "subject": subject,
         "job_id": job.job_id,
-        "session_id": parent_session,
         "status": "running" if job.queue_position == 0 else "queued",
         "queue_position": job.queue_position,
         "background": True,
@@ -748,9 +820,11 @@ AGENT_SCHEMA: dict[str, Any] = {
         "front matter may pin model, toolsets, read_only, max_iterations, reasoning_effort, "
         "worktree and the skip flags; a caller argument overrides it. By default the "
         "run is background and the answer arrives as a completion; background=false blocks and "
-        "returns the answer. Each agent keeps its own history at "
-        "sessions/<agent_name>/<session_id>.jsonl under the profile home, so a later run with "
-        "the same agent_name continues it."
+        "returns the answer. Every call is a new agent session with its own transcript at "
+        "sessions/<agent_name>/<agent_session_id>.jsonl under the profile home; the payload "
+        "returns agent_session_id and subject, which agent_out reads back. Runs do not continue "
+        "each other implicitly: pass continue_from with a prior agent_session_id to carry that "
+        "conversation forward."
     ),
     "parameters": {
         "type": "object",
@@ -784,6 +858,20 @@ AGENT_SCHEMA: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Toolsets for this run; omit (or ['*']) for every host tool.",
+            },
+            "subject": {
+                "type": "string",
+                "description": (
+                    "One-line topic for this agent session; unique, and how agent_out finds it. "
+                    "Defaults to the first line of user_prompts."
+                ),
+            },
+            "continue_from": {
+                "type": "string",
+                "description": (
+                    "A prior agent_session_id whose transcript seeds this run's history. The new "
+                    "run still gets its own id, subject and transcript."
+                ),
             },
             "context_files": {
                 "type": "array",

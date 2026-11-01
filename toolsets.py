@@ -22,7 +22,7 @@ _HERMES_CORE_TOOLS = [
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
-    "agent",
+    "agent", "agent_out",
     "cronjob_manage",
     "kanban_show", "kanban_list",
     "kanban_complete", "kanban_block", "kanban_request_review",
@@ -154,7 +154,7 @@ TOOLSETS = {
     "agents": _ts(
         "Run named in-process agents with their own system prompt, tool surface and JSONL "
         "conversation under HERMES_HOME/sessions/<agent>/",
-        ["agent"],
+        ["agent", "agent_out"],
     ),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "

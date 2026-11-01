@@ -41,6 +41,8 @@ Arguments:
 | `context_files` | Up to 20 files (100 KB each) supplied as **data**. Must resolve inside `project_dir`/the working tree or the profile home. |
 | `project_dir` | Working directory for the run; defaults to the detected project root. |
 | `background` | `true` (default) returns a job; `false` blocks and returns the answer. |
+| `subject` | One-line topic for this agent session; unique across the profile, and how `agent_out` finds it. Defaults to the first line of `user_prompts`. |
+| `continue_from` | A prior `agent_session_id` whose transcript seeds this run's history. The new run still gets its own id, subject and transcript. |
 | `worktree` | Run in an isolated git worktree off `HEAD`; the run's edits land on its own branch. Off by default. |
 | `skip_memory`, `skip_context_files`, `skip_background_review`, `load_soul_identity` | The host knobs; a named agent keeps memory, context files and the operator soul by default. |
 
@@ -112,7 +114,8 @@ through `patch` or `terminal`.
 
 ### Background delivery
 
-With the default `background: true` the tool returns a job handle and the finished run is pushed
+With the default `background: true` the tool returns `agent_session_id`, `subject`, `job_id` and
+a queue position; the finished run is pushed
 onto the host's background-completion queue — the same queue a background process finishes on —
 so the calling session is woken with an `[ASYNC DELEGATION COMPLETE]` turn. `background: false`
 returns the answer in the payload. A background call needs the calling session id; without one the
@@ -123,21 +126,40 @@ without bound.
 
 ## History on disk
 
-Every run appends to one file per agent and session:
+Every call is one agent session with exactly one file:
 
 ```
-<HERMES_HOME>/sessions/<agent_name>/<session_id>.jsonl
+<HERMES_HOME>/sessions/<agent_name>/<agent_session_id>.jsonl
 ```
 
-- One JSON object per line, append-only. `kind: "run"` headers delimit runs; `kind: "msg"` rows
-  carry `role`, `text`, `tool_calls`, `tool_call_id`/`name`/`result` and reasoning.
-- Different agents never share a file, and different sessions of one agent never share one.
-- The next run of the same agent in the same session reads that file back as
-  `conversation_history`, so the agent continues its own thread. A replayed history prefix is
-  de-duplicated by content fingerprint, so the file grows by what happened, not by the prompt
+- The tool returns `agent_session_id` and `subject`; both identify the session, and the id is what
+  the transcript, the `agent_session` row and `agent_out` are keyed on.
+- One JSON object per line, append-only. The `kind: "run"` header carries `agent_session_id`;
+  `kind: "msg"` rows carry `role`, `text`, `tool_calls`, `tool_call_id`/`name`/`result` and
+  reasoning.
+- Different agents never share a file, and different agent sessions never share one.
+- There is **no implicit continuation**: a second call with the same `agent_name` starts a fresh
+  session with its own transcript. To carry a conversation forward, pass `continue_from` with the
+  previous `agent_session_id`; that history seeds the new run, and a replayed prefix is
+  de-duplicated by content fingerprint so the new file grows by what happened, not by the prompt
   length.
 - The system prompt is stored once per distinct text and is **not** replayed as a conversation
   turn; the host owns it.
+
+## Reading a run back (`agent_out`)
+
+`agent_out` reads an agent session after the fact, by `agent_session_id` or by `subject`:
+
+| Mode | Returns |
+|---|---|
+| `final_response` | The settled answer (`null` plus the row's `status` while the run is still going). |
+| `artifact` | The run's recorded artifact manifest; `null` until a run records one, with `transcript_path` always reported. |
+| `history` | The full JSONL transcript as `events`, character-capped (`truncated` says when the file is longer). |
+
+`agent_session` rows live in `state.db` (table `agent_session`): the id, the agent name, the
+unique subject, the transcript path, the artifact manifest and the final answer. Rows are inserted
+before dispatch, so the id the tool returned resolves immediately, and settled from whichever
+thread finishes the run.
 
 ## Pool and limits
 
@@ -180,10 +202,10 @@ def register(ctx):
 
 Parameters are `agent.agent_run.run`'s keyword surface: `context`, `model`, `provider`,
 `api_mode`, `toolsets`, `system_message`, `max_iterations`, `project_dir`, `all_tools`,
-`read_only`, `reasoning_effort`, `worktree`, `history`, `session_id`, `layer`,
-`history_session`, `account_task`, `skip_memory`, `skip_context_files`, `skip_background_review`,
-`load_soul_identity`, `extra_tools`, `cache_scope`, `tool_guardrails`, `meta`,
-`record_history`. The run inherits the plugin's profile scope (home, secrets, config) because the
+`read_only`, `reasoning_effort`, `worktree`, `history`, `session_id`, `agent_session_id`,
+`layer`, `history_session`, `account_task`, `skip_memory`, `skip_context_files`,
+`skip_background_review`, `load_soul_identity`, `extra_tools`, `cache_scope`, `tool_guardrails`,
+`meta`, `record_history`. The run inherits the plugin's profile scope (home, secrets, config) because the
 pool copies the submitter's contextvars onto the worker thread.
 
 Feature-detect with `getattr(ctx, "agent_loop", None)`: a host without the capability (including

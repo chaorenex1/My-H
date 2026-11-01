@@ -898,6 +898,24 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     origin_session_id TEXT NOT NULL DEFAULT ''
 );
 
+-- One row per named in-process agent session (the ``agent`` tool). The identity ``agent_out``
+-- resolves (by id or by unique subject), the JSONL transcript the session owns, and the run's
+-- final answer. Not a second conversation store: the transcript file is the history.
+CREATE TABLE IF NOT EXISTS agent_session (
+    agent_session_id TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    parent_session_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    transcript_path TEXT NOT NULL,
+    artifact_manifest TEXT,
+    final_response TEXT,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_subject ON agent_session(subject);
+CREATE INDEX IF NOT EXISTS idx_agent_session_parent ON agent_session(agent_name, parent_session_id);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
