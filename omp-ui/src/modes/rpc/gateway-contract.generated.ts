@@ -1927,6 +1927,23 @@ export interface BotRelayReplyParams {
   error?: string | null
   reason?: string | null
 }
+export interface OmpAppearanceGetParams {
+  profile?: string | null
+}
+/** ``values``: every setting id (dotted, e.g. ``theme.dark``) → its effective JSON value. */
+export interface OmpAppearanceGetResult {
+  values?: Record<string, unknown>
+}
+/** ``key`` is the shell's setting id (dots nest the YAML section); ``null`` removes the key. */
+export interface OmpAppearanceSetParams {
+  profile?: string | null
+  key: string
+  value?: unknown
+}
+export interface OmpAppearanceSetResult {
+  key: string
+  value?: unknown
+}
 export interface I18nLanguagesResult {
   languages: LanguageOption[]
 }
@@ -6721,6 +6738,10 @@ export interface RpcMethods {
   'model.options': { params: ModelOptionsParams; result: ModelOptionsResult }
   /** Save an API key for a provider and return its refreshed inventory row. */
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult }
+  /** Every omp-ui Appearance setting in config.yaml's ``omp.appearance``, defaulted as omp defines it. */
+  'omp.appearance.get': { params: OmpAppearanceGetParams; result: OmpAppearanceGetResult }
+  /** Write (or, with a null value, remove) one omp-ui Appearance setting in config.yaml. */
+  'omp.appearance.set': { params: OmpAppearanceSetParams; result: OmpAppearanceSetResult }
   /** Write onboarding.run in the root profile's config.yaml; answers the new state. */
   'onboarding.set_run': { params: OnboardingSetRunParams; result: OnboardingRunStateResult }
   /** Skip setup: end the session's onboarding run and close the card that waits. */
@@ -7126,6 +7147,8 @@ export const RPC_METHODS = [
   'model.disconnect',
   'model.options',
   'model.save_key',
+  'omp.appearance.get',
+  'omp.appearance.set',
   'onboarding.set_run',
   'onboarding.skip',
   'onboarding.start',

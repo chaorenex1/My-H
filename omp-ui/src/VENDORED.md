@@ -1,77 +1,55 @@
-# Vendored oh-my-pi sources
+# Vendored dependencies of the omp shell
 
-`omp-ui/src` is a byte-identical snapshot of `packages/coding-agent/src` at
-oh-my-pi `6a86df8539fccf3ad7818081266e554022fc21bc` (18.14.0, MIT — see `LICENSE`),
-plus `src/vendor/**`: the closure of the non-renderer, non-native packages the shell imports.
-`src/assets/**` carries the package-level files the shell imports.
-
-Refresh with:
-
-```bash
-python omp-ui/scripts/sync-upstream.py        # OMP_SRC=<checkout> to point elsewhere
-cd omp-ui && bun run check:imports && bun run check
-```
-
-The script copies the shell snapshot, rebuilds the vendor closure, rewrites every
-specifier, copies the assets, and re-applies the patches below. It is idempotent.
+`omp-ui/src` is no longer a byte-identical upstream snapshot. The 2026-11-01 carve removed omp's
+product code and kept only the rendering core, the Hermes gateway data-ingress layer and the RPC
+protocol; the remaining `src/vendor/**` packages are the libraries those parts import.
 
 ## Dependency rule
 
-`package.json` `dependencies` is exactly `@oh-my-pi/pi-tui` (renderer) and
-`@oh-my-pi/pi-natives` (native addon). pi-natives publishes JavaScript sources plus a
-platform `.node` through its `optionalDependencies`, and its `exports` map covers
-`/path`, `/vcs`, `/clipboard`, `/desktop`, and the notices file, so the shell and
-pi-tui import it by name. Every other `@oh-my-pi/*` specifier is rewritten to a
-relative path under `src/vendor/<pkg>/`. `scripts/check-imports.ts` enforces this
-(R1–R3/R5) and that no relative import leaves `src/` or fails to resolve.
+`package.json` `dependencies` is exactly `@oh-my-pi/pi-tui` (renderer) and `@oh-my-pi/pi-natives`
+(native addon). Every other `@oh-my-pi/*` specifier is rewritten to a relative path under
+`src/vendor/<pkg>/`; `scripts/check-imports.ts` enforces this (R1–R3/R5) and that no relative import
+leaves `src/` or fails to resolve. `tsconfig.json` `paths` map the vendored specifiers to the same
+modules so typecheck and runtime share one identity.
 
-pi-natives is pinned to the release that carries the symbols the pinned shell calls
-(`FileLock.isHeld`; 18.14.0 does not export it), and pi-tui is bumped with it so both
-resolve one package identity.
+There is **no sync script** any more: upstream refreshes would restore the deleted agent, so the
+tree is maintained here.
 
-The tsconfig `paths` map points the vendored specifiers at the vendored files, so
-pi-tui's internal `@oh-my-pi/*` imports resolve to the same modules as the shell's
-(one identity for `const enum`s and classes) at typecheck time and at runtime under Bun.
+## Vendored packages
 
-## Layout
-
-| Vendor dir | Upstream | Why |
+| Vendor dir | Upstream | Why it stays |
 |---|---|---|
-| `vendor/utils/` | `packages/utils/src` | dirs/env/logging/chalk/marked/… |
-| `vendor/ai/` | `packages/ai/src` | message + provider types, OAuth, usage |
-| `vendor/agent/` | `packages/agent/src` | `Agent`, compaction, thinking |
-| `vendor/catalog/` | `packages/catalog/src` | model identity/compat (`rules.json` + `rules.d.json.ts`) |
-| `vendor/wire/` | `packages/wire/src` | tool wire types |
-| `vendor/omptype/` | `packages/omptype/src` | schema/zod/typebox helpers |
-| `vendor/stats/` | `packages/stats/src` | local stats store (client panel not vendored) |
-| `vendor/snapcompact/` | `packages/snapcompact/src` | compaction |
-| `vendor/mnemopi/` | `packages/mnemopi/src` | memory runtime |
+| `vendor/ai/` | `packages/ai/src` | message/model/usage types, `AuthStorage` and the in-memory credential store the display catalog is constructed with |
+| `vendor/agent/` | `packages/agent/src` | `AgentMessage`/`AgentEvent` vocabulary and the `Agent` message container the renderer walks (its turn loop is unused) |
+| `vendor/catalog/` | `packages/catalog/src` | model identity/compat (`rules.json` + `rules.d.json.ts`), effort levels |
+| `vendor/utils/` | `packages/utils/src` | dirs/env/logging/chalk/marked helpers, postmortem |
+| `vendor/wire/` | `packages/wire/src` | `INTENT_FIELD` and the tool-wire text types the transcript renders |
+| `vendor/omptype/` | `packages/omptype/src` | schema helpers used by `vendor/ai` |
+| `vendor/snapcompact/` | `packages/snapcompact/src` | compaction summary helpers still imported by `vendor/agent` |
 
-Only files reachable from the shell (plus pi-tui's own peer imports, seeded in the
-script) are copied; `*.d.json.ts` companions travel with their JSON. `pi-tui` and
-`pi-natives` are not copied — they stay installed.
+Removed with the carve: `vendor/mnemopi`, `vendor/stats`, `src/assets/**` (its package-level files were
+only read by deleted code), the refresh script, and every upstream module outside the import closure
+of the retained shell (telemetry exporters, providers, local backends).
 
-## Local patches
+## Brand patch (pi-tui)
 
-Applied by `scripts/sync-upstream.py` after each refresh:
+The My-H fork replaces omp's visible brand marks in the renderer, which is installed rather than
+vendored, so the edits ride a pinned Bun patch: `patches/@oh-my-pi%2Fpi-tui@18.14.1.patch`
+(sources under `node_modules/@oh-my-pi/pi-tui`), registered in `package.json`
+`patchedDependencies`. `bun install` — including the launcher's `bun install --production` —
+applies it. The patch covers:
 
-1. `main.ts` — `main()` delegates to `modes/rpc/hermes-entry.ts` (`runHermesOmp`), which builds
-   the Hermes gateway session and boots `InteractiveMode`; omp's `runCli`/`runRootCommand` launch
-   graph, CLI command registry, profile flags, and prepaint dispatch are not on the `hermes omp`
-   path. The entry module lives outside the snapshot (the script never rewrites it), so a refresh
-   only has to restore this delegator. `src/cli.ts` stays in the tree only as the worker-host
-   fallback that spawned workers re-enter.
-2. R2 relocations — the shell's repo-root imports (`LICENSE`, `package.json`,
-   `CHANGELOG.md`, `THIRD-PARTY-NOTICES.txt`) are pointed at `src/LICENSE` and
-   `src/assets/`, which the script copies from the coding-agent package.
+- `src/prompt/welcome.ts` — the welcome/setup lockup: the ✿ mark, the `My-H` wordmark, the vite
+  gradient ladder, and the narrow-width fallback (wordmark before mark).
+- `src/setup/scenes/splash.ts` — the compact splash's brand name.
+- `src/theme/symbols.ts` — `icon.omp`: `✿` (unicode/nerdfont presets), `myh` (ascii).
 
-No other upstream file is edited; `git diff` against the pinned commit is empty for
-everything under `src/` except the entry patch and the relocation sites.
+Bumping `@oh-my-pi/pi-tui` invalidates the patch (Bun refuses to apply it and the install fails
+loudly): regenerate with `bun patch @oh-my-pi/pi-tui@<version>` → edit → `bun patch --commit
+node_modules/@oh-my-pi/pi-tui`.
 
 ## Dev dependencies
 
-`devDependencies` mirror the coding-agent's optional/runtime packages at the versions
-the upstream lockfile resolves (transformers, onnxruntime, fastembed, OpenTelemetry,
-`@types/bun` 1.4.2, `typescript` 7.0.2). They exist so `tsc` typechecks the untouched
-STT/TTS/tiny/telemetry files; they are not `dependencies` and the wired path does not
-import them at runtime unless the user invokes those features.
+`devDependencies` keeps only what the retained sources typecheck against: `@types/bun`,
+`typescript`, and `@opentelemetry/api` (imported by `vendor/agent/telemetry.ts`). The transformers /
+ONNX / exporter stack went with the deleted STT/TTS/tiny/telemetry paths.

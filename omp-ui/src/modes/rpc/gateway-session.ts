@@ -52,6 +52,7 @@ import {
 	type GatewayServerRequestHandler
 } from "./gateway-client"
 import { connectGateway, type GatewayConnection, type GatewayConnectOptions } from "./gateway-socket"
+import { setLiveGatewayClient } from "./gateway-live-client"
 
 /** One session event plus the gateway metadata the shell does not need but a replay guard does. */
 export type GatewaySessionEvent = AgentSessionEvent
@@ -187,31 +188,34 @@ const materialize = (draft: AssistantDraft): AssistantMessage => {
  * with the structured form, so `result.content.filter(...)` and `updateResult({...result})` cannot
  * see a string.
  */
-function projectToolResult(payload: Record<string, unknown>): {
-	content: (TextContent | ImageContent)[]
-	details?: Record<string, unknown>
-	isError: boolean
-} {
-	const isError = payload.is_error === true
-	const raw = payload.result
-	let decoded: unknown = raw
-	if (typeof raw === "string") {
-		try {
-			decoded = JSON.parse(raw)
-		} catch {
-			decoded = undefined
-		}
+function decodeToolResult(raw: unknown): unknown {
+	if (typeof raw !== "string") return raw
+	try {
+		return JSON.parse(raw)
+	} catch {
+		return undefined
 	}
+}
+
+/** Structured content blocks the decoded result carries, when it has any. */
+function toolResultContent(decoded: unknown): (TextContent | ImageContent)[] | undefined {
 	const record = asRecord(decoded)
-	const content = Array.isArray(record?.content)
-		? (record.content as (TextContent | ImageContent)[])
-		: undefined
-	const text =
+	return Array.isArray(record?.content) ? (record.content as (TextContent | ImageContent)[]) : undefined
+}
+
+/** Display text: explicit `result_text`, then the decoded record's text, then the raw payload. */
+function toolResultText(payload: Record<string, unknown>, decoded: unknown): string {
+	const record = asRecord(decoded)
+	return (
 		asString(payload.result_text) ??
 		(record && typeof record.text === "string" ? record.text : undefined) ??
 		(typeof decoded === "string" ? decoded : undefined) ??
-		(typeof raw === "string" ? raw : "") ??
-		""
+		(typeof payload.result === "string" ? payload.result : "")
+	)
+}
+
+/** Card metadata: summary/duration/diff/labels plus the todo phases the HUD reads. */
+function toolResultDetails(payload: Record<string, unknown>): Record<string, unknown> {
 	const details: Record<string, unknown> = {}
 	if (asString(payload.summary)) details.summary = payload.summary
 	if (asNumber(payload.duration_s) !== undefined) details.duration_s = payload.duration_s
@@ -224,11 +228,55 @@ function projectToolResult(payload: Record<string, unknown>): {
 		details.op = "init"
 		details.phases = gatewayTodoPhases(payload.todos)
 	}
+	return details
+}
+
+/**
+ * Hermes `tool.complete.result` is a bounded JSON *string*; the shell's tool cards consume
+ * `AgentToolResult` (`content` blocks + `details`). Decode whichever shape arrived and always answer
+ * with the structured form, so `result.content.filter(...)` and `updateResult({...result})` cannot
+ * see a string.
+ */
+function projectToolResult(payload: Record<string, unknown>): {
+	content: (TextContent | ImageContent)[]
+	details?: Record<string, unknown>
+	isError: boolean
+} {
+	const decoded = decodeToolResult(payload.result)
+	const content = toolResultContent(decoded)
+	const text = toolResultText(payload, decoded)
+	const details = toolResultDetails(payload)
 	return {
 		content: content?.length ? content : [textContent(text)],
 		...(Object.keys(details).length ? { details } : {}),
-		isError
+		isError: payload.is_error === true
 	}
+}
+
+/** Hermes row status vocabulary → the shell's task status. */
+const TODO_ROW_STATUS: Readonly<Record<string, TodoPhase["tasks"][number]["status"]>> = {
+	done: "completed",
+	complete: "completed",
+	completed: "completed",
+	in_progress: "in_progress",
+	active: "in_progress",
+	cancelled: "abandoned",
+	abandoned: "abandoned",
+	dropped: "abandoned",
+	blocked: "blocked"
+}
+
+function todoRowContent(row: Record<string, unknown>): string | undefined {
+	for (const key of ["content", "text", "title"] as const) {
+		const value = row[key]
+		if (typeof value === "string" && value) return value
+	}
+	return undefined
+}
+
+function todoRowStatus(row: Record<string, unknown>): TodoPhase["tasks"][number]["status"] {
+	const raw = typeof row.status === "string" ? row.status.toLowerCase().replace(/[\s-]/g, "_") : ""
+	return TODO_ROW_STATUS[raw] ?? "pending"
 }
 
 /** Hermes todo rows → the shell's phase/task projection (shared with the session bridge). */
@@ -237,32 +285,13 @@ export function gatewayTodoPhases(todos: readonly unknown[]): TodoPhase[] {
 	for (const raw of todos) {
 		if (!raw || typeof raw !== "object") continue
 		const row = raw as Record<string, unknown>
-		const content =
-			typeof row.content === "string"
-				? row.content
-				: typeof row.text === "string"
-					? row.text
-					: typeof row.title === "string"
-						? row.title
-						: undefined
+		const content = todoRowContent(row)
 		if (!content) continue
-		const rawStatus =
-			typeof row.status === "string" ? row.status.toLowerCase().replace(/[\s-]/g, "_") : "pending"
-		const status: TodoPhase["tasks"][number]["status"] =
-			rawStatus === "done" || rawStatus === "complete" || rawStatus === "completed"
-				? "completed"
-				: rawStatus === "in_progress" || rawStatus === "active"
-					? "in_progress"
-					: rawStatus === "cancelled" || rawStatus === "abandoned" || rawStatus === "dropped"
-						? "abandoned"
-						: rawStatus === "blocked"
-							? "blocked"
-							: "pending"
 		const phase = typeof row.phase === "string" && row.phase ? row.phase : ""
 		const tasks = phases.get(phase) ?? []
 		tasks.push({
 			content,
-			status,
+			status: todoRowStatus(row),
 			...(typeof row.blocker === "string" ? { blocker: row.blocker } : {})
 		})
 		phases.set(phase, tasks)
@@ -594,7 +623,11 @@ export class GatewayOmpSession {
 			this.client.request("session.stats", { session_id: this.#state.sessionId }),
 			this.client.request("session.usage", { session_id: this.#state.sessionId })
 		])
-		if (info.status === "fulfilled") this.#adoptInfo(info.value as CanonicalSessionInfo | SessionLiveInfo)
+		if (info.status === "fulfilled" && this.#adoptInfo(info.value as CanonicalSessionInfo | SessionLiveInfo)) {
+			// The served model can differ from the create snapshot (another client switched it, or the
+			// agent resolved its config default late); the shell only follows the status line when told.
+			this.#emit({ type: "model_changed" })
+		}
 		if (stats.status === "fulfilled") this.#stats = stats.value as SessionStats
 		if (usage.status === "fulfilled") this.#usage = usage.value as SessionUsageResult
 	}
@@ -686,7 +719,10 @@ export class GatewayOmpSession {
 		}
 	}
 
-	#adoptInfo(info: CanonicalSessionInfo | SessionLiveInfo): void {
+	/** Adopt a live `session.info` snapshot; `true` when the served model/provider changed. */
+	#adoptInfo(info: CanonicalSessionInfo | SessionLiveInfo): boolean {
+		const previousModel = this.#state.model
+		const previousProvider = this.#state.provider
 		if (info.model) this.#state.model = info.model
 		if (info.provider) this.#state.provider = info.provider
 		if (info.title) this.#state.title = info.title
@@ -700,6 +736,7 @@ export class GatewayOmpSession {
 		if (generation !== undefined) this.#state.executionGeneration = generation
 		const revision = asNumber(live.revision)
 		if (revision !== undefined) this.#state.revision = revision
+		return this.#state.model !== previousModel || this.#state.provider !== previousProvider
 	}
 
 	#emitUserMessage(text: string, images?: ImageContent[]): void {
@@ -717,224 +754,231 @@ export class GatewayOmpSession {
 	// ---------------------------------------------------------------------
 
 	/** Route one decoded notification; public for the replay drain in {@link connectGatewayOmpSession}. */
+	/** Every live frame the shell projects; unknown types are ignored by the table lookup. */
+	readonly #notificationHandlers: Record<string, (payload: Record<string, unknown>) => void> = {
+		"gateway.ready": () => {},
+		"session.info": payload => this.#onSessionInfo(payload),
+		"session.title": payload => this.#onSessionTitle(payload),
+		"turn.start": () => this.#onTurnStart(),
+		"turn.end": payload => this.#onTurnEnd(payload),
+		"message.start": payload => this.#onMessageStart(payload),
+		"message.block_start": payload => this.#onMessageBlockStart(payload),
+		"message.delta": payload => this.#onMessageDelta(payload),
+		"message.interim": payload => this.#onMessageInterim(payload),
+		"reasoning.delta": payload => this.#onReasoningDelta(payload),
+		"thinking.delta": payload => this.#onReasoningDelta(payload),
+		"message.complete": payload => this.#complete(payload),
+		"tool.start": payload => this.#onToolStart(payload),
+		"tool.progress": payload => this.#onToolProgress(payload),
+		"tool.complete": payload => this.#onToolComplete(payload),
+		"todo.updated": payload => this.#onTodoUpdated(payload),
+		"queue.updated": payload => this.#onQueueUpdated(payload),
+		"prompt.result": payload => this.#onPromptResult(payload),
+		"session.settled": () => this.#onSessionSettled(),
+		"session.usage": payload => {
+			this.#usage = payload as unknown as SessionUsageResult
+		},
+		"status.update": payload => this.#onStatusUpdate(payload),
+		"agent.print": () => {},
+		"notice": payload => this.#onNotice(payload),
+		"error": payload => this.#onErrorNotice(payload)
+	}
+
 	handleNotification(notification: GatewayNotification): void {
 		if (this.#closed) return
 		const sessionId = notification.sessionId
 		if (sessionId !== undefined && this.#state.sessionId && sessionId !== this.#state.sessionId) return
-		const payload = notification.payload as Record<string, unknown>
-		switch (notification.type) {
-			case "gateway.ready":
-				return
-			case "session.info": {
-				this.#adoptInfo(payload as unknown as SessionLiveInfo)
-				return
-			}
-			case "session.title": {
-				const title = asString(payload.title)
-				if (title) this.#state.title = title
-				return
-			}
-			case "turn.start": {
-				this.#running = true
-				this.#emit({ type: "turn_start" })
-				return
-			}
-			case "turn.end": {
-				this.#compacting = false
-				const message = asRecord(payload.message)
-				this.#emit({
-					type: "turn_end",
-					message: message ? (message as unknown as AgentMessage) : this.#lastAssistantMessage(),
-					toolResults: []
-				})
-				return
-			}
-			case "message.start": {
-				this.#openDraft(asString(payload.message_id) ?? `${this.#state.sessionId}:${now()}`)
-				return
-			}
-			case "message.block_start": {
-				this.#ensureDraft()
-				const index = asNumber(payload.content_index)
-				if (index !== undefined) this.#draft!.lastIndex = index
-				return
-			}
-			case "message.delta": {
-				const draft = this.#ensureDraft()
-				const text = payload.text
-				if (typeof text !== "string" || text === "") {
-					// A null/empty chunk is the reply segment boundary: close the current text block.
-					if (payload.text === null) this.#closeTextBlock(draft)
-					return
-				}
-				const index = asNumber(payload.content_index) ?? draft.lastIndex
-				draft.lastIndex = index
-				draft.text.set(index, (draft.text.get(index) ?? "") + text)
-				draft.sawDelta = true
-				const partial = materialize(draft)
-				this.#emit({
-					type: "message_update",
-					message: partial,
-					assistantMessageEvent: { type: "text_delta", contentIndex: index, delta: text, partial }
-				})
-				return
-			}
-			case "message.interim": {
-				const draft = this.#ensureDraft()
-				const text = asString(payload.text)
-				if (text) {
-					const index = draft.lastIndex
-					draft.text.set(index, text)
-					const partial = materialize(draft)
-					this.#emit({
-						type: "message_update",
-						message: partial,
-						assistantMessageEvent: { type: "text_end", contentIndex: index, content: text, partial }
-					})
-				}
-				return
-			}
-			case "reasoning.delta":
-			case "thinking.delta": {
-				const draft = this.#ensureDraft()
-				const text = asString(payload.text)
-				if (!text) return
-				const index = draft.thinking.size === 0 ? draft.lastIndex : [...draft.thinking.keys()].at(-1)!
-				draft.thinking.set(index, (draft.thinking.get(index) ?? "") + text)
-				draft.sawDelta = true
-				const partial = materialize(draft)
-				this.#emit({
-					type: "message_update",
-					message: partial,
-					assistantMessageEvent: { type: "thinking_delta", contentIndex: index, delta: text, partial }
-				})
-				return
-			}
-			case "message.complete": {
-				this.#complete(payload)
-				return
-			}
-			case "tool.start": {
-				// Hermes streams one assistant message across tool rounds: text before the tool and the
-				// answer after it would share one block, leaving the tool cards below the answer. Close
-				// the pre-tool segment here; the next delta opens the post-tool block under the cards.
-				this.#closeSegmentForTool()
-				const toolId = asString(payload.tool_id) ?? ""
-				const name = asString(payload.name) ?? ""
-				this.#emit({
-					type: "tool_execution_start",
-					toolCallId: toolId,
-					toolName: name,
-					args: payload.args ?? {},
-					intent: asString(payload.context)
-				})
-				return
-			}
-			case "tool.progress": {
-				const message = asString(payload.message)
-				this.#emit({
-					type: "tool_execution_update",
-					toolCallId: asString(payload.tool_id) ?? "",
-					toolName: asString(payload.name) ?? "",
-					args: {},
-					partialResult: {
-						content: message ? [textContent(message)] : [],
-						details: {
-							progress: asNumber(payload.progress) ?? 0,
-							total: asNumber(payload.total),
-							percent: asNumber(payload.percent),
-							message
-						}
-					}
-				})
-				return
-			}
-			case "tool.complete": {
-				this.#emit({
-					type: "tool_execution_end",
-					toolCallId: asString(payload.tool_id) ?? "",
-					toolName: asString(payload.name) ?? "",
-					result: projectToolResult(payload),
-					isError: payload.is_error === true
-				})
-				return
-			}
-			case "todo.updated": {
-				const todos = Array.isArray(payload.todos) ? payload.todos : []
-				this.#todos = todos
-				return
-			}
-			case "queue.updated": {
-				this.#queue = {
-					steering: Array.isArray(payload.steering) ? payload.steering.filter((v): v is string => typeof v === "string") : [],
-					followUp: Array.isArray(payload.follow_up)
-						? payload.follow_up.filter((v): v is string => typeof v === "string")
-						: [],
-					liveSteered: asNumber(payload.live_steered) ?? 0
-				}
-				this.#emit({ type: "queue_update", ...this.#queue })
-				return
-			}
-			case "prompt.result": {
-				this.#running = false
-				this.#lastAdmissionId = undefined
-				const status = asString(payload.status)
-				const error = asRecord(payload.error)
-				if ((status === "error" || error) && payload.error !== null && payload.error !== undefined) {
-					// A failed turn otherwise leaves only a partial (or empty) assistant block; name it.
-					this.#emit({
-						type: "notice",
-						level: "error",
-						message: asString(error?.message) ?? "Turn failed",
-						source: "gateway"
-					})
-				}
-				this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
-				// Stats/usage lag the terminal frame: refetch right after so the status line's
-				// cost/context segments paint the turn that just ended, then repaint.
-				void this.refresh()
-					.then(() => {
-						if (!this.#closed) this.#emit({ type: "model_changed" })
-					})
-					.catch((error: unknown) => this.#report(error))
-				return
-			}
-			case "session.settled": {
-				if (this.#running) {
-					this.#running = false
-					this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
-				}
-				return
-			}
-			case "session.usage": {
-				this.#usage = payload as unknown as SessionUsageResult
-				return
-			}
-			case "status.update": {
-				// `status.update` is the TUI-facing projection of the same line `agent.print` carries;
-				// rendering both would duplicate every lifecycle notice.
-				const kind = (asString(payload.kind) ?? "").toLowerCase()
-				if (kind.includes("compact")) this.#compacting = !kind.includes("done") && !kind.includes("end")
-				const text = asString(payload.text) ?? asString(payload.message)
-				if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
-				return
-			}
-			case "agent.print": {
-				return
-			}
-			case "notice": {
-				const text = asString(payload.message)
-				if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
-				return
-			}
-			case "error": {
-				const text = asString(payload.message) ?? "Gateway error"
-				this.#emit({ type: "notice", level: "error", message: text, source: "gateway" })
-				return
-			}
-			default:
-				return
+		this.#notificationHandlers[notification.type]?.(notification.payload as Record<string, unknown>)
+	}
+
+	#onSessionInfo(payload: Record<string, unknown>): void {
+		if (this.#adoptInfo(payload as unknown as SessionLiveInfo)) this.#emit({ type: "model_changed" })
+	}
+
+	#onSessionTitle(payload: Record<string, unknown>): void {
+		const title = asString(payload.title)
+		if (title) this.#state.title = title
+	}
+
+	#onTurnStart(): void {
+		this.#running = true
+		this.#emit({ type: "turn_start" })
+	}
+
+	#onTurnEnd(payload: Record<string, unknown>): void {
+		this.#compacting = false
+		const message = asRecord(payload.message)
+		this.#emit({
+			type: "turn_end",
+			message: message ? (message as unknown as AgentMessage) : this.#lastAssistantMessage(),
+			toolResults: []
+		})
+	}
+
+	#onMessageStart(payload: Record<string, unknown>): void {
+		this.#openDraft(asString(payload.message_id) ?? `${this.#state.sessionId}:${now()}`)
+	}
+
+	#onMessageBlockStart(payload: Record<string, unknown>): void {
+		this.#ensureDraft()
+		const index = asNumber(payload.content_index)
+		if (index !== undefined) this.#draft!.lastIndex = index
+	}
+
+	#onMessageDelta(payload: Record<string, unknown>): void {
+		const draft = this.#ensureDraft()
+		const text = payload.text
+		if (typeof text !== "string" || text === "") {
+			// A null/empty chunk is the reply segment boundary: close the current text block.
+			if (payload.text === null) this.#closeTextBlock(draft)
+			return
 		}
+		const index = asNumber(payload.content_index) ?? draft.lastIndex
+		draft.lastIndex = index
+		draft.text.set(index, (draft.text.get(index) ?? "") + text)
+		draft.sawDelta = true
+		const partial = materialize(draft)
+		this.#emit({
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: { type: "text_delta", contentIndex: index, delta: text, partial }
+		})
+	}
+
+	#onMessageInterim(payload: Record<string, unknown>): void {
+		const draft = this.#ensureDraft()
+		const text = asString(payload.text)
+		if (!text) return
+		const index = draft.lastIndex
+		draft.text.set(index, text)
+		const partial = materialize(draft)
+		this.#emit({
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: { type: "text_end", contentIndex: index, content: text, partial }
+		})
+	}
+
+	#onReasoningDelta(payload: Record<string, unknown>): void {
+		const draft = this.#ensureDraft()
+		const text = asString(payload.text)
+		if (!text) return
+		const index = draft.thinking.size === 0 ? draft.lastIndex : [...draft.thinking.keys()].at(-1)!
+		draft.thinking.set(index, (draft.thinking.get(index) ?? "") + text)
+		draft.sawDelta = true
+		const partial = materialize(draft)
+		this.#emit({
+			type: "message_update",
+			message: partial,
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: index, delta: text, partial }
+		})
+	}
+
+	#onToolStart(payload: Record<string, unknown>): void {
+		// Hermes streams one assistant message across tool rounds: text before the tool and the answer
+		// after it would share one block, leaving the tool cards below the answer. Close the pre-tool
+		// segment here; the next delta opens the post-tool block under the cards.
+		this.#closeSegmentForTool()
+		this.#emit({
+			type: "tool_execution_start",
+			toolCallId: asString(payload.tool_id) ?? "",
+			toolName: asString(payload.name) ?? "",
+			args: payload.args ?? {},
+			intent: asString(payload.context)
+		})
+	}
+
+	#onToolProgress(payload: Record<string, unknown>): void {
+		const message = asString(payload.message)
+		this.#emit({
+			type: "tool_execution_update",
+			toolCallId: asString(payload.tool_id) ?? "",
+			toolName: asString(payload.name) ?? "",
+			args: {},
+			partialResult: {
+				content: message ? [textContent(message)] : [],
+				details: {
+					progress: asNumber(payload.progress) ?? 0,
+					total: asNumber(payload.total),
+					percent: asNumber(payload.percent),
+					message
+				}
+			}
+		})
+	}
+
+	#onToolComplete(payload: Record<string, unknown>): void {
+		this.#emit({
+			type: "tool_execution_end",
+			toolCallId: asString(payload.tool_id) ?? "",
+			toolName: asString(payload.name) ?? "",
+			result: projectToolResult(payload),
+			isError: payload.is_error === true
+		})
+	}
+
+	#onTodoUpdated(payload: Record<string, unknown>): void {
+		this.#todos = Array.isArray(payload.todos) ? payload.todos : []
+	}
+
+	#onQueueUpdated(payload: Record<string, unknown>): void {
+		this.#queue = {
+			steering: Array.isArray(payload.steering) ? payload.steering.filter((v): v is string => typeof v === "string") : [],
+			followUp: Array.isArray(payload.follow_up)
+				? payload.follow_up.filter((v): v is string => typeof v === "string")
+				: [],
+			liveSteered: asNumber(payload.live_steered) ?? 0
+		}
+		this.#emit({ type: "queue_update", ...this.#queue })
+	}
+
+	#onPromptResult(payload: Record<string, unknown>): void {
+		this.#running = false
+		this.#lastAdmissionId = undefined
+		const status = asString(payload.status)
+		const error = asRecord(payload.error)
+		if ((status === "error" || error) && payload.error !== null && payload.error !== undefined) {
+			// A failed turn otherwise leaves only a partial (or empty) assistant block; name it.
+			this.#emit({
+				type: "notice",
+				level: "error",
+				message: asString(error?.message) ?? "Turn failed",
+				source: "gateway"
+			})
+		}
+		this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
+		// Stats/usage lag the terminal frame: refetch right after so the status line's cost/context
+		// segments paint the turn that just ended, then repaint.
+		void this.refresh()
+			.then(() => {
+				if (!this.#closed) this.#emit({ type: "model_changed" })
+			})
+			.catch((error: unknown) => this.#report(error))
+	}
+
+	#onSessionSettled(): void {
+		if (!this.#running) return
+		this.#running = false
+		this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
+	}
+
+	#onStatusUpdate(payload: Record<string, unknown>): void {
+		// `status.update` is the TUI-facing projection of the same line `agent.print` carries;
+		// rendering both would duplicate every lifecycle notice.
+		const kind = (asString(payload.kind) ?? "").toLowerCase()
+		if (kind.includes("compact")) this.#compacting = !kind.includes("done") && !kind.includes("end")
+		const text = asString(payload.text) ?? asString(payload.message)
+		if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
+	}
+
+	#onNotice(payload: Record<string, unknown>): void {
+		const text = asString(payload.message)
+		if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
+	}
+
+	#onErrorNotice(payload: Record<string, unknown>): void {
+		const text = asString(payload.message) ?? "Gateway error"
+		this.#emit({ type: "notice", level: "error", message: text, source: "gateway" })
 	}
 
 	/** Answer a server→client request; the caller's handler gets first refusal. */
@@ -1106,6 +1150,12 @@ export const isGenerationRefusal = (error: unknown): boolean =>
 export interface ConnectGatewayOmpSessionOptions extends Omit<GatewaySessionOptions, "connection"> {
 	/** Override the transport (tests pass a fake connection). */
 	connect?: GatewayConnectOptions
+	/**
+	 * Boot-time setup that needs the authority but must land before the session exists and before
+	 * the shell renders (the appearance panel's load + write-through). A failure here fails the
+	 * connection like a failed session.create; callers catch what they can run without.
+	 */
+	beforeSession?: (client: GatewayConnection["client"]) => Promise<void>
 }
 
 /**
@@ -1135,8 +1185,10 @@ export async function connectGatewayOmpSession(options: ConnectGatewayOmpSession
 			options.connect?.onClose?.(reason)
 		}
 	})
+	setLiveGatewayClient(connection.client)
 	let value: CanonicalSnapshot
 	try {
+		await options.beforeSession?.(connection.client)
 		value = options.resumeSessionId
 			? await connection.client.request("session.resume", {
 					session_id: options.resumeSessionId,

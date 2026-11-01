@@ -2023,6 +2023,42 @@
       }
     },
     {
+      "name": "omp.appearance.get",
+      "summary": "Every omp-ui Appearance setting in config.yaml's ``omp.appearance``, defaulted as omp defines it.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/OmpAppearanceGetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OmpAppearanceGetResult"
+        }
+      }
+    },
+    {
+      "name": "omp.appearance.set",
+      "summary": "Write (or, with a null value, remove) one omp-ui Appearance setting in config.yaml.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/OmpAppearanceSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OmpAppearanceSetResult"
+        }
+      }
+    },
+    {
       "name": "onboarding.set_run",
       "summary": "Write onboarding.run in the root profile's config.yaml; answers the new state.",
       "params": [
@@ -26301,6 +26337,87 @@
           }
         },
         "title": "OkResult",
+        "type": "object"
+      },
+      "OmpAppearanceGetParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "title": "OmpAppearanceGetParams",
+        "type": "object"
+      },
+      "OmpAppearanceGetResult": {
+        "additionalProperties": false,
+        "description": "``values``: every setting id (dotted, e.g. ``theme.dark``) \u2192 its effective JSON value.",
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "OmpAppearanceGetResult",
+        "type": "object"
+      },
+      "OmpAppearanceSetParams": {
+        "additionalProperties": false,
+        "description": "``key`` is the shell's setting id (dots nest the YAML section); ``null`` removes the key.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "default": null,
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "OmpAppearanceSetParams",
+        "type": "object"
+      },
+      "OmpAppearanceSetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "default": null,
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "OmpAppearanceSetResult",
         "type": "object"
       },
       "OnboardingCatalogPlugin": {

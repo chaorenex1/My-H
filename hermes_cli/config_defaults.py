@@ -7,11 +7,10 @@ docs of config.yaml.
 from hermes_cli.config_defaults_agent_loop import _agent_loop
 from hermes_cli.config_defaults_auxiliary import _aux
 from hermes_cli.config_defaults_code_execution import _code_execution
+from hermes_cli.config_defaults_omp import OMP_CONFIG_SECTION
 
-#: Image every container terminal backend (docker/modal/daytona, the singularity plugin) uses unless the
-#: user pins one. LEGACY_SANDBOX_IMAGES are the plain defaults that preceded the desktop stack
-#: (the 3.14 pin shipped between the two without a migration); a saved config still holding one
-#: is the template copied, and the config migration unsets it, never a user's own pin.
+#: Image every container backend uses unless the user pins one. LEGACY_SANDBOX_IMAGES are the
+#: pre-desktop defaults; a saved config holding one is the template copied, and migration unsets it.
 DEFAULT_SANDBOX_IMAGE = "nousresearch/hermes-sandbox:desktop"
 LEGACY_SANDBOX_IMAGES = ("nikolaik/python-nodejs:python3.11-nodejs20", "nikolaik/python-nodejs:python3.14-nodejs22")
 LEGACY_SANDBOX_IMAGE = LEGACY_SANDBOX_IMAGES[0]
@@ -2647,6 +2646,7 @@ DEFAULT_CONFIG = {
             "max_attempts": 2,  # Crash-loop breaker: max automatic re-runs of one interrupted turn.
         },
     },
+    **OMP_CONFIG_SECTION,
 
     "nous": {
         # Upper bound (seconds) on the Nous auth keepalive tick, which derives from the

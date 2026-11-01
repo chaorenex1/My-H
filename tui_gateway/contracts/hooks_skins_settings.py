@@ -12,7 +12,7 @@ from pydantic import Field
 
 from .base import JsonValue, Result
 from .common import ProfileParams
-from .registry import canonical_method
+from .registry import canonical_method, method
 
 # ── hooks.* ────────────────────────────────────────────────────────────────────────────────────
 
@@ -102,3 +102,42 @@ class ConfigSchemaResult(Result):
 
 canonical_method("config.schema", params=ConfigSchemaParams, result=ConfigSchemaResult,
                  doc="Flattened settings schema so a client renders typed controls; writes still use config.set.")
+
+
+# ── omp.appearance.* ──────────────────────────────────────────────────────────────────────────
+#
+# The omp-ui shell's Appearance panel is profile Hermes config: every setting lives in config.yaml
+# under one dedicated ``omp.appearance`` section, nested by the shell's setting id, with omp's own
+# registry values as the DEFAULT_CONFIG defaults. The authority shares the config backend, but the
+# panel is a sidecar verb (the authority answers -32601 and ``ws_legacy_fallback`` dispatches it),
+# so it stays ordinary ``method``s.
+
+
+class OmpAppearanceGetParams(ProfileParams):
+    pass
+
+
+class OmpAppearanceGetResult(Result):
+    """``values``: every setting id (dotted, e.g. ``theme.dark``) → its effective JSON value."""
+
+    values: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+method("omp.appearance.get", params=OmpAppearanceGetParams, result=OmpAppearanceGetResult,
+       doc="Every omp-ui Appearance setting in config.yaml's ``omp.appearance``, defaulted as omp defines it.")
+
+
+class OmpAppearanceSetParams(ProfileParams):
+    """``key`` is the shell's setting id (dots nest the YAML section); ``null`` removes the key."""
+
+    key: str
+    value: JsonValue = None
+
+
+class OmpAppearanceSetResult(Result):
+    key: str
+    value: JsonValue = None
+
+
+method("omp.appearance.set", params=OmpAppearanceSetParams, result=OmpAppearanceSetResult,
+       doc="Write (or, with a null value, remove) one omp-ui Appearance setting in config.yaml.")

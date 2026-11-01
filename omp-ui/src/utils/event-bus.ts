@@ -2,8 +2,7 @@ import { logger } from "../vendor/utils/src/index.ts";
 
 /**
  * Methods are bound arrow fields: upstream Pi's `createEventBus()` returns
- * closures, so extensions (e.g. `pi-gemini-acp`) detach `pi.events.on` and
- * `pi.events.emit` and call them without a receiver.
+ * closures, so callers may detach `on`/`emit` and call them without a receiver.
  */
 export class EventBus {
 	readonly #listeners = new Map<string, Set<(data: unknown) => void>>();
@@ -35,21 +34,4 @@ export class EventBus {
 	clear = (): void => {
 		this.#listeners.clear();
 	};
-}
-
-/**
- * Publishes a subagent frame on the session bus and the observability bus.
- * SDK embedders may pass the same EventBus for both slots; the identity check
- * skips the aliased re-emit so listeners never see duplicate frames.
- */
-export function emitSubagentFrame(
-	eventBus: EventBus | undefined,
-	subagentEventBus: EventBus | undefined,
-	channel: string,
-	payload: unknown,
-): void {
-	eventBus?.emit(channel, payload);
-	if (subagentEventBus && subagentEventBus !== eventBus) {
-		subagentEventBus.emit(channel, payload);
-	}
 }

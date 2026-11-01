@@ -40,17 +40,31 @@ METRIC_FIX = {
 
 PY_EXCLUDE = ("website/*", "*/node_modules/*", "node_modules/*")
 TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts")
-# omp-ui/src is a byte-identical snapshot of the upstream oh-my-pi shell
-# (omp-ui/src/VENDORED.md): every remedy here is an edit, and the next
-# `omp-ui/scripts/sync-upstream.py` reverts it. The Hermes-owned modules beside the snapshot
-# (the gateway client and its tests, written here, never copied from upstream) stay measured.
+# omp-ui/src is a vendored third-party shell, maintained as a unit (omp-ui/src/VENDORED.md); its
+# dependency boundary is enforced by `omp-ui/scripts/check-imports.ts` and its type checks by
+# `bun run check`. The modules Hermes owns inside it — the entry, the gateway client/projection, the
+# session facade and the controllers written here — are listed in OMP_OWNED and are measured. The
+# upstream-derived remainder (settings registry, model resolver, image pipeline, render wiring) is
+# exempt: its size and complexity come from upstream, and splitting it is not a change-local edit.
 OMP_SNAPSHOT = ("omp-ui/src/*",)
 OMP_OWNED = (
+    "omp-ui/src/main.ts",
     "omp-ui/src/modes/rpc/hermes-entry.ts",
     "omp-ui/src/modes/rpc/gateway-session.ts",
     "omp-ui/src/modes/rpc/gateway-session.test.ts",
     "omp-ui/src/modes/rpc/gateway-models.ts",
     "omp-ui/src/modes/rpc/gateway-models.test.ts",
+    "omp-ui/src/modes/rpc/gateway-appearance.ts",
+    "omp-ui/src/modes/rpc/gateway-appearance.test.ts",
+    "omp-ui/src/modes/rpc/gateway-live-client.ts",
+    "omp-ui/src/session/agent-session.ts",
+    "omp-ui/src/session/session-manager.ts",
+    "omp-ui/src/modes/controllers/command-controller.ts",
+    "omp-ui/src/modes/controllers/input-controller.ts",
+    "omp-ui/src/modes/controllers/event-controller.ts",
+    "omp-ui/src/modes/controllers/selector-controller.ts",
+    "omp-ui/src/modes/controllers/todo-command-controller.ts",
+    "omp-ui/src/modes/utils/ui-helpers.ts",
 )
 TESTS = ("tests/*", "*/tests/*", "tests-js/*", "*/conftest.py")
 # One-shot processes that serve a single profile (CI/release scripts, skill scripts run as a

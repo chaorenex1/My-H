@@ -151,9 +151,8 @@ class DecayedSums {
  * message's own request-start timestamp and `timestamp + duration` (epoch ms,
  * the `Date.now()` clock) so dispatch latency never shortens a span. Tool
  * execution between messages neither ages the sums nor counts as time, so the
- * readout holds across it. Each `AgentSession` owns one meter, so background
- * subagents keep their own reading; {@link seed} restores it from the last
- * completed turn after a history swap and {@link reset} blanks it.
+ * readout holds across it. Each session owns one meter; {@link seed} restores it
+ * from the last completed turn after a history swap and {@link reset} blanks it.
  *
  * Whole-message averages come from {@link calculateTokensPerSecond} instead.
  */

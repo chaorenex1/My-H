@@ -1,0 +1,214 @@
+diff --git a/src/prompt/welcome.ts b/src/prompt/welcome.ts
+index 9df48ae0bbe1c21a262a511f756b04a3da07d832..cdeadcc561803691f379f9197bd70cc29b7e4436 100644
+--- a/src/prompt/welcome.ts
++++ b/src/prompt/welcome.ts
+@@ -1,4 +1,3 @@
+-import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
+ import type { TspSpan } from "@oh-my-pi/pi-wire";
+ import { formatDoubleTap, formatKeyHint, formatKeyHints, type KeyName } from "../app-keybindings";
+ import { editorKey } from "../chrome/keybinding-hints";
+@@ -190,7 +189,7 @@ export function renderWelcomeTip(tip: string, width: number, phase = 0): string[
+ 
+ /**
+  * The session's welcome banner. In a terminal: the gradient logo beside the
+- * `omp` wordmark with the version under it (the logo alone when the lockup does
++ * `My-H` wordmark with the version under it (the logo alone when the lockup does
+  * not fit) and the tip of the session (dropped below {@link TIP_MIN_COLUMNS}
+  * columns). Natively: a card with the same logo, wordmark, version and tip
+  * ({@link WelcomeComponent.describe}).
+@@ -231,7 +230,7 @@ export class WelcomeComponent implements Component {
+ 
+ 	/**
+ 	 * A `card` (`omp.welcome`) mirroring the terminal banner: the lockup
+-	 * (`omp.welcome.lockup`: the terminal's builtin `omp` mark, which it animates,
++	 * (`omp.welcome.lockup`: the terminal's builtin mark, which it animates,
+ 	 * beside the wordmark with the version under it) and the tip of the session.
+ 	 * Roles carry the look (gradient logo, type scale); a "[NEW]" tip
+ 	 * carries a terminal-clocked shimmering tag.
+@@ -345,7 +344,16 @@ export class WelcomeComponent implements Component {
+ 		const logo = this.#currentLogoFrame();
+ 		const version = theme.fg("dim", `v${this.version}`);
+ 		const lockupWidth = LOGO_WIDTH + LOCKUP_GAP + Math.max(WORDMARK_WIDTH, visibleWidth(version));
+-		const art = room >= lockupWidth ? lockup(logo, version) : room >= LOGO_WIDTH ? logo : [];
++		// Narrow terminals drop the mark before the wordmark: the name is the identity that matters,
++		// and the wordmark alone is narrower than the full lockup.
++		const art =
++			room >= lockupWidth
++				? lockup(logo, version)
++				: room >= WORDMARK_WIDTH
++					? WORDMARK.map(row => theme.bold(theme.fg("text", row)))
++					: room >= LOGO_WIDTH
++						? logo
++						: [];
+ 		const lines = centerBlock(art, termWidth);
+ 		const tip = termWidth >= TIP_MIN_COLUMNS ? this.#renderTip(room) : [];
+ 		if (tip.length > 0) lines.push("", ...tip.flatMap(line => centerBlock([line], termWidth)));
+@@ -377,8 +385,8 @@ export class WelcomeComponent implements Component {
+ }
+ 
+ /**
+- * omp's native lockup (`omp.welcome.lockup`, keyed `lockup`): the terminal's
+- * builtin `omp` mark, which it draws on, beside the `omp` wordmark with
++ * My-H's native lockup (`omp.welcome.lockup`, keyed `lockup`): the terminal's
++ * builtin mark, which it draws on, beside the `My-H` wordmark with
+  * `v<version>` under it. The welcome card and the setup splash show it.
+  */
+ export function lockupNode(version: string): NativeNode {
+@@ -388,11 +396,11 @@ export function lockupNode(version: string): NativeNode {
+ 	return keyed(
+ 		row(
+ 			[
+-				node("image", { builtin: "omp", alt: APP_NAME, w: 128, role: "omp.welcome.logo" }, undefined, "logo"),
++				node("image", { builtin: "omp", alt: BRAND_NAME, w: 128, role: "omp.welcome.logo" }, undefined, "logo"),
+ 				keyed(
+ 					col(
+ 						[
+-							art([span(APP_NAME, "strong")], "omp.welcome.wordmark"),
++							art([span(BRAND_NAME, "strong")], "omp.welcome.wordmark"),
+ 							art([span(`v${version}`, "dim mono")], "omp.welcome.version"),
+ 						],
+ 						{ role: "omp.welcome.mark" },
+@@ -406,17 +414,34 @@ export function lockupNode(version: string): NativeNode {
+ 	);
+ }
+ 
+-/** Block-grid brand mark shared by the welcome and setup surfaces. */
+-export const PI_LOGO = ["████████████", "   ██  ██   ", "   ██  ██   ", "   ▒▒  ██   ", "       ██   "];
++/** My-H brand mark (the fork's ✿ icon in half-blocks) shared by the welcome and setup surfaces. */
++export const PI_LOGO = [
++	"    ▄██▄    ",
++	" ▄▄▄████▄▄▄ ",
++	"███▀    ▀███",
++	"▀▀█▄    ▄█▀▀",
++	" ▄██▄▄▄▄██▄ ",
++	"  ███▀▀███  ",
++];
+ 
+ /** Columns of {@link PI_LOGO}. */
+ const LOGO_WIDTH = Math.max(...PI_LOGO.map(row => row.length));
+ 
++/** The brand name this fork draws in the lockup (wordmark art and native alt text). */
++export const BRAND_NAME = "My-H";
++
+ /**
+- * The `omp` wordmark in half-blocks, set beside {@link PI_LOGO} from its second
+- * row: the `p` descends into the fourth, the version takes the fifth.
++ * The `My-H` wordmark in box-drawing glyphs, set beside {@link PI_LOGO}; the
++ * version follows under it.
+  */
+-const WORDMARK = ["▄▀▀▄ █▀▄▀▄ █▀▀▄", "▀▄▄▀ █ █ █ █▄▄▀", "           █"];
++const WORDMARK = [
++	"███╗   ███╗  ██╗   ██╗           ██╗  ██╗",
++	"████╗ ████║  ╚██╗ ██╔╝           ██║  ██║",
++	"██╔████╔██║   ╚████╔╝   ██████   ███████║",
++	"██║╚██╔╝██║    ╚██╔╝    ╚═════   ██╔══██║",
++	"██║ ╚═╝ ██║     ██║              ██║  ██║",
++	"╚═╝     ╚═╝     ╚═╝              ╚═╝  ╚═╝",
++];
+ 
+ /** Columns of {@link WORDMARK}. */
+ const WORDMARK_WIDTH = Math.max(...WORDMARK.map(row => row.length));
+@@ -430,10 +455,16 @@ const TIP_MEASURE = 72;
+ /** Narrowest terminal that still shows the tip; below it the banner is the logo alone. */
+ const TIP_MIN_COLUMNS = 50;
+ 
+-/** Logo frame `logo` with the wordmark beside it and `version` (styled) under the wordmark. */
++/** Logo frame `logo` with the gradient wordmark beside it and `version` (styled) under the wordmark. */
+ function lockup(logo: readonly string[], version: string): string[] {
+-	const beside = ["", ...WORDMARK.map(row => theme.bold(theme.fg("text", row))), version];
+-	return logo.map((row, index) => `${row}${padding(LOCKUP_GAP)}${beside[index] ?? ""}`);
++	const wordmark = gradientLogo(WORDMARK, 0);
++	const rows = Math.max(logo.length, wordmark.length);
++	const lines: string[] = [];
++	for (let index = 0; index < rows; index++) {
++		lines.push(`${logo[index] ?? padding(LOGO_WIDTH)}${padding(LOCKUP_GAP)}${wordmark[index] ?? ""}`);
++	}
++	lines.push(`${padding(LOGO_WIDTH + LOCKUP_GAP)}${version}`);
++	return lines;
+ }
+ 
+ /**
+@@ -446,11 +477,14 @@ function centerBlock(lines: readonly string[], width: number): string[] {
+ 	return lines.map(line => indent + line);
+ }
+ 
+-/** Multi-stop palette for the diagonal gradient. */
++/** Multi-stop palette for the diagonal gradient: My-H's violet-to-blush ladder. */
+ const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
+-	[248, 79, 204], // oklch(0.7 0.24 340)
+-	[147, 98, 244], // oklch(0.62 0.21 295)
+-	[0, 219, 228], // oklch(0.81 0.14 200)
++	[124, 92, 255], // #7C5CFF
++	[138, 99, 255], // #8A63FF
++	[155, 107, 255], // #9B6BFF
++	[176, 115, 255], // #B073FF
++	[201, 124, 246], // #C97CF6
++	[224, 127, 228], // #E07FE4
+ ];
+ 
+ /** 256-color ramp fallback when truecolor isn't available. */
+diff --git a/src/setup/scenes/splash.ts b/src/setup/scenes/splash.ts
+index 5d6dbee8631cd1f5bf3c6dd67467f009b0be2daa..bae0380afe5ffc6bc865df2a468dd38d40f54e8c 100644
+--- a/src/setup/scenes/splash.ts
++++ b/src/setup/scenes/splash.ts
+@@ -1,7 +1,7 @@
+ import { centerLine, visibleWidth } from "../../utils";
+ import { padToWidth } from "../../render/utils";
+-import { APP_NAME, VERSION } from "@oh-my-pi/pi-utils";
+-import { gradientEscape, gradientLogo, lockupNode, PI_LOGO, type ShineConfig } from "../../prompt/welcome";
++import { VERSION } from "@oh-my-pi/pi-utils";
++import { BRAND_NAME, gradientEscape, gradientLogo, lockupNode, PI_LOGO, type ShineConfig } from "../../prompt/welcome";
+ import { theme } from "../../theme/theme";
+ import { formatKeyHint } from "../../app-keybindings";
+ import { col, kbd, keyed, node, row, span, text } from "../../native/describe";
+@@ -158,8 +158,8 @@ function resetCells(width: number, height: number): string[][] {
+ let diagonalEscapes: (string | undefined)[] = [];
+ 
+ /**
+- * Animated setup splash, in the spirit of the omp landing page: the brand π
+- * mark rendered with the live diagonal gradient + shine sweep, rising out of a
++ * Animated setup splash: the My-H brand mark (the fork's ✿ icon)
++ * rendered with the live diagonal gradient + shine sweep, rising out of a
+  * rippling, gradient-lit water surface, under a faint twinkling starfield. The
+  * mark and water share one continuous gradient so the sweep reads across the
+  * whole scene; the water surface drifts each frame.
+@@ -279,7 +279,7 @@ export function describeSetupSplash(): NativeNode {
+ /** Centered fallback for windows too small to hold the full scene. */
+ function renderCompactSplash(width: number, height: number, phase: number, shine: ShineConfig): string[] {
+ 	const art = height >= 14 ? LARGE_LOGO : PI_LOGO;
+-	const content = [...gradientLogo(art, phase, shine), "", theme.bold(APP_NAME)];
++	const content = [...gradientLogo(art, phase, shine), "", theme.bold(BRAND_NAME)];
+ 	const start = Math.max(0, Math.floor((height - content.length) / 2));
+ 	const lines: string[] = [];
+ 	for (let y = 0; y < height; y++) {
+diff --git a/src/theme/symbols.ts b/src/theme/symbols.ts
+index bbf12af273ca66bd67d39921280341ff5f74a523..3d3bbbb9ba67fdf554e491b6911f3806dafb245a 100644
+--- a/src/theme/symbols.ts
++++ b/src/theme/symbols.ts
+@@ -488,7 +488,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
+ 	"icon.advisor": "👁",
+ 	"icon.advisorClosed": "🙈",
+ 	"icon.time": "⏱",
+-	"icon.omp": "π",
++	"icon.omp": "✿",
+ 	"icon.ghost": "👻",
+ 	"icon.agents": "👥",
+ 	"icon.job": "⚙",
+@@ -876,7 +876,7 @@ const NERD_SYMBOLS: SymbolMap = {
+ 	// INTENTIONAL: U+F0D57 is the chosen glyph here. It has been "fixed" to
+ 	// U+F03FF before (2ec52b8bdd) and reverted because it renders the wrong glyph;
+ 	// do not swap it again.
+-	"icon.omp": "\u{f0d57}",
++	"icon.omp": "✿",
+ 	// pick: 󰊠 (nf-md-ghost) | alt: 👻
+ 	"icon.ghost": "\u{f02a0}",
+ 	// pick:  | alt: 
+@@ -1281,7 +1281,7 @@ const ASCII_SYMBOLS: SymbolMap = {
+ 	"icon.advisor": "(adv)",
+ 	"icon.advisorClosed": "(adv)",
+ 	"icon.time": "t:",
+-	"icon.omp": "pi",
++	"icon.omp": "myh",
+ 	"icon.ghost": "@",
+ 	"icon.agents": "AG",
+ 	"icon.job": "bg",

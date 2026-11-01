@@ -16,8 +16,6 @@ apps/desktop/packaging/dmg-volume.icns
 # changes, so it must ship at its size.
 omp-ui/src/modes/rpc/gateway-contract.openrpc.json
 
-# Vendored oh-my-pi sources (omp-ui/src/VENDORED.md): a byte-identical snapshot refreshed by
-# omp-ui/scripts/sync-upstream.py. The shell loads the catalog data at runtime and runs
-# agent-session.ts; neither can be generated or shrunk locally.
+# Vendored oh-my-pi catalog data (omp-ui/src/VENDORED.md): the shell loads it as the model
+# identity table at runtime, and it is upstream-generated rather than maintained here.
 omp-ui/src/vendor/catalog/src/models.json
-omp-ui/src/session/agent-session.ts

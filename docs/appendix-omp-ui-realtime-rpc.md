@@ -95,7 +95,7 @@ producer 未落地时保持空值）。
 | 侧 | 定义位置 | 生成物 | 覆盖 |
 |---|---|---|---|
 | omp-ui | `omp-ui/src/modes/rpc/wire/{commands,events,frames,state,content}.ts` | `wire/rpc-wire.schema.json`、`wire/rpc-wire.generated.ts` | 74 命令、33 个 `AgentSessionEvent`、22 类其它通知、12 种 `extension_ui_request`、4 种 host 请求、4 种入站应答、1 种传输分片 `rpc_chunk` |
-| Hermes | `tui_gateway/contracts/*.py`（Pydantic，单一真源） | `omp-ui/src/modes/rpc/gateway-contract.generated.ts`、`gateway-contract.openrpc.json` | `METHODS` 257 + `CANONICAL_METHODS` 68（42 个 canonical-only，合计 299 个方法名）、16 server→client 请求、79 通知 |
+| Hermes | `tui_gateway/contracts/*.py`（Pydantic，单一真源） | `omp-ui/src/modes/rpc/gateway-contract.generated.ts`、`gateway-contract.openrpc.json` | `METHODS` 259 + `CANONICAL_METHODS` 70（44 个 canonical-only，合计 303 个方法名）、16 server→client 请求、79 通知 |
 
 两侧都是**机器可校验**的；差异在**信封**与**字段模型**，不在“有没有定义”。
 

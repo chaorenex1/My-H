@@ -1,15 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isEnoent } from "../vendor/utils/src/index.ts";
+import { formatBytes, isEnoent } from "../vendor/utils/src/index.ts";
 import { LRUCache } from "../vendor/utils/src/lru.ts";
-import localDoc from "../prompts/internal-urls/local.md" with { type: "text" };
-import { AgentRegistry } from "../registry/agent-registry";
 import {
 	buildDirectoryResource,
 	containedRealPath,
 	contentTypeForPath,
-	ensureCreatableWithinRoot,
 	ensureWithinRoot,
 	validateRelativePath,
 } from "./filesystem-resource";
@@ -17,13 +14,11 @@ import { parseInternalUrl } from "./parse";
 import type {
 	InternalResource,
 	InternalUrl,
-	LocateOptions,
 	ProtocolHandler,
 	ResolveContext,
 	SchemeSpec,
 	UrlCompletion,
 } from "./types";
-import { formatByteSize } from "../utils/video";
 
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
@@ -40,8 +35,7 @@ function safeSessionId(options: LocalProtocolOptions): string {
 
 function shortLocalRoot(options: LocalProtocolOptions): string {
 	// Derive the short root from the stable session id, never the artifact path,
-	// so `SessionManager.moveTo()` and the resume-after-move flow keep finding
-	// the same `local://` directory the session wrote pre-move.
+	// so a session always maps to the same `local://` directory.
 	return path.join(os.tmpdir(), "omp-local", safeSessionId(options));
 }
 
@@ -81,7 +75,7 @@ const BINARY_FILE_EXTENSIONS = new Set([
 ]);
 
 function buildNonTextLocalResource(url: InternalUrl, filePath: string, size: number, reason: string): InternalResource {
-	const content = `[Cannot read binary local:// file '${url.href}' (${formatByteSize(size)}): ${reason}. This resource is not text. Use a metadata/key-frame/video-specific workflow instead.]`;
+	const content = `[Cannot read binary local:// file '${url.href}' (${formatBytes(size)}): ${reason}.]`;
 	return {
 		url: url.href,
 		content,
@@ -93,7 +87,7 @@ function buildNonTextLocalResource(url: InternalUrl, filePath: string, size: num
 }
 
 function buildLargeLocalTextResource(url: InternalUrl, filePath: string, size: number): InternalResource {
-	const content = `[Cannot materialize local:// file '${url.href}' as an internal text resource (${formatByteSize(size)} exceeds ${formatByteSize(LOCAL_TEXT_RESOURCE_MAX_BYTES)}). Use the read tool's filesystem path handling or a line selector so content is streamed with file-size safeguards.]`;
+	const content = `[Cannot materialize local:// file '${url.href}' as an internal text resource (${formatBytes(size)} exceeds ${formatBytes(LOCAL_TEXT_RESOURCE_MAX_BYTES)}).]`;
 	return {
 		url: url.href,
 		content,
@@ -191,7 +185,7 @@ async function buildListing(url: InternalUrl, localRoot: string): Promise<Intern
 	const listing = files.length === 0 ? "(empty)" : files.map(file => `- [${file}](local://${file})`).join("\n");
 	const content =
 		`# Local\n\n` +
-		`Session-scoped scratch space for large intermediate data, subagent handoffs, and reusable planning artifacts.\n\n` +
+		`Session-scoped scratch space for intermediate files.\n\n` +
 		`Root: ${localRoot}\n\n` +
 		`${files.length} file${files.length === 1 ? "" : "s"} available:\n\n` +
 		`${listing}\n`;
@@ -236,7 +230,7 @@ function extractRelativePath(url: InternalUrl): string {
 	return decoded;
 }
 
-/** Resolve the session-scoped local:// root, shortening long Windows artifact paths before writes hit MAX_PATH. */
+/** Resolve the session-scoped local:// root, shortening long Windows artifact paths before they hit MAX_PATH. */
 export function resolveLocalRoot(options: LocalProtocolOptions, platform: NodeJS.Platform = process.platform): string {
 	const artifactsDir = options.getArtifactsDir?.();
 	if (artifactsDir) {
@@ -292,48 +286,6 @@ export async function listLocalFiles(options: LocalProtocolOptions): Promise<Loc
 		.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
 }
 
-/**
- * Recursively copy every local:// artifact from one session-scoped root to
- * another. Used when a session transition mints a fresh local root (plan
- * approve-and-execute, handoff) so plans, scratch files, and research notes the
- * carried-forward context references stay readable in the replacement session.
- * No-op when the roots match or the source root is absent.
- */
-export async function copyLocalArtifacts(sourceRoot: string, destinationRoot: string): Promise<void> {
-	if (sourceRoot === destinationRoot) return;
-
-	let sourceRootStat: { isDirectory(): boolean };
-	try {
-		sourceRootStat = await fs.lstat(sourceRoot);
-	} catch (error) {
-		if (isEnoent(error)) return;
-		throw error;
-	}
-	if (!sourceRootStat.isDirectory()) return;
-
-	await fs.mkdir(destinationRoot, { recursive: true });
-	await copyLocalArtifactEntries(sourceRoot, destinationRoot);
-}
-
-async function copyLocalArtifactEntries(sourceDir: string, destinationDir: string): Promise<void> {
-	const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-	for (const entry of entries) {
-		const sourcePath = path.join(sourceDir, entry.name);
-		const destinationPath = path.join(destinationDir, entry.name);
-
-		if (entry.isDirectory()) {
-			await fs.mkdir(destinationPath, { recursive: true });
-			await copyLocalArtifactEntries(sourcePath, destinationPath);
-			continue;
-		}
-
-		if (entry.isFile()) {
-			await fs.mkdir(path.dirname(destinationPath), { recursive: true });
-			await fs.copyFile(sourcePath, destinationPath);
-		}
-	}
-}
-
 /** Resolve a local:// URL to an on-disk path under the active session's local root. */
 export function resolveLocalUrlToPath(
 	input: string | InternalUrl,
@@ -353,20 +305,7 @@ export function resolveLocalUrlToPath(
 	return resolved;
 }
 
-/**
- * On-disk roots the eval helpers (`read`/`write`) substitute for
- * internal-URL schemes so e.g. `write("local://x.md")` lands where a later
- * `read local://x.md` resolves — instead of a literal `local:/` directory under
- * the cwd (a stdlib `pathlib.Path`/`path.resolve` collapses `local://` to
- * `local:/`). Keyed by scheme without the `://`. Currently only `local`, but the
- * shape is a map so additional file-backed schemes can be added without
- * re-plumbing the worker boundary.
- */
-export function buildEvalUrlRoots(options: LocalProtocolOptions): Record<string, string> {
-	return { local: resolveLocalRoot(options) };
-}
-
-const LOCAL_WRITE_NOTE = "Use write path local://<file> to persist large intermediate artifacts across turns.";
+const LOCAL_WRITE_NOTE = "Session-scoped scratch space; files here live as long as the session.";
 
 type ResolvedLocalTarget =
 	| { kind: "listing"; root: string }
@@ -416,19 +355,8 @@ async function resolveLocalTarget(url: InternalUrl, opts: LocalProtocolOptions):
 	return { kind: "file", path: realTargetPath, size: stat.size };
 }
 
-/**
- * Locate a local:// URL without creating anything. With `create`, returns the
- * lexical path under the session root (writes land where `resolveLocalUrlToPath`
- * points) once creating it provably stays inside the root — the deepest existing
- * ancestor must realpath inside it and no entry may be a dangling symlink (the
- * root included; a merely missing root is created on write). Otherwise returns
- * the realpath of an existing target, else null.
- */
-async function locateLocalTarget(
-	url: InternalUrl,
-	opts: LocalProtocolOptions,
-	create: boolean,
-): Promise<string | null> {
+/** Realpath of an existing local:// target, or null when it (or the root) does not exist. */
+async function locateLocalTarget(url: InternalUrl, opts: LocalProtocolOptions): Promise<string | null> {
 	const localRoot = path.resolve(resolveLocalRoot(opts));
 	const relativePath = extractRelativePath(url);
 	const targetPath = relativePath ? path.resolve(localRoot, relativePath) : localRoot;
@@ -439,16 +367,9 @@ async function locateLocalTarget(
 		realRoot = await fs.realpath(localRoot);
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
-		if (!create) return null;
-		// Missing root: nothing to escape through unless the root itself is a dangling symlink.
-		await ensureCreatableWithinRoot(targetPath, localRoot, "local", url.href);
-		return targetPath;
+		return null;
 	}
 	const underRealRoot = relativePath ? path.resolve(realRoot, relativePath) : realRoot;
-	if (create) {
-		await ensureCreatableWithinRoot(underRealRoot, realRoot, "local", url.href);
-		return targetPath;
-	}
 	return (await containedRealPath(underRealRoot, realRoot, "local", url.href)) ?? null;
 }
 
@@ -461,69 +382,19 @@ async function locateLocalTarget(
  */
 export class LocalProtocolHandler implements ProtocolHandler {
 	readonly scheme = "local";
-	/** Session scratch space: `write` persists through its file pipeline via `locate({ create })`, approved at read tier. */
+	/** Session scratch space: file-backed, so a locate() path is the resource. */
 	readonly spec: SchemeSpec = {
 		backing: "file",
 		selectors: "lines",
 		immutable: false,
 		pathAuthority: true,
 		linkable: true,
-		imageQuestion: true,
 		singleSlashAlias: true,
-		write: { via: "file", payload: "text", scope: "sandbox", tier: () => "read" },
 	};
 
-	static #override: LocalProtocolOptions | undefined;
-
-	/**
-	 * Install a process-global override that wins over the AgentRegistry-based
-	 * derivation. Used by top-level SDK consumers that wire
-	 * `localProtocolOptions` on `createAgentSession`; subagents keep their
-	 * inherited mapping session-bound.
-	 */
-	static setOverride(value: LocalProtocolOptions | undefined): void {
-		LocalProtocolHandler.#override = value;
-	}
-
-	/** Reset the process-global override. Test-only. */
-	static resetOverrideForTests(): void {
-		LocalProtocolHandler.#override = undefined;
-	}
-
-	/**
-	 * Returns the active local-protocol options.
-	 *
-	 * Resolution order:
-	 * 1. **Caller-supplied** `context.localProtocolOptions` (the actual session
-	 *    that initiated the `read`/`find`/`search`/`router.resolve` call). This
-	 *    is what keeps `local://` reads pinned to the calling session in
-	 *    multi-session hosts (cmux/ACP, embedded SDK consumers) where every
-	 *    session registers as `kind: "main"` and "first one wins" would route
-	 *    to the wrong artifacts directory.
-	 * 2. Explicit process-global override installed via {@link setOverride}
-	 *    (used by SDK consumers with a custom artifacts/session-id mapping and
-	 *    by code paths that do not have a calling session, e.g. TUI hyperlink
-	 *    resolution).
-	 * 3. The first `main`-kind session in `AgentRegistry.global()`. Its
-	 *    `SessionManager` supplies both `getArtifactsDir` and `getSessionId`.
-	 *    Last-resort fallback — every caller that has a session reference
-	 *    SHOULD thread it through `context` so this branch is never taken in
-	 *    multi-session setups.
-	 */
+	/** The calling session's `local://` root mapping; absent when the caller has no session. */
 	static resolveOptions(context?: ResolveContext): LocalProtocolOptions | undefined {
-		const fromContext = context?.localProtocolOptions;
-		if (fromContext) return fromContext;
-		const override = LocalProtocolHandler.#override;
-		if (override) return override;
-		const main = AgentRegistry.global()
-			.list()
-			.find(ref => ref.kind === "main");
-		const sessionManager = main?.session?.sessionManager;
-		if (!sessionManager) return undefined;
-		return {
-			getArtifactsDir: () => sessionManager.getArtifactsDir(),
-			getSessionId: () => sessionManager.getSessionId(),
-		};
+		return context?.localProtocolOptions;
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
@@ -543,12 +414,12 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		return buildFileResource(url, resolved);
 	}
 
-	async locate(url: InternalUrl, context?: ResolveContext, options?: LocateOptions): Promise<string | null> {
+	async locate(url: InternalUrl, context?: ResolveContext): Promise<string | null> {
 		const opts = LocalProtocolHandler.resolveOptions(context);
 		if (!opts) {
 			throw new Error("No session - local:// unavailable");
 		}
-		return locateLocalTarget(url, opts, options?.create === true);
+		return locateLocalTarget(url, opts);
 	}
 
 	locateSync(url: InternalUrl, context?: ResolveContext): string | undefined {
@@ -559,10 +430,6 @@ export class LocalProtocolHandler implements ProtocolHandler {
 		} catch {
 			return undefined;
 		}
-	}
-
-	promptDoc(): string {
-		return localDoc.trim();
 	}
 
 	async complete(_query?: string, context?: ResolveContext): Promise<UrlCompletion[]> {

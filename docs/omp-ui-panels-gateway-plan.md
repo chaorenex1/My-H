@@ -66,18 +66,52 @@
 为什么：omp 的交互是用户已经依赖的产品行为；网关是数据源，不是 UI 的重写者。把差异留在客户端一处
 （`gateway-client.ts` + `rpc-*.ts`），既保证交互稳定，也让 Hermes 契约保持自己的命名。
 
+**品牌例外（2026-11-01，产品要求）**：主界面的品牌标识不属于交互契约，按 My-H fork 的标识替换——
+欢迎/启动锁定为 ✿ 图标 + `My-H` 字标（紫色渐变），状态行品牌字形为 `✿`。实现是 `@oh-my-pi/pi-tui`
+的固定补丁（`omp-ui/patches/`、`package.json` `patchedDependencies`，见 `omp-ui/src/VENDORED.md`）；
+§2.3 的其余交互、键位、布局与默认值不变。
+
 ### 0.2 客户端改造约束（承接已废弃的 `omp-ui-gap-plan.md` D1–D6）
 
 这些约束仍然生效，原文只作历史证据：
 
 1. **只改既有路径**：实现落在 `omp-ui/src` 已有文件与类上；不建 `src/hermes/` 或其他平行命名空间。
-2. **不裁剪**：文件与界面能力不删、不拆；改的是实现内容。
+2. **~~不裁剪~~（2026-11-01 作废，见 §0.3）**：初始阶段不删文件只改实现；随后产品要求改为
+   “只保留 UI 数据接入 + RPC 协议层，删除 omp 自身业务代码”，本次裁剪已执行。
 3. **类身份不变**：`AgentSession`/`SessionManager` 就地重写，壳拿同一类型，不用 cast。
-4. **依赖边界**：omp 源码按 import 闭包从固定 checkout（`6a86df853…`）vendor 到 `src/vendor/`，
-   R1–R5、`package.json` 约束与本地补丁以 `omp-ui/src/VENDORED.md` 为准；不从 `node_modules` 复制。
+4. **依赖边界**：omp 源码按 import 闭包 vendor 到 `src/vendor/`，R1–R5、`package.json` 约束与本地
+   补丁以 `omp-ui/src/VENDORED.md` 为准；不从 `node_modules` 复制。
 5. **顺序**：vendor/边界 → 就地重写会话层 → 入口 → 删旧目录 → smoke 收敛；未接通能力标
    `pending`/`unsupported`，不静默 stub。
-6. **单一入口**：`hermes omp` → `src/main.ts`；`src/cli.ts` 只留作被 spawn 的 worker 宿主。
+6. **单一入口**：`hermes omp` → `src/main.ts`；`src/cli.ts` 已随裁剪删除。
+
+### 0.3 裁剪记录（2026-11-01）
+
+产品方向：omp-ui 只保留**渲染核心 + 网关数据接入 + RPC 协议层**；omp 自己的业务代码全部删除，
+壳不再有本地 agent 回退。与 §0.1“交互只读契约”的关系：保留的交互（transcript/composer/状态行/
+HUD/选择器/通知）不变；只靠本地后端供数的面板与命令（plan/goal/vibe/loop/BTW/TAN/OMFG/cleanse/
+jobs/agents hub/MCP/SSH/STT/TTS/live/extensions hooks/工作树/树-分支-回退/压缩/导出/OAuth 登录）
+随其业务实现一并删除，不再以 `unsupported` 占位。
+
+删除（示例，全量见 git diff）：`tools/`、`prompts/`、`web/`、`mcp/`、`lsp/`、`ida/`、`dap/`、`eval/`、
+`commit/`、`extensibility/`、`task/`、`discovery/`、`registry/`、`memory*/`、`mnemopi/`、`hindsight/`、
+`goals/`、`plan-mode/`、`advisor/`、`vibe/`、`live/`、`collab/`、`cleanse/`、`stt/`、`tts/`、`tiny/`、
+`stream/`、`export/`、`predict/`、`sharpshooter/`、`markit/`、`skillshare/`、`ratchet/`、`autolearn/`、
+`if-bench/`、`exa/`、`archive/`、`downloads/`、`irc/`、`blob-broker/`、`subprocess/`、`launch/`、
+`cli/`、`commands/`、`slash-commands/`、`async/`、`job-widgets/`、`jsonrpc/`，以及 `src/session/` 除
+`agent-session*`/`session-manager`/`settings` 外的全部文件、`vendor/{mnemopi,stats}`。
+
+重写：`session/agent-session.ts`（~700 行网关 facade）、`session/session-manager.ts`（内存投影）、
+`main.ts`、`hermes-entry.ts`（去掉 auth-storage 与旧 CLI 图）、`modes/interactive-mode.ts`
+（9517→约 2700 行）、`modes/controllers/{event,input,command,selector,todo-command}-controller.ts`、
+`utils/ui-helpers.ts`、`modes/types.ts`、`config/*`（`ModelRegistry` 3901→约 340 行显示目录）、
+`internal-urls/*`（仅 `local://` 与链接解析）。
+
+验证：`bun run check` 通过；`bun run check:imports`（588 文件，R1–R3/R5 clean）；`bun test src/modes/rpc`
+58 通过；`scripts/gen_omp_appearance_defaults.py` 重新生成（43 项）且
+`tests/tui_gateway/test_omp_appearance_config.py` 6 通过；实机 `bun src/main.ts` 在运行中的 Hermes
+网关上完成 create → 提交 prompt → 流式回复 → 状态行/标题刷新；bundle 由 3656 modules/30.65 MB
+降到 1015 modules/10.76 MB，`src` 文件 2606→638。
 
 ## 1. 设计原则
 
@@ -120,7 +154,7 @@
 | Rewind selector | `session.history` | `session.mutate` | A | — |  |
 | Copy selector | — | — | — | — |  |
 | Theme selector / skin | `skin.list`、`config.get` | `config.set` | A | — | `skin.list` 由 authority 直服 |
-| Settings menu | `config.schema`、`config.get` | `config.set` | A | — | `config.schema` 由 authority 直服 |
+| Settings menu | `config.schema`、`config.get`、`omp.appearance.get` | `config.set`、`omp.appearance.set` | A/L | — | `config.schema` 由 authority 直服；Appearance 设置（`omp.appearance.*`）由 sidecar 直服，是 `config.yaml` 的 `omp.appearance` 段，默认值取 omp 注册表 |
 | Thinking / effort | `model.options` | `session.mutate` | A | — |  |
 | Usage dashboard | `session.usage`、`session.stats`、`billing.state`、`usage.bars` | — | A/L | — |  |
 | Jobs panel / job tree | `process.list`、`spawn_tree.list` | `process.stop`、`process.kill` | A/L | E | process.list stats fields (E) and process events are pending |
@@ -199,7 +233,7 @@ Hermes 网关对 omp-ui 暴露的不是“每个面板各有一个后端”，�
 | | 定义 | 注册表 | 生成物 |
 |---|---|---|---|
 | 实时 RPC | `tui_gateway/contracts/events.py`（每个通知一个 `Payload`） + `server_requests.py`（server→client 请求） | `EVENTS` 79、`SERVER_REQUESTS` 16 | `omp-ui/src/modes/rpc/gateway-contract.generated.ts` 的 `Notifications` / `Server→client requests` 段；OpenRPC 的 `x-notifications` / `x-server-requests` |
-| 业务 RPC | `tui_gateway/contracts/*.py` 的 `Params` / `Result` | `METHODS` 257、`CANONICAL_METHODS` 68（其中 42 个 canonical-only，合计 299 个方法名） | 同文件的 `Client→server methods` / `Canonical methods` 段；OpenRPC `methods` + `x-canonical-methods` |
+| 业务 RPC | `tui_gateway/contracts/*.py` 的 `Params` / `Result` | `METHODS` 259、`CANONICAL_METHODS` 70（其中 44 个 canonical-only，合计 303 个方法名） | 同文件的 `Client→server methods` / `Canonical methods` 段；OpenRPC `methods` + `x-canonical-methods` |
 
 线格式：JSON-RPC 2.0。通知是 `{"jsonrpc":"2.0","method":"event","params":{"type","session_id","payload",…}}`
 （`tui_gateway/server.py::_event_frame`）；`event_replay._stamp_event` 给会话级通知加 `seq`（每会话单调，
@@ -304,23 +338,49 @@ pause freeze-all、Kanban board 快照、Bot Mode、多窗口、富媒体预览�
 |---|---|---|---|
 | 1 | 终端标题栏 | 会话名、运行 spinner、PR 号 | `setSessionTerminalTitle`、`tui.titleState`、`tui.titleSpinner` |
 | 2 | 欢迎头 | 渐变 logo + `omp` 字标 + 版本 + 本会话提示（`[NEW]` 高亮）；`startup.quiet` 关闭时显示；启动 splash 仅在显式启用、非 resume/quiet/timing、且 stdin/stdout 都是 TTY 时播放 | `WelcomeComponent`、`shouldShowStartupSplash` |
-| 3 | 配置警告 | 每条 `Warning: …` 一行 | `#buildConfigWarningComponents` |
-| 4 | What's New | 启动 changelog；`hidden`/`summary`/`expanded`（默认 `summary`） | `startup.changelogMode` |
-| 5 | Transcript | 追加式聊天记录（§2.3.2），滚入终端 history | `chatContainer` |
-| 6 | HUD pills | 右对齐的 Agents / Jobs 计数；两者都为 0 时整行隐藏 | `describeHudPills` |
-| 7 | inline 面板 | BTW、OMFG、cleanse、错误横幅、模型轮换 chip、延迟命令、下载/判定进度 | `btw/omfg/cleanse/errorBanner/modelCycle/deferredCommand/progressHud` 容器 |
-| 8 | Sticky HUD | Todo checklist + 子代理列表，位于 working 行上方（同属 `statusContainer` 的 activity 行） | `describeStatusHud`、`TodoHudContainer` |
-| 9 | Working/状态行 | spinner、elapsed、`·`、意图 shimmer、grow、Stop；retry 为倒计时环 + Cancel；compaction 为进度条 | `describeWorkingRow`、`DEFAULT_WORKING_MESSAGE="Working…"` |
-| 10 | 排队消息 | 待发送/排队 prompt，可逐条 dequeue | `pendingMessagesContainer`、`queued-messages` |
-| 11 | 附件 chips | Image/Video/Paste 芯片，位于输入框上方 | `AttachmentChipsBand` |
-| 12 | 编辑器上方 hook UI | 扩展 hook 自定义组件 | `hookWidgetContainerAbove` |
-| 13 | 编辑器 / composer | 输入框、边框、提示、自动补全、内嵌状态行 | `Composer`、`CustomEditor` |
-| 14 | 编辑器下方 hook UI | 扩展 hook 自定义组件 | `hookWidgetContainerBelow` |
+| 3 | Transcript | 追加式聊天记录（§2.3.2），滚入终端 history | `chatContainer` |
+| 4 | HUD pills | 右对齐的 Agents / Jobs 计数；两者都为 0 时整行隐藏 | `describeHudPills` |
+| 5 | inline 面板 | BTW、OMFG、cleanse、错误横幅、模型轮换 chip、延迟命令、下载/判定进度 | `btw/omfg/cleanse/errorBanner/modelCycle/deferredCommand/progressHud` 容器 |
+| 6 | Sticky HUD | Todo checklist + 子代理列表，位于 working 行上方（同属 `statusContainer` 的 activity 行） | `describeStatusHud`、`TodoHudContainer` |
+| 7 | Working/状态行 | spinner、elapsed、`·`、意图 shimmer、grow、Stop；retry 为倒计时环 + Cancel；compaction 为进度条 | `describeWorkingRow`、`DEFAULT_WORKING_MESSAGE="Working…"` |
+| 8 | 排队消息 | 待发送/排队 prompt，可逐条 dequeue | `pendingMessagesContainer`、`queued-messages` |
+| 9 | 附件 chips | Image/Video/Paste 芯片，位于输入框上方 | `AttachmentChipsBand` |
+| 10 | 编辑器上方 hook UI | 扩展 hook 自定义组件 | `hookWidgetContainerAbove` |
+| 11 | 编辑器 / composer | 输入框、边框、提示、自动补全、内嵌状态行 | `Composer`、`CustomEditor` |
+| 12 | 编辑器下方 hook UI | 扩展 hook 自定义组件 | `hookWidgetContainerBelow` |
+
+Hermes shell 不渲染启动配置警告（`configWarnings`）与 What's New；欢迎头之下直接是 transcript。
 
 native dock 的精确顺序（自下而上由代码给出，渲染时自上而下）：
 `HudPillsRow → btw → omfg → cleanse → errorBanner → modelCycle → deferredCommand →
 progressHud → statusContainer → pendingMessages → hookWidgetAbove → editorContainer →
 hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusContainer` 的 activity 行。
+
+#### 2.3.1.1 Hermes 适配（逐区）
+
+上表是 omp 自己的结构；本节只定义**每个区显示的值从哪条 RPC/事件来**。渲染分支、顺序、隐藏条件、
+键位与默认值都不变（§0.1），差异只在 `omp-ui/src/modes/rpc/` 的投影与映射层。状态：
+**已接** = `gateway-session.ts` 已投到该区；**部分** = 有来源但缺一段（字段/事件/触发/消费点）；
+**待接** = 契约已有、客户端未消费；**无 producer** = Hermes 没有等价事件，保持原行为或空，不伪造。
+
+| # | 区域 | Hermes 来源（实时/业务 RPC） | 消费点 | 状态 |
+|---|---|---|---|---|
+| 1 | 终端标题栏 | `session.info.title`、`session.title` → `GatewayOmpSession.title`；`turn.start`/`turn.end` → 运行态。PR 号来自客户端 `gh` 探针（`status-line-host.ts::lookupPullRequest`），不是网关数据 | `setSessionTerminalTitle` 三处传 `sessionManager.getSessionName()`（本地名），`#bindGateway` 不把 `gateway.title` 写进 manager（仅 `switchGatewaySession` 写），title/info 事件也只更新网关状态、不触发标题重绘；带网关标题的是 `AgentSession.sessionName` | 部分 |
+| 3 | Transcript | `session.create`/`session.resume` 快照（`display_messages`/`messages`）+ `message.*`、`reasoning.delta`/`thinking.delta`、`tool.*`、`turn.*`、`prompt.result`、`session.settled`；断线用 `session.events.since` 回放 | `gateway-session.ts` 的 `rowToAgentMessage`/`handleNotification` → 既有 `AgentSessionEvent` → `event-controller`；`session.history` 不在渲染路径 | 已接 |
+| 4 | HUD pills | Agents：`session.usage.active_subagents`、`subagent.*`；Jobs：`process.list`（后续 `process.*` 事件，P4） | Agents 计数读本地 `AgentRegistry`（`syncRunningSubagentBadge`）；Jobs 读 `getRunningJobWidgets`/`statusLine.runningBackgroundJobCount` | 待接 |
+| 5 | inline 面板 | 提示/错误：`error`、`notice`、`prompt.result.error`；BTW：`btw.complete`（历史 `btw.history`）；模型轮换/延迟命令纯客户端（`model.options`+`session.mutate`、`command.dispatch`） | 网关 `notice` 走 `showError`/`showWarning`/`showStatus`（落在 transcript/状态行）；`errorBannerContainer` 由错误回合的 `message.complete{error}` → `message_end.stopReason=error` → `#handleMessageEnd` 的 `showPinnedError` 填充（可恢复空输出除外），`prompt.result.error` 另走 `notice`；`notification.show` 未消费；BTW 的内联容器无网关触发点（`/btw` 在网关侧执行）；OMFG/cleanse 无后端（§10）；下载/判定进度无 producer | 部分 |
+| 6 | Sticky HUD | Todo：`todo.updated.todos`、`tool.complete{name:"todo_list"}.todos`（客户端在 `name === "todo"` 时才生成 `details.phases` 并 `setTodos`，映射层需别名）；子代理：`subagent.*`、`subagent.list` | `gatewayTodoPhases` → `getTodoPhases`；`tool_execution_end` 的 `setTodos`（需别名）；子代理行读本地 observer/agent registry | 部分 |
+| 7 | Working/状态行 | `turn.start`/`turn.end`、`tool.start.context`（intent）、`status.update{kind:compacting}`、`session.interrupt`；重试只有 `prompt.result.error.retryable` | 现有 loading/Stop 行；`isCompacting` 读 `#gateway.compacting`（只影响输入排队）；自动重试倒计时环与 `F5` 重试读本地 `#recovery` | 部分 |
+| 8 | 排队消息 | `queue.updated{steering, follow_up, live_steered}`；出队 `prompt.cancel` | `queue_update` → `pendingMessagesContainer`；`cancelQueued` 已定义但无调用方 | 部分 |
+| 9 | 附件 chips | 提交时 `image.attach_bytes` + `prompt.submit.attachments`；无视频附件方法 | `#attachImages`；chips 是 composer 本地状态 | 部分 |
+| 10 | 编辑器上方 hook UI | 无：`hooks.*` 是服务端 hook 配置，`hooks.changed`（P4）不产生 widget；Hermes 无 renderer 侧扩展注册 | `extension-ui-controller` 的 `#renderHookWidgetContainer` 只渲染本地扩展 | 无 producer |
+| 11 | 编辑器 / composer | 状态行 `model`/context/cost/token ← `session.info`、`session.usage`、`session.stats`（boot 与 `prompt.result` 后 refresh）；slash 执行 ← `command.dispatch`；目录 ← `commands.catalog`/`complete.slash`。thinking 目前只有客户端侧（`setThinkingLevel` 只写 `#models`，`GatewayOmpSession.setReasoning` 无调用方） | `GatewayModelRegistry` + `#applyGatewayModel` 喂状态行；slash 面板仍是 omp 本地注册表 | 部分（thinking 写入未到网关） |
+
+行 2 不在此表：欢迎头是品牌例外（§0.1），没有数据源。行 12 与行 10 同因（renderer 侧 hook widget），
+容器常空，随 §10 的 Extensions 决策，不单列。
+
+接线只允许落在“消费点”这一列：把网关字段投到既有 getter/事件，或把既有动作换成网关方法；
+`unsupported`/`无 producer` 的区保持空，不加占位、不造数据，也不为消灭空格而改布局。
 
 #### 2.3.2 Transcript 区块目录
 
@@ -330,7 +390,7 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | 助手消息 | Markdown 正文、代码块、thinking、工具调用、usage 行 | `assistant-message.ts` |
 | Thinking | 可折叠思考块；`hideThinkingBlock` 隐藏、`expandThinkingBlocks` 默认展开 | `thinking-display.ts` |
 | Advisor | advisor 评审意见；`display.advisorCollapsedLines` 控制折叠行数 | `advisor-message.ts` |
-| Background TAN | 后台 detached agent 的结果消息 | `background-tan-message.ts` |
+| Background TAN | `/tan` 的 “Tangent dispatched” 派发状态条（本机 clone，不是结果消息） | `background-tan-message.ts` |
 | Skill 调用 | `/skill:<name>` 的 prompt 与标题输入块 | `skill-message.ts`、`skill-title-input.ts` |
 | 自定义/hook 消息 | 扩展与 hook 注入的消息，样式区别于用户消息 | `custom-message.ts`、`hook-message.ts` |
 | 压缩摘要 | compaction 摘要；`display.collapseCompacted` 控制折叠 | `compaction-summary-message.ts` |
@@ -353,6 +413,67 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | 错误帧 | 错误信息 + retry 等操作 | `error-block.ts`、`transcript-actions.ts` |
 | 通知/分隔 | transcript notice、status notice、message divider/frame | `chrome/*` |
 | Transcript 选择器 | 临时全屏 rewind / copy 浏览器（从 session entries 重建） | `transcript-browser.ts`、`transcript-outline.ts` |
+
+#### 2.3.2.1 Hermes 适配（逐区块）
+
+上表是 omp 自己的渲染单元；本节只定义每个区块的值从哪条 RPC/事件来。渲染分支、顺序、折叠/隐藏条件、
+键位与默认值都不变（§0.1）。状态沿用 §2.3.1.1：**已接**（主路径能画出）、**部分**（有来源但缺一段：
+快照/实时/字段/触发/消费点）、**待接**（契约或事件已有、客户端未消费）、**无 producer**（Hermes 没有等价数据；
+保持空，不伪造）。状态按主路径判定，所以 §2.3.1.1 对整条 transcript 的“已接”仍是粗判，细项见下。快照列：
+`session.resume` 显式带 `display_projection:true`，读 `display_messages`
+（`tui_gateway/session_history._history_to_messages`）；`session.create` 返回的 `messages` 是新会话的原始行
+（新会话为空，客户端优先读 `display_messages`）。实时列走附录 A。
+
+| 区块 | Hermes 来源（快照 / 实时） | 消费点 | 状态 |
+|---|---|---|---|
+| 用户消息 | 快照 user 行（`text`；图片被投影成 `@image:`/`[image]` 文本）；本机提交回显 `#emitUserMessage`；自动化轮 `message.start{display_kind, display_text}` | `rowToAgentMessage`（只取 `text`）、`#emitUserMessage`；`message.start` 只开 assistant draft，不画自动化结果卡 | 部分 |
+| 助手消息 | `message.start`/`block_start`/`delta`/`interim`/`block_end`/`complete`、`turn.*`、`prompt.result`；快照 assistant 行 `text` + `reasoning*` 侧车 | `#openDraft`/`#complete`/`#mergeLastAssistant`；`rowToAgentMessage`。`message.block_end.content`、`rendered`、`response_transformed` 未消费（漏 delta 时无兜底）；`message.complete.usage` 是 session 累计（`gateway/session_usage.tui_usage`：input/output/total/context/cache_hit_pct），不是本回合 usage，usage 行会显示累计值且成本为 0 | 部分 |
+| Thinking | 实时 `reasoning.delta`（`display.show_reasoning` 或 `/reasoning show` 打开时才有）、`message.complete.reasoning`；快照 `reasoning`/`reasoning_content`/`reasoning_details`；`thinking.delta` 是 kawaii spinner 文本（`gateway/local_viewer_events.wire`），不是模型思考 | `handleNotification` 把 `reasoning.delta` 与 `thinking.delta` 都投成 `thinking_delta`；`#complete` 不读 `payload.reasoning`；`rowToAgentMessage` 不读 reasoning。映射层要过滤 spinner 文本，否则会伪造思考块 | 部分 |
+| Advisor | 行 `display_kind="adviser"`（`agent/adviser_delivery.py`、`agent/plugin_events.py`）；`message.adviser` 只在 sidecar 装了 `plugin_message_callback`（`tui_gateway/agent_callbacks.py`），canonical gateway 未装 | `addMessageToChat` 只认 `role:"custom"` + `customType:"advisor"`；`rowToAgentMessage` 把 adviser 行画成 user 气泡；`message.adviser` 未处理 | 待接 |
+| Background TAN | 本机 `/tan`（builtin，`executeBuiltinSlashCommand` 在网关调用前处理；`TanCommandController.start` 起本机 clone，并用 `sendCustomMessage` 写派发行）；网关的 `background.complete{task_id,text}` 是 `/bg` 的结果文本，语义不同 | `BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE` 由本机 custom message 渲染；clone 与结果都跑本机 agent，不进 Hermes transcript；`background.complete` 未处理，且不能填进派发状态条 | 部分 |
+| Skill 调用 | `command.dispatch` 返回 `{type:"skill", name, message, display}`（`gateway/session_commands._skill_directive`、`tui_gateway/methods_tools._dispatch_skill`）；快照行 `display_kind="skill_invocation"`（文本是 `/skill …` 调用式） | `#gatewayPrompt` 只提交 `type:"send"`，其余 type 直接返回 false —— `/skill-*` 这一次提交不产生回合；`rowToAgentMessage` 忽略 `display_kind`；本机 `skill-command.ts` 走 `promptCustomMessage`，而 `AgentSession` 只有 `prompt()` 在挂网关时转 `#gatewayPrompt`（`#dispatchCustomPrompt` 仍跑本机 agent loop，会绕过 Hermes） | 待接 |
+| 自定义/hook 消息 | `agent.print`（压缩、子代理完成、错误、预算等 `_print_fn` 行）、`command.output`、`notification.show`；Hermes hooks 是服务端策略，没有 renderer 侧 widget 注册 | `addMessageToChat` 需要 `role:"custom"`/`"hookMessage"`；`rowToAgentMessage` 丢弃；`gateway-session.ts` 显式 `case "agent.print": return`。可展示的文本应先映射成通知行，不要伪造 custom entry | 无 producer |
+| 压缩摘要 | 快照把 compaction carrier 投影成 `display_content`，但 `display_kind="hidden"` 的独立 summary 在 `_history_to_messages` 被丢弃；合并进用户回合的 carrier 只保留真实尾部内容，退化成普通 user/assistant 行，也不是 compaction 块；实时只有 `status.update{kind:compacting…}` 与 `agent.print` 的压缩行 | `#compacting` 只影响输入排队；`CompactionSummaryMessageComponent` 要 `role:"compactionSummary"` entry，网关不产生。`status.update` 不能拼成摘要 | 无 producer |
+| Recap | 无。`review.summary` 是后台 review（`agent/background_review.py`、`gateway/session_refine.py`），不是 omp 的 idle recap；`/recap` 是本地 CLI 计算（`hermes_cli/session_recap.py`），网关无事件 | `RecapNotice` 由本机 recap 引擎触发。不得用 `review.summary` 冒充 | 无 producer |
+| Todo 提醒 | 无 stop-time 提醒事件；`todo.updated` 只是任务快照（供 HUD） | `TodoReminderComponent` 由本机 `todo_reminder` 事件触发 | 无 producer |
+| TTSR 通知 | 无（omp 专属 stream rewind 规则） | `ttsr_triggered` 是本机事件 | 无 producer |
+| Late diagnostics | `tool.complete.result` 内的 `lsp_diagnostics`（`tools/file_operations.py` 的 WriteResult）随编辑/写入卡展示；没有 turn-end 诊断事件 | 独立块由本机 `LATE_DIAGNOSTICS_MESSAGE_TYPE` 触发。诊断已在工具卡内，不另造块 | 无 producer |
+| Cache miss 标记 | `message.complete.usage` 是 `tui_usage`（session 累计：input/output/prompt/completion/total/calls/context/cache_hit_pct），**没有**每回合 `cache_read`；`session.usage` 的顶层累加计数有 `cache_read_tokens`，但客户端不喂给 marker | `detectCacheInvalidation` 读 `usage.cacheRead`（对 `message.complete.usage` 恒为 0），永不触发。需给 `message.complete.usage` 补 `cache_read`/`cache_write`（§4.7）或由映射层用 `session.usage` 做回合差分；不能伪造 | 待接 |
+| Served model 标记 | 无 wire 字段。turn result 有 `requested_model`/`served_model`（`agent/served_model.py`），只进 `runtime_footer` 文本；`session.info.fallback_model` 是回退模型，不是 served | `ServedModelTracker.check(message.upstreamModel)` 永远无值。需 §4.7 给 `message.complete` 加 `served_model` | 待接 |
+| 被剥离的工具调用 | 无。Hermes 服务端投影直接不返回隐藏行/压缩祖先，不标“剥离” | `strippedToolCalls` 标记来自本机 context build（`session-context.ts`） | 无 producer |
+| Reaction | 文本派生（回复以 emoji 开头）与网关无关，照旧；显式 `message.reaction{row_id, reactions, role}`（`tools/react_to_message_tool.py`，local-viewer 经 `gateway/local_desktop_ui.py` 发布）与 `reaction{kind}`（白名单）；快照行不带 reactions | `pickReactionTarget`/`splitReaction` 已接文本派生；`message.reaction`/`reaction` 未处理，工具反应不画、resume 不还原 | 部分 |
+| 工具执行 | 实时 `tool.start{args, context, labels}`/`tool.progress`/`tool.complete{result, summary, inline_diff, todos}`；快照 tool 行有 `name`/`args`/`labels`/`content`（`content` 仅 write_file/patch/skill_manage），**没有 `text`** | `handleNotification` → `tool_execution_start/update/end`；`projectToolResult`。`rowToAgentMessage` 对 tool 行只读 `text`，不读 `content`/`args`/`labels`，resume 后卡片丢参数、标签、结果文本与编辑内容 | 部分 |
+| Bash 执行 | 本机 `#executeBashCommand` → `AgentSession.executeBash`（`BashController`），不经网关；结果只写本机 `SessionManager` | `BashExecutionComponent` 本机渲染；网关会话看不到该命令与输出，resume 后消失 | 部分 |
+| Eval 执行 | 本机 kernel（`isEvalRunning`/本机 eval），网关没有共享 kernel | `EvalExecutionComponent` 本机渲染；同上，不进入 Hermes transcript | 部分 |
+| Read 工具组 | `tool.start`/`tool.complete` 带工具名；Hermes 的工具名是 `read_file`（`tools/file_tools.py`），参数是 `path` | `readArgsCollapseIntoGroup`/`toolRenderName` 只认 `read` + `path`（`event-controller.ts`、`ui-helpers.ts`）。映射层加 `read_file`→`read` 别名即可，网关不缺数据 | 待接 |
+| 图片/SVG/figure | 正文 fence（SVG/Mermaid/figure）是客户端渲染，已接；工具结果图片在实时 `tool.complete.result.content`；快照 tool 行只对 write_file/patch/skill_manage 带 `content`；用户图片快照是 `@image:`/`[image]` 文本 | `AssistantMessageComponent`、`ToolExecutionComponent`、`image.ts`。resume 会丢工具图片与内联用户图 | 部分 |
+| 表格图表 | 客户端对 assistant 表格做 `tui.autoGraph` 渲染，不依赖网关数据 | `table-chart.ts` | 已接 |
+| Collab prompt | 无（§10 unsupported；`groups.*` 是桌面 hosted room，不是 omp collab） | `COLLAB_PROMPT_MESSAGE_TYPE` 本机产生 | 无 producer |
+| Reply write | 无。Hermes 的 `write_file` 是文件写入，没有 `write` 工具的 reply-scope `out://` | `isReplyWrite`/`ReplyWriteComponent` 只认 `write` + reply scheme | 无 producer |
+| 错误帧 | `message.complete{status:error, stop_reason, error_surface}`、`prompt.result.error{message, retryable, code, http_status}`、`error` 事件、`approval.cancelled` | `#complete` 写 `errorMessage`/`stopReason` → `#handleMessageEnd` 的 `showPinnedError`；`prompt.result.error` → `notice(level:error)` → `showError`。retry 仍读本机 `#recovery`，`error_surface.retryable` 未用；`approval.cancelled` 未提示 | 部分 |
+| 通知/分隔 | `notification.show`（canonical 本地 viewer 的 notice 主通道：`_local_notice_callback_sync`、`gateway/plugin_messages.py`、登录/低磁盘）、`status.update`、`notice{message}`、`error`、`agent.print`、`command.output`、`session.reclaimed`/`session.resume_progress` | `status.update`/`notice`/`error` → `notice` AgentSessionEvent → `showStatus`/`showWarning`/`showError`；`notification.show`（文本在 `text` 而非 `message`）、`agent.print`、`command.output`、`session.reclaimed`/`session.resume_progress` 都落到 `default` 丢弃；divider/frame 由消息结构自渲染 | 部分 |
+| Transcript 选择器 | `session.history`（`GatewayOmpSession.history(limit)`；`entries`/`next_cursor` 已有，`outline` 摘要仍是 §4.7 扩展）、`session.mutate`（rewind 截断） | `selector-controller.ts` 从本机 `sessionManager.getTree()`/`getEntry()` 重建，并调本机 `navigateTree`；`transcript-browser.ts`/`transcript-outline.ts` 在 shell 快照里无引用（实际入口是 pi-tui 的 `RewindSelectorComponent`）；`gateway.history()` 无调用方，rewind 未走 `session.mutate` | 待接 |
+
+同一个 `rowToAgentMessage` 是快照的唯一投影点：它只读 `role`/`text`/`timestamp`/`model`/`tool_call_id`/
+`name`/`is_error`，`display_kind`、`display_metadata`、`reasoning*`、`args`、`labels`、`content`、`row_id`
+全部丢掉。上表所有“快照丢 X”都修在 `omp-ui/src/modes/rpc/gateway-session.ts`，不是渲染组件。
+
+跨区块的前置决定（都在客户端映射层，不改 UI）：
+
+1. `notification.show` 与 `agent.print` 是 canonical gateway 面向本地 viewer 的主要文本通道
+   （`gateway/run_turn_progress.py::_local_notice_callback_sync`、`gateway/local_viewer_events.py::wire`、
+   `gateway/plugin_messages.py`、登录与低磁盘提示），现在都被 `handleNotification` 的 `default` 丢掉。
+   先定映射（统一成 `notice` → `showStatus`/`showWarning`/`showError`，还是逐类解析压缩/子代理/错误），
+   通知与压缩摘要才可能非空。
+2. `command.dispatch` 对 `/skill-*` 返回 `{type:"skill", name, message, display}`，`#gatewayPrompt`
+   只提交 `type:"send"`，技能调用块与技能轮次都卡在这里；提交 `message`、用 `display` 造用户可见行即可，
+   不需要网关新方法。
+3. `promptCustomMessage`/`sendCustomMessage` 没有 `#gateway` 分支（只有 `prompt()` 在挂网关时转
+   `#gatewayPrompt`）：本机 `/tan` 与 `/skill:` 的 custom 块即使画出来，派发/回合也跑在本机 agent 上。
+   这类块要么改走网关提交，要么按“本机能力”标注，不能算已接。
+4. 渲染器按 omp 工具名设闸：`read-tool-group`/`event-controller` 只认 `read`，`projectToolResult`
+   只在 `name === "todo"` 时生成 `details.phases`；Hermes 是 `read_file`/`todo_list`，映射层必须做别名，
+   否则 read 组不合并、todo 卡缺 phases。
 
 #### 2.3.3 Composer / editor 细节
 
@@ -494,7 +615,6 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | `hideThinkingBlock` | `false` | 隐藏助手 thinking 块 |
 | `expandThinkingBlocks` | `false` | 默认展开 thinking 块 |
 | `startup.quiet` | `false` | 隐藏欢迎头/启动动画 |
-| `startup.changelogMode` | `summary` | 启动 What's New：`hidden`/`summary`/`expanded` |
 | `tui.reactions` | `true` | agent emoji 反应徽章 |
 | `tui.titleState` | `true` | 终端标题显示运行状态 |
 | `tui.titleSpinner` | `braille` | 终端标题 spinner 样式 |
@@ -577,6 +697,27 @@ config.schema {profile?} -> {settings:[{key, type, default, enum?, description, 
 
 - 让 omp 的 `Settings` 菜单能按类型渲染（开关/枚举/数字/字符串/路径），避免硬编码 key。
 - 只读；写仍走 `config.set`。
+
+### 4.4.1 `omp.appearance.*`（Appearance 页）
+
+```text
+omp.appearance.get {profile?} -> {values:{"theme.dark":"titanium", "symbolPreset":"unicode", ...}}
+omp.appearance.set {profile?, key, value} -> {key, value}      # value:null 删除该键
+```
+
+- omp-ui 的 Appearance 页的**全部配置项**都是 Hermes profile config：存放在该 profile
+  `config.yaml` 的 `omp.appearance` 段，按 setting id 嵌套（`theme.dark` →
+  `theme: {dark: ...}`，`statusLine.preset` → `statusLine: {preset: ...}`）。
+- 默认值来自 omp 自己的注册表：`hermes_cli/data/omp_appearance_defaults.json` 由
+  `scripts/gen_omp_appearance_defaults.py` 从 `omp-ui/src/config` 生成，并进入
+  `DEFAULT_CONFIG["omp"]["appearance"]`（因此 `config.schema` 也列出这些键）。
+  `omp.appearance.get` 返回「omp 默认值 + profile 已存覆盖」的完整映射；`config.yaml` 只存覆盖。
+- 启动时该完整映射作为 runtime override 应用（不给 shell 自己的 `config.yml` 写第二份）；
+  面板写入走 `omp.appearance.set`，gateway 直接写 `config.yaml`。
+- 两个方法都是 sidecar（`tui_gateway/methods_omp_ui.py`），`Settings menu` 面板广告为 L；
+  `config.set` 不承担这组键，以免和 Hermes 自身的 `config.yaml` 语义混用。
+- 生成物漂移由 `omp-ui/src/modes/rpc/gateway-appearance.test.ts` 拦截；omp 快照刷新后
+  重跑生成脚本。
 
 ### 4.5 `btw.history` / `session.plan.*`
 
@@ -812,5 +953,7 @@ scripts/run_tests.sh tests/gateway/test_promoted_usage.py tests/gateway/test_pro
    `supported:false` 与原因；
 9. **主界面交互回归（§0.1）**：接入前后 §2.3 的纵向结构、transcript 区块、composer、HUD/实时行、
    状态行、默认键位表、slash 面板与显示默认值逐项一致；Hermes 数据只填充值，不改变控制流；
+   各区的数据来源与状态以 §2.3.1.1（纵向结构）与 §2.3.2.1（transcript 区块）为准（接线只动“消费点”，
+   无 producer 的区保持空）；
 10. **别名归属（附录 A.0.1/B.0.1）**：Hermes 契约没有为对齐 omp 命名而新增的同义字段；P 档的
     字段改名、枚举映射、信封解包与单位换算全部位于 `omp-ui/src/modes/rpc/`。

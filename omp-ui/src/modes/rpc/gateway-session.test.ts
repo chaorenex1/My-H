@@ -235,6 +235,22 @@ describe("session state", () => {
 		expect(session.running).toBe(true)
 	})
 
+	test("a session.info model change repaints the status line, an unchanged one does not", () => {
+		const { session, events } = harness({ model: "m-1", provider: "p-1" })
+		session.handleNotification({
+			type: "session.info",
+			payload: { model: "m-2", provider: "p-2", execution_generation: 9, revision: 11 }
+		})
+		expect(session.model).toBe("m-2")
+		expect(events.filter((event) => event.type === "model_changed")).toHaveLength(1)
+
+		session.handleNotification({
+			type: "session.info",
+			payload: { model: "m-2", provider: "p-2", execution_generation: 9, revision: 11 }
+		})
+		expect(events.filter((event) => event.type === "model_changed")).toHaveLength(1)
+	})
+
 	test("usage maps Hermes snake_case counters onto the vendored Usage shape", () => {
 		expect(
 			toOmpUsage({

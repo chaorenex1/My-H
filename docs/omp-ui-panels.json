@@ -212,6 +212,18 @@
           "access": "write",
           "status": "A",
           "change": []
+        },
+        {
+          "name": "omp.appearance.get",
+          "access": "read",
+          "status": "L",
+          "change": []
+        },
+        {
+          "name": "omp.appearance.set",
+          "access": "write",
+          "status": "L",
+          "change": []
         }
       ],
       "events": []

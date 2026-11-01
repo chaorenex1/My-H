@@ -75,10 +75,9 @@ SKIP_REL_DIRS = {
     Path("website/i18n"),
     Path("website/build"),
     Path("website/node_modules"),
-    # omp-ui/src is a byte-identical snapshot of the upstream oh-my-pi shell
-    # (omp-ui/src/VENDORED.md): its `/tmp` defaults are upstream's, and a fix here would be
-    # reverted by omp-ui/scripts/sync-upstream.py. Same class as website/node_modules.
-    Path("omp-ui/src"),
+    # omp-ui/src/vendor is the vendored upstream oh-my-pi dependency closure (omp-ui/src/VENDORED.md):
+    # its `/tmp` defaults are upstream's. The shell around it is Hermes-maintained and stays checked.
+    Path("omp-ui/src/vendor"),
 }
 
 SKIP_FILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock"}

@@ -1,10 +1,10 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { fileUriForTerminal } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { extractUriScheme, InternalUrlRouter, parseInternalUrl, type ResolveContext } from "./index";
-import { expandPath } from "../tools/path-utils";
 
 /**
  * Resolve Markdown link destinations (as extracted by `getMarkdownLinkUrls`)
@@ -43,7 +43,14 @@ export async function resolveMarkdownLinkHrefs(
 					suffix = suffixIndex < 0 ? "" : href.slice(suffixIndex);
 					const decoded =
 						extractUriScheme(href) === "file" ? url.fileURLToPath(href) : decodeURIComponent(filePath);
-					sourcePath = path.resolve(context?.cwd ?? process.cwd(), expandPath(decoded));
+					// A leading `~` names the user's home directory (`~/notes.md`), not a file under cwd.
+					const homeRelative =
+						decoded === "~"
+							? os.homedir()
+							: decoded.startsWith("~/") || decoded.startsWith("~\\")
+								? path.join(os.homedir(), decoded.slice(2))
+								: decoded;
+					sourcePath = path.resolve(context?.cwd ?? process.cwd(), homeRelative);
 				}
 				const stat = await fs.stat(sourcePath);
 				if (!stat.isFile() && !stat.isDirectory()) return;

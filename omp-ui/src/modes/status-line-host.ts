@@ -1,15 +1,9 @@
 import type { StatusLineHost, StatusLineSession } from "@oh-my-pi/pi-tui/status-line/host";
 import { Settings, settings } from "../config/settings";
 import type { AgentSession } from "../session/agent-session";
-import { getSessionCompactionBoundaries } from "../session/context-usage-runtime";
-import { claimResetExpiryNotice, classifyResetExpiry } from "../session/reset-expiry";
-import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
-import { resolveActiveRepoContextSync } from "../utils/active-repo-context";
-import { GH_COMMAND_TIMEOUT_MS, github } from "../utils/github";
 import { calculateTokensPerSecond } from "../utils/token-rate";
 
 import {
-	cfgGitEnabled,
 	cfgStatusLineCompactThinkingLevel,
 	cfgStatusLineContextLine,
 	cfgStatusLineLeftSegments,
@@ -20,19 +14,24 @@ import {
 	cfgStatusLineSessionAccent,
 	cfgStatusLineShowHookStatus,
 	cfgStatusLineTransparent,
-	cfgTuiCodexResetFireworks,
 } from "./settings";
-import { cfgGoalStatusInFooter } from "../goals/settings";
 
 /**
  * Session capabilities the host consults beyond the display subset. Every
- * field is optional so display-only sessions (collab guest replicas, test
- * fixtures) still render; a live `AgentSession` satisfies it structurally.
+ * field is optional so display-only sessions still render; a live `AgentSession`
+ * satisfies it structurally.
  */
-export type StatusLineHostSession = StatusLineSession &
-	Partial<Pick<AgentSession, "settings" | "modelRegistry" | "sessionId" | "fetchUsageReports">>;
+export type StatusLineHostSession = StatusLineSession & Partial<Pick<AgentSession, "settings" | "sessionId">>;
 
-/** Application policy and runtime services consumed by the portable status renderer. */
+/**
+ * Application policy for the portable status renderer.
+ *
+ * The renderer's segments read the session for their numbers (`getSessionStats`,
+ * `getContextUsage`, model, title), so the host only carries preferences. There is
+ * no git probe, no account/OAuth identity and no usage-report source in a gateway
+ * client — the authority owns all three — so the segments that would consume them
+ * stay dark instead of reporting invented state.
+ */
 export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
 	getSettings: () => ({
 		preset: cfgStatusLinePreset.get(settings),
@@ -46,31 +45,27 @@ export const statusLineHost: StatusLineHost<StatusLineHostSession> = {
 		compactThinkingLevel: cfgStatusLineCompactThinkingLevel.get(settings),
 		contextLine: cfgStatusLineContextLine.get(settings),
 	}),
-	gitEnabled: () => cfgGitEnabled.get(settings),
-	codexResetFireworksEnabled: () => cfgTuiCodexResetFireworks.get(settings),
 	// Read per frame: skip the `settings` proxy trap and hit the instance getter directly.
 	getSettingsRevision: () => Settings.instance.revision,
 	getSessionSettingsIdentity: session => session.settings,
 	getSessionSettingsRevision: session => session.settings?.revision ?? 0,
-	goalStatusInFooter: session => cfgGoalStatusInFooter.get(session.settings ?? settings),
-	activeAccount: (session, provider) =>
-		session.modelRegistry?.authStorage?.oauth.identity(provider, session.sessionId),
-	canFetchUsageReports: session => typeof session.fetchUsageReports === "function",
-	fetchUsageReports: (session, signal) => session.fetchUsageReports?.(signal) ?? Promise.resolve(null),
-	resolveActiveRepo: resolveActiveRepoContextSync,
-	lookupPullRequest: cwd =>
-		github.run(cwd, ["pr", "view", "--json", "number,url"], AbortSignal.timeout(GH_COMMAND_TIMEOUT_MS)),
+	/** No repository probe: the branch segment is a local-git feature. */
+	gitEnabled: () => false,
+	/** Reset-expiry fireworks belong to the provider-account segments, which do not exist here. */
+	codexResetFireworksEnabled: () => false,
+	/** Goals live on the authority; the footer never claims one. */
+	goalStatusInFooter: () => false,
+	/** Sign-in identity is the authority's; the client holds no account. */
+	activeAccount: () => undefined,
+	canFetchUsageReports: () => false,
+	fetchUsageReports: () => Promise.resolve(null),
+	/** No nested-repository workspace selection in a gateway client. */
+	resolveActiveRepo: () => null,
+	/** No git probe, so the pull-request segment resolves nothing (`exitCode` 1 = no data). */
+	lookupPullRequest: () => Promise.resolve({ stdout: "", exitCode: 1 }),
 	calculateTokensPerSecond,
-	limitMatchesActiveAccount,
-	classifyResetExpiry,
-	resetExpiryNotice: (session, reports, nowMs) => {
-		// agent.db records which resets were warned about across omp processes; without it, stay quiet
-		// rather than repeat the warning on every refresh.
-		const storage = (session.settings ?? settings).getStorage();
-		return storage
-			? claimResetExpiryNotice(reports, nowMs, (key, expiresAtMs) => storage.claimNotice(key, expiresAtMs))
-			: undefined;
-	},
-	computeCompactionBoundaries: (session, contextWindow, model) =>
-		getSessionCompactionBoundaries(session.settings ?? settings, contextWindow, model),
+	/** No account identity exists, so no report row can be scoped to one. */
+	limitMatchesActiveAccount: () => false,
+	/** The authority compacts; the client draws no boundary markers. */
+	computeCompactionBoundaries: () => null,
 };

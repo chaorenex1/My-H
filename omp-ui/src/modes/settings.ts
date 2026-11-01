@@ -1,8 +1,6 @@
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
-import { cfgReadToolResultPreview } from "../tools/settings";
-import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
 import { TREE_FILTER_MODES } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	CONTEXT_LINE_MODE_VALUES,
@@ -734,7 +732,6 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 effect(
 	combine({
 		hideToolActivity: cfgDisplayHideToolActivity,
-		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,
 		cacheMissMarker: cfgDisplayCacheMissMarker,
 		showTokenUsage: cfgDisplayShowTokenUsage,
@@ -1180,61 +1177,6 @@ export const cfgMarketplaceAutoUpdate = register({
 		],
 	},
 });
-
-export const cfgStartupChangelogMode = register({
-	id: "startup.changelogMode",
-	type: "enum",
-	values: ["summary", "expanded", "hidden"] as const,
-	default: "summary",
-	ui: {
-		tab: "interaction",
-		group: "Startup & Updates",
-		label: "Startup Changelog",
-		description: "Choose whether update notes start as a summary, full details, or stay hidden",
-		options: [
-			{
-				value: "summary",
-				label: "Summary",
-				description: "Show release and change counts with a /changelog hint",
-			},
-			{
-				value: "expanded",
-				label: "Expanded",
-				description: "Show the recent release notes in full",
-			},
-			{
-				value: "hidden",
-				label: "Hidden",
-				description: "Do not show release notes on startup",
-			},
-		],
-	},
-});
-
-export const cfgMagicKeywordsEnabled = register({
-	id: "magicKeywords.enabled",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "interaction",
-		group: "Magic Keywords",
-		label: "Magic Keywords",
-		description: `Enable hidden notices for standalone ${MAGIC_KEYWORDS.map(keyword => keyword.word).join(", ")} keywords`,
-	},
-});
-
-/** One `magicKeywords.<id>` toggle per registered keyword, keyed by keyword id. */
-export const cfgMagicKeyword = Object.fromEntries(
-	MAGIC_KEYWORDS.map(keyword => [
-		keyword.id,
-		register({
-			id: `magicKeywords.${keyword.id}`,
-			type: "boolean",
-			default: true,
-			ui: { tab: "interaction", group: "Magic Keywords", label: keyword.label, description: keyword.description },
-		}),
-	]),
-) as Record<MagicKeywordId, Setting<boolean>>;
 
 // Notifications
 export const cfgCompletionNotify = register({

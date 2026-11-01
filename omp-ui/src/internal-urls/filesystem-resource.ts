@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { hasFsCode, isEnoent, isEnotdir } from "../vendor/utils/src/index.ts";
+import { isEnoent, isEnotdir } from "../vendor/utils/src/index.ts";
 import { isMarkdownPath } from "@oh-my-pi/pi-tui/lang-from-path";
 import type { InternalResource } from "./types";
 
@@ -50,8 +50,7 @@ export function ensureWithinRoot(targetPath: string, rootPath: string, scheme: s
  * Realpath of an existing `targetPath` under the already-realpathed `realRoot`,
  * checking the lexical target, its real parent (when it exists), and its real
  * path for containment so symlinks cannot escape the root. Returns `undefined`
- * when the target does not exist; write paths use {@link ensureCreatableWithinRoot}.
- * Escape errors name `url`.
+ * when the target does not exist. Escape errors name `url`.
  */
 export async function containedRealPath(
 	targetPath: string,
@@ -79,43 +78,6 @@ export async function containedRealPath(
 	return realTargetPath;
 }
 
-/**
- * Throw {@link UrlContainmentError} unless creating `targetPath` (lexically under
- * the already-realpathed `realRoot`) stays inside the root: the deepest existing
- * entry on the way must canonically resolve within it, and no entry may be a
- * dangling symlink a `mkdir -p` + write would follow out of the root. Errors name
- * `url`, never the on-disk path; symlink loops and file ancestors fail closed.
- */
-export async function ensureCreatableWithinRoot(
-	targetPath: string,
-	realRoot: string,
-	scheme: string,
-	url: string,
-): Promise<void> {
-	ensureWithinRoot(targetPath, realRoot, scheme, url);
-	for (let current = targetPath; ; current = path.dirname(current)) {
-		try {
-			ensureWithinRoot(await fs.realpath(current), realRoot, scheme, url);
-			return;
-		} catch (error) {
-			if (hasFsCode(error, "ELOOP")) {
-				throw new UrlContainmentError(`${scheme}:// URL goes through a symlink loop: ${url}`);
-			}
-			if (isEnotdir(error)) throw new Error(`${scheme}:// URL goes through a file, not a directory: ${url}`);
-			if (!isEnoent(error)) throw error;
-		}
-		let isLink: boolean;
-		try {
-			isLink = (await fs.lstat(current)).isSymbolicLink();
-		} catch (error) {
-			if (!isEnoent(error)) throw error;
-			isLink = false;
-		}
-		if (isLink) throw new UrlContainmentError(`${scheme}:// URL goes through a dangling symlink: ${url}`);
-		if (current === realRoot || path.dirname(current) === current) return;
-	}
-}
-
 /** Plain directory listing: directories first (`name/`), then files, by name; `(empty directory)` when empty. */
 export function formatDirectoryListing(entries: ReadonlyArray<{ name: string; isDirectory: boolean }>): string {
 	if (entries.length === 0) return "(empty directory)";
@@ -128,9 +90,9 @@ export function formatDirectoryListing(entries: ReadonlyArray<{ name: string; is
 /**
  * Builds a text resource for a filesystem directory resolved by an internal URL handler.
  *
- * The resource is flagged immutable so the read tool never mints hashline edit
- * anchors against a directory listing — only file resources from the same
- * handler stay editable.
+ * The resource is flagged immutable so consumers never treat a directory
+ * listing as editable file content; only file resources from the same handler
+ * stay mutable.
  */
 export async function buildDirectoryResource(
 	url: string,

@@ -10,7 +10,6 @@
  *   const isolated = Settings.isolated({ "compaction.enabled": false });
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -19,7 +18,6 @@ import { roleDefaultModels } from "../vendor/catalog/src/compat/behavior.ts";
 import { type GeneratedProvider, getBundledModels } from "../vendor/catalog/src/models.ts";
 import { type Api, type Model, modelKind } from "../vendor/catalog/src/types.ts";
 import {
-	getAgentDbPath,
 	getAgentDir,
 	getLastChangelogVersionPath,
 	getProjectDir,
@@ -28,19 +26,12 @@ import {
 	isRecord,
 	logger,
 	MAIN_CONFIG_FILENAMES,
-	procmgr,
 } from "../vendor/utils/src/index.ts";
 import { withFileLock } from "../vendor/utils/src/file-lock.ts";
 import { isLightTheme } from "@oh-my-pi/pi-tui/theme/theme";
 import { JSONC, YAML } from "bun";
-import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
-import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
-import { loadCapability } from "../discovery";
-import { AgentStorage } from "../session/agent-storage";
-import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
 import { writeFileAtomically } from "../utils/atomic-file";
-import { isRegisteredSearchEngine } from "../web/search/provider";
 import { stringifyYamlConfig } from "../vendor/utils/src/yaml-config.ts";
 import {
 	type AnySetting,
@@ -56,7 +47,6 @@ import {
 // Registers every setting before any instance is read (definitions live next to their domains).
 import "./all-settings";
 import { cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
-import { cfgShellPath } from "../exec/settings";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -135,11 +125,6 @@ type MainYamlReadResult = {
 type ProjectSettingsReadResult = {
 	settings: RawSettings;
 	fileSettings: RawSettings;
-	shellPathSource: string | undefined;
-	/** Files that supplied merged project-level settings items. */
-	sourcePaths: string[];
-	/** Project warnings surfaced for this read; commit with the layer as `#projectSettingsWarningsSeen`. */
-	warningsSeen: Set<string>;
 };
 
 /** `strict` rejects on any unreadable layer; `keep-last-good` keeps each failed layer's previous value. */
@@ -153,7 +138,6 @@ const CONFIG_WATCH_DEBOUNCE_MS = 200;
 
 type ConfigOverlayReadResult = {
 	settings: RawSettings;
-	shellPathSource: string | undefined;
 };
 
 export interface SettingsOptions {
@@ -309,61 +293,12 @@ interface OwnLayers {
 /** The layers an {@link Settings.overlay} child writes locally; see {@link Settings.overlayLayers}. */
 export type OverlayLayers = Readonly<Pick<OwnLayers, "global" | "overrides">>;
 
-/** A persisted layer re-read from disk: its new value, the file(s) it came from, and the read-side state it commits. */
+/** A persisted layer re-read from disk: its new value, the file(s) it came from, and any read-side state it commits. */
 interface LayerRefresh {
 	layer: "global" | "project" | "configOverlay";
 	settings: RawSettings;
 	source: string;
-	commit(): void;
-}
-
-/**
- * Dotted-path prefixes that name settings groups (e.g. "tui" for "tui.*").
- * A prefix may simultaneously be a schema leaf; those accept their declared
- * value shape and are excluded from shadow detection.
- */
-let groupOnlyPrefixes: Readonly<Record<string, true>> | undefined;
-
-function settingsGroupOnlyPrefixes(): Readonly<Record<string, true>> {
-	if (groupOnlyPrefixes) return groupOnlyPrefixes;
-	const prefixes: Record<string, true> = {};
-	for (const { id } of allSettings()) {
-		for (let dot = id.indexOf("."); dot !== -1; dot = id.indexOf(".", dot + 1)) {
-			prefixes[id.slice(0, dot)] = true;
-		}
-	}
-	for (const { id } of allSettings()) delete prefixes[id];
-	groupOnlyPrefixes = prefixes;
-	return prefixes;
-}
-
-/**
- * Drop entries from capability-provided project settings whose non-object
- * value would shadow an entire settings group. `.claude/settings.json` is
- * shared with other tools, and a foreign leaf like `"tui": "fullscreen"`
- * deep-merges over omp's `tui` group, silently replacing every `tui.*`
- * setting for sessions rooted in that project. Values at schema leaves,
- * unknown keys, and well-formed nested objects pass through unchanged.
- */
-export function dropSettingsGroupShadows(data: RawSettings, sourcePath: string, basePrefix = ""): RawSettings {
-	const result: RawSettings = {};
-	for (const key of Object.keys(data)) {
-		const value = data[key];
-		const path = basePrefix === "" ? key : `${basePrefix}.${key}`;
-		if (!Object.hasOwn(settingsGroupOnlyPrefixes(), path)) {
-			result[key] = value;
-			continue;
-		}
-		if (typeof value !== "object" || value === null || Array.isArray(value)) {
-			logger.warn("Settings: ignoring project setting that would shadow a settings group", {
-				setting: path,
-				source: sourcePath,
-			});
-			continue;
-		}
-		result[key] = dropSettingsGroupShadows(value as RawSettings, sourcePath, path);
-	}
-	return result;
+	commit?(): void;
 }
 
 function expandTilde(p: string): string {
@@ -581,7 +516,6 @@ export class Settings {
 	#configPath: string | null;
 	#cwd: string;
 	#agentDir: string;
-	#storage: AgentStorage | null = null;
 
 	#configFiles: string[] = [];
 	/** Global settings from config.yml/config.yaml */
@@ -594,14 +528,6 @@ export class Settings {
 	#quarantinedYamlTargets = new Map<string, string>();
 	/** Extra config.yml-style overlays passed by CLI */
 	#configOverlay: RawSettings = {};
-	/** Project settings file that most recently supplied shellPath. */
-	#projectShellPathSource: string | undefined;
-	/** Discovered files that supplied the current project layer (watch targets). */
-	#projectSourcePaths: string[] = [];
-	/** Capability warnings already surfaced for the current project scope; reloads stay quiet. */
-	#projectSettingsWarningsSeen = new Set<string>();
-	/** Explicit config overlay that most recently supplied shellPath. */
-	#overlayShellPathSource: string | undefined;
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
 	/** Settings whose runtime override is a soft-pinned default ({@link pinDefaultValue}). */
@@ -755,14 +681,9 @@ export class Settings {
 
 	/**
 	 * Create an in-memory settings instance without affecting the global singleton.
-	 * A supplied storage handle remains shared for runtime data while setting overrides stay non-persistent.
 	 */
-	static isolated(
-		overrides: Readonly<Record<string, unknown>> = {},
-		options: { storage?: AgentStorage | null } = {},
-	): Settings {
+	static isolated(overrides: Readonly<Record<string, unknown>> = {}): Settings {
 		const instance = new Settings({ inMemory: true, overrides });
-		instance.#storage = options.storage ?? null;
 		instance.#rebuildMerged();
 		return instance;
 	}
@@ -776,7 +697,6 @@ export class Settings {
 	 */
 	overlay(overrides: Readonly<Record<string, unknown>> = {}): Settings {
 		const child = new Settings({ inMemory: true, cwd: this.#cwd, agentDir: this.#agentDir, overrides });
-		child.#storage = this.#storage;
 		child.#parent = this;
 		inheritWarnings(child, this);
 		child.#rebuildMerged();
@@ -1177,7 +1097,6 @@ export class Settings {
 		addFile(path.join(projectConfigDir, "config.yml"));
 		addFile(path.join(projectConfigDir, "settings.json"));
 		addFile(path.join(projectCwd, ".claude", "settings.json"));
-		for (const file of this.#projectSourcePaths) addFile(file);
 		for (const file of this.#configFiles) addFile(file);
 		return targets;
 	}
@@ -1303,12 +1222,9 @@ export class Settings {
 				agentDir: this.#agentDir,
 				inMemory: !this.#persist,
 			});
-			cloned.#storage = this.#storage;
 			cloned.#configPath = this.#configPath;
 			cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
-			if (!this.#persist) cloned.#projectShellPathSource = this.#projectShellPathSource;
 			cloned.#configFiles = [...this.#configFiles];
-			cloned.#overlayShellPathSource = this.#overlayShellPathSource;
 		}
 		cloned.#global = structuredClone(this.#global);
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
@@ -1375,7 +1291,7 @@ export class Settings {
 
 			const [globalResult, projectResult, overlayResult] = await Promise.allSettled([
 				this.#readExistingMainYaml(false),
-				this.#readProjectSettings(false, { rejectNewWarnings: keepLastGood }),
+				this.#readProjectSettings(false),
 				this.#readConfigOverlays(false),
 			]);
 			if (mutationGeneration !== this.#persistedMutationGeneration) continue;
@@ -1410,19 +1326,15 @@ export class Settings {
 				refreshed.push({
 					layer: "project",
 					settings: project.settings,
-					source: project.sourcePaths.join(", ") || getProjectAgentDir(this.#cwd),
+					source: getProjectAgentDir(this.#cwd),
 					commit: () => this.#commitProjectRead(project),
 				});
 			}
 			if (overlayResult.status === "fulfilled") {
-				const { settings, shellPathSource } = overlayResult.value;
 				refreshed.push({
 					layer: "configOverlay",
-					settings,
+					settings: overlayResult.value.settings,
 					source: this.#configFiles.join(", "),
-					commit: () => {
-						this.#overlayShellPathSource = shellPathSource;
-					},
 				});
 			}
 
@@ -1441,7 +1353,7 @@ export class Settings {
 			if (!keepLastGood) this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(layers)), this.#cwd);
 
 			const previous = this.#snapshot();
-			for (const refresh of adopted) refresh.commit();
+			for (const refresh of adopted) refresh.commit?.();
 			this.#global = layers.global;
 			this.#project = layers.project;
 			this.#configOverlay = layers.configOverlay;
@@ -1538,10 +1450,6 @@ export class Settings {
 	// Accessors
 	// ─────────────────────────────────────────────────────────────────────────
 
-	getStorage(): AgentStorage | null {
-		return this.#storage;
-	}
-
 	getCwd(): string {
 		return this.#cwd;
 	}
@@ -1588,49 +1496,6 @@ export class Settings {
 	getProjectSettings(): RawSettings {
 		const own = structuredClone(this.#project);
 		return this.#parent ? this.#deepMerge(this.#parent.getProjectSettings(), own) : own;
-	}
-
-	getPlansDirectory(): string {
-		return path.join(this.#agentDir, "plans");
-	}
-
-	/**
-	 * Get shell configuration based on settings.
-	 */
-	getShellConfig() {
-		return procmgr.getShellConfig(cfgShellPath.get(this), { configSource: this.#shellPathSource() });
-	}
-
-	/** Where the effective `shellPath` comes from, for error messages; an overlay defers to its parent. */
-	#shellPathSource(): string {
-		if (Object.hasOwn(this.#overrides, "shellPath")) return "the runtime settings override";
-		if (Object.hasOwn(this.#configOverlay, "shellPath")) {
-			return this.#overlayShellPathSource ?? "the active config overlay";
-		}
-		if (Object.hasOwn(this.#project, "shellPath")) {
-			return this.#projectShellPathSource ?? "the active project configuration";
-		}
-		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
-		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
-	}
-
-	/**
-	 * Provenance of the effective `extensions` array for extension-root
-	 * sub-discovery. `"project"` only when a project settings provider owns it
-	 * (any of `.omp/config.yml`, `.omp/settings.json`, `.claude/settings.json`,
-	 * … — all merged into the project layer) and no higher user-level layer (a
-	 * `--config` overlay or a runtime override) replaces it; otherwise `"user"`.
-	 * Callers pass this into {@link EffectiveExtensionRoots.configuredLevel} so
-	 * discovery labels roots by the authority that produced them rather than
-	 * re-deriving provenance from a partial disk scan. An {@link overlay} whose
-	 * own layers leave `extensions` alone reports its parent's level.
-	 */
-	extensionsSourceLevel(): "user" | "project" {
-		if (Object.hasOwn(this.#overrides, "extensions")) return "user";
-		if (Object.hasOwn(this.#configOverlay, "extensions")) return "user";
-		if (Object.hasOwn(this.#project, "extensions")) return "project";
-		if (this.#parent && !Object.hasOwn(this.#global, "extensions")) return this.#parent.extensionsSourceLevel();
-		return "user";
 	}
 
 	#modelRolesFromLayer(layer: RawSettings): Record<string, string> {
@@ -1945,7 +1810,6 @@ export class Settings {
 		return this;
 	}
 	async #loadGlobalSettings(): Promise<void> {
-		this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
 		const existingConfig = await this.#loadExistingMainYaml();
 		if (existingConfig) {
 			this.#global = existingConfig;
@@ -2396,85 +2260,25 @@ export class Settings {
 	}
 
 	/**
-	 * `rejectNewWarnings` fails the read (without logging the warnings) when a
-	 * project settings file newly fails to parse, so a keep-last-good reload can
-	 * retain the previous project layer. `cwd` (default: the current scope)
-	 * selects the project to read. The read leaves the project fields untouched:
-	 * the caller commits the result (`#commitProjectRead`, `warningsSeen`
-	 * included) only when it adopts the layer.
+	 * `cwd` (default: the current scope) selects the project to read. The read
+	 * leaves the project fields untouched: the caller commits the result
+	 * (`#commitProjectRead`) only when it adopts the layer.
 	 */
 	async #readProjectSettings(
 		quarantineInvalid: boolean,
-		options: { rejectNewWarnings?: boolean; cwd?: string } = {},
+		options: { cwd?: string } = {},
 	): Promise<ProjectSettingsReadResult> {
-		const cwd = options.cwd ?? this.#cwd;
-		// Resolve once: capability discovery, fs-cache invalidation, and the
-		// warning prefix below must all derive from the same absolute scope so
-		// relative cwds (e.g. ".") produce absolute provider paths that match.
-		const discoveryCwd = path.resolve(cwd);
-		const projectConfigDir = getProjectAgentDir(cwd);
+		const projectConfigDir = getProjectAgentDir(options.cwd ?? this.#cwd);
 		const projectConfigPath = path.join(projectConfigDir, "config.yml");
-		invalidateCapabilityFsCache(projectConfigPath);
-		invalidateCapabilityFsCache(path.join(projectConfigDir, "settings.json"));
-		invalidateCapabilityFsCache(path.join(discoveryCwd, ".claude", "settings.json"));
-		for (const sourcePath of this.#projectSourcePaths) invalidateCapabilityFsCache(sourcePath);
-		let shellPathSource: string | undefined;
-		let merged: RawSettings = {};
-		const sourcePaths: string[] = [];
-		let rejectedWarnings: string[] | undefined;
-		let warningsSeen = this.#projectSettingsWarningsSeen;
-		try {
-			const result = await loadCapability(settingsCapability.id, { cwd: discoveryCwd });
-			// `loadCapability` aggregates warnings across every level, but this
-			// method only merges project items — user-level parse failures belong
-			// to the global layer and would misattribute here. Warnings embed
-			// their source file's absolute path, so keep only warnings rooted at
-			// the discovery cwd (a bare substring would over-match relative
-			// scopes such as `cwd: "."` and sibling dir prefixes). Remember what
-			// was surfaced so reloads stay quiet while new failures still log.
-			// Level attribution below the path layer (e.g. a user-scoped dir
-			// mounted inside the project) needs warning metadata from the
-			// providers, which `LoadResult.warnings` does not carry.
-			const cwdRoot = discoveryCwd.endsWith(path.sep) ? discoveryCwd : discoveryCwd + path.sep;
-			const projectWarnings = (result.warnings ?? []).filter(warning => warning.includes(cwdRoot));
-			const newWarnings = projectWarnings.filter(warning => !this.#projectSettingsWarningsSeen.has(warning));
-			if (options.rejectNewWarnings && newWarnings.length > 0) {
-				rejectedWarnings = newWarnings;
-			} else {
-				for (const warning of newWarnings) logger.warn(`Settings: ${warning}`);
-				warningsSeen = new Set(projectWarnings);
-				for (const item of result.items as SettingsCapabilityItem[]) {
-					if (item.level === "project") {
-						merged = this.#deepMerge(merged, dropSettingsGroupShadows(item.data as RawSettings, item.path));
-						sourcePaths.push(item.path);
-						if (Object.hasOwn(item.data, "shellPath")) shellPathSource = item.path;
-					}
-				}
-			}
-		} catch {
-			shellPathSource = undefined;
-			// Capability discovery is best-effort; the native project config below
-			// remains authoritative for its model-role layer and must not be hidden.
-		}
-		if (rejectedWarnings) {
-			throw new Error(`Project settings failed to parse: ${rejectedWarnings.join("; ")}`);
-		}
 		// A native config this instance moved aside reads as missing until a save recreates it;
 		// keep its last good contents, as `#saveProjectNow` does.
 		const nativeProject = quarantineInvalid
 			? await this.#loadYaml(projectConfigPath)
 			: (this.#unwrapYamlLoadResult(projectConfigPath, await this.#loadYamlIfPresent(projectConfigPath, false)) ??
 				(this.#quarantinedYamlTargets.has(projectConfigPath) ? structuredClone(this.#projectFileSettings) : {}));
-		const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
-		if (nativeModelRoles !== undefined) {
-			merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
-		}
 		return {
-			settings: this.#migrateRawSettings(merged, quarantineInvalid),
+			settings: this.#migrateRawSettings(nativeProject, quarantineInvalid),
 			fileSettings: structuredClone(nativeProject),
-			shellPathSource,
-			sourcePaths,
-			warningsSeen,
 		};
 	}
 
@@ -2487,25 +2291,19 @@ export class Settings {
 	/** Adopts the read-side state of a project read whose layer is being committed. */
 	#commitProjectRead(result: ProjectSettingsReadResult): void {
 		this.#projectFileSettings = result.fileSettings;
-		this.#projectShellPathSource = result.shellPathSource;
-		this.#projectSourcePaths = result.sourcePaths;
-		this.#projectSettingsWarningsSeen = result.warningsSeen;
 	}
 
 	async #readConfigOverlays(captureLegacyChangelogVersion = true): Promise<ConfigOverlayReadResult> {
-		let shellPathSource: string | undefined;
 		let settings: RawSettings = {};
 		for (const filePath of this.#configFiles) {
 			const overlay = await this.#loadOverlayYaml(filePath, captureLegacyChangelogVersion);
 			settings = this.#deepMerge(settings, overlay);
-			if (Object.hasOwn(overlay, "shellPath")) shellPathSource = filePath;
 		}
-		return { settings, shellPathSource };
+		return { settings };
 	}
 
 	async #loadConfigOverlays(): Promise<RawSettings> {
 		const result = await this.#readConfigOverlays();
-		this.#overlayShellPathSource = result.shellPathSource;
 		return result.settings;
 	}
 
@@ -2564,16 +2362,6 @@ export class Settings {
 			}
 		}
 
-		try {
-			const dbSettings = this.#storage?.getSettings();
-			if (dbSettings) {
-				settings = this.#deepMerge(settings, this.#migrateRawSettings(dbSettings as RawSettings));
-				migrated = true;
-			}
-		} catch (error) {
-			logger.warn("Settings: failed to read legacy agent.db settings", { error: String(error) });
-		}
-
 		if (migrated && Object.keys(settings).length > 0) {
 			try {
 				await this.#writeYamlAtomically(this.#configPath, stringifyYamlConfig(settings));
@@ -2595,12 +2383,6 @@ export class Settings {
 						error: String(error),
 					});
 				}
-			}
-
-			try {
-				this.#storage?.clearMigratedSettings();
-			} catch (error) {
-				logger.warn("Settings: failed to clear migrated agent.db settings", { error: String(error) });
 			}
 		}
 	}
@@ -2628,31 +2410,6 @@ export class Settings {
 			this.#legacyLastChangelogVersion ??= raw.lastChangelogVersion;
 		}
 		delete raw.lastChangelogVersion;
-
-		// collapseChangelog (boolean) -> startup.changelogMode (enum). Preserve
-		// every explicit legacy choice while giving new installs the schema's
-		// "summary" default: true -> summary, false -> expanded. A separately
-		// configured new mode always wins.
-		const startupObj = isRecord(raw.startup) ? (raw.startup as Record<string, unknown>) : undefined;
-		const legacyCollapseChangelog = typeof raw.collapseChangelog === "boolean" ? raw.collapseChangelog : undefined;
-		const flatChangelogMode = raw["startup.changelogMode"];
-		const normalizedFlatChangelogMode =
-			flatChangelogMode === "summary" || flatChangelogMode === "expanded" || flatChangelogMode === "hidden"
-				? flatChangelogMode
-				: undefined;
-		if (legacyCollapseChangelog !== undefined || normalizedFlatChangelogMode !== undefined) {
-			if (!startupObj) {
-				raw.startup = {};
-			}
-			const target = raw.startup as Record<string, unknown>;
-			if (target.changelogMode === undefined) {
-				target.changelogMode =
-					normalizedFlatChangelogMode ??
-					(legacyCollapseChangelog !== undefined ? (legacyCollapseChangelog ? "summary" : "expanded") : undefined);
-			}
-		}
-		delete raw.collapseChangelog;
-		delete raw["startup.changelogMode"];
 
 		// Migrate old flat "theme" string to nested theme.dark/theme.light
 		if (typeof raw.theme === "string") {
@@ -2800,65 +2557,14 @@ export class Settings {
 			raw["edit.mode"] = "hashline";
 		}
 
-		// compaction.strategy / compaction.remoteEnabled → compaction.methodOrder.
-		// The old single strategy could not express a capability-dependent fallback
-		// chain. Preserve explicit legacy intent while new installs use the
-		// server → snapcompact → handoff → shake → soft default.
-		const compactionObj = isRecord(raw.compaction) ? raw.compaction : undefined;
-		const configuredMethodOrder = compactionObj?.methodOrder ?? raw["compaction.methodOrder"];
-		const legacyStrategy = compactionObj?.strategy ?? raw["compaction.strategy"];
-		const legacyRemoteEnabled = compactionObj?.remoteEnabled ?? raw["compaction.remoteEnabled"];
-		if (!Array.isArray(configuredMethodOrder)) {
-			const remoteEnabled = legacyRemoteEnabled !== false;
-			const strategy = legacyStrategy === "shake-summary" ? "shake" : legacyStrategy;
-			let methodOrder: CompactionMethod[] | undefined;
-			switch (strategy) {
-				case "context-full":
-					methodOrder = remoteEnabled ? ["remote", "soft"] : ["soft"];
-					break;
-				case "handoff":
-					methodOrder = remoteEnabled ? ["handoff", "remote", "soft"] : ["handoff", "soft"];
-					break;
-				case "shake":
-					methodOrder = remoteEnabled ? ["shake", "remote", "soft"] : ["shake", "soft"];
-					break;
-				case "snapcompact":
-					methodOrder = remoteEnabled ? ["snapcompact", "remote", "soft"] : ["snapcompact", "soft"];
-					break;
-				case "off":
-					methodOrder = [];
-					break;
-				default:
-					if (legacyRemoteEnabled === false) {
-						methodOrder = DEFAULT_COMPACTION_METHOD_ORDER.filter(method => method !== "remote");
-					}
-			}
-			if (methodOrder) {
-				const root = compactionObj ?? {};
-				root.methodOrder = methodOrder;
-				raw.compaction = root;
-			}
-		} else if (!compactionObj || compactionObj.methodOrder === undefined) {
-			const root = compactionObj ?? {};
-			root.methodOrder = configuredMethodOrder;
-			raw.compaction = root;
-		}
-		if (compactionObj) {
-			delete compactionObj.strategy;
-			delete compactionObj.remoteEnabled;
-		}
+		// compaction.* and snapcompact.* belong to the removed compaction pipeline;
+		// drop any keys a legacy config still carries.
+		delete raw.compaction;
+		delete raw["compaction.methodOrder"];
 		delete raw["compaction.strategy"];
 		delete raw["compaction.remoteEnabled"];
-		delete raw["compaction.methodOrder"];
-
-		// snapcompact.systemPrompt: boolean -> scoped enum.
-		const snapcompactObj = raw.snapcompact as Record<string, unknown> | undefined;
-		if (snapcompactObj && typeof snapcompactObj.systemPrompt === "boolean") {
-			snapcompactObj.systemPrompt = snapcompactObj.systemPrompt ? "all" : "none";
-		}
-		if (typeof raw["snapcompact.systemPrompt"] === "boolean") {
-			raw["snapcompact.systemPrompt"] = raw["snapcompact.systemPrompt"] ? "all" : "none";
-		}
+		delete raw.snapcompact;
+		delete raw["snapcompact.systemPrompt"];
 
 		// inlineToolDescriptors: boolean -> enum (auto | on | off). The old
 		// `true`/`false` mapped directly onto inline-on/inline-off, so preserve
@@ -3329,9 +3035,8 @@ export class Settings {
 					case "xai":
 						return webSearchSelector("xai");
 					case "auto":
-						return [];
 					default:
-						return isRegisteredSearchEngine(provider) ? [`web/${provider}`] : [];
+						return [];
 				}
 			};
 			const geminiModel =
@@ -3886,7 +3591,6 @@ export class Settings {
 				this.#projectFileSettings = structuredClone(projectSettings);
 				this.#quarantinedYamlTargets.delete(projectConfigPath);
 			});
-			invalidateCapabilityFsCache(projectConfigPath);
 		} catch (error) {
 			for (const role of modifiedModelRoles) {
 				this.#modifiedProjectModelRoles.add(role);
@@ -3977,20 +3681,6 @@ export class Settings {
  */
 const liveSettingsInstances = new Set<WeakRef<Settings>>();
 
-const activeSettingsScope = new AsyncLocalStorage<Settings>();
-
-/**
- * Run extension-owned work with the settings instance of its active session.
- *
- * Legacy Pi extensions synchronously call `SettingsManager.create(ctx.cwd)`;
- * `cwd` alone cannot distinguish concurrent sessions that use different
- * settings for the same project. The async scope supplies that missing session
- * identity without process-global mutation.
- */
-export function withActiveSettings<T>(instance: Settings | undefined, fn: () => T): T {
-	return instance ? activeSettingsScope.run(instance, fn) : fn();
-}
-
 let globalInstance: Settings | null = null;
 let globalInstancePromise: Promise<Settings> | null = null;
 let boundSettingsInstance: Settings | null = null;
@@ -4003,36 +3693,6 @@ function clearBoundSettingsMethods(): void {
 
 export function isSettingsInitialized(): boolean {
 	return globalInstance !== null;
-}
-
-/**
- * Resolve the settings visible to a legacy Pi `SettingsManager.create()` call.
- *
- * An active extension session is authoritative because `cwd`/`agentDir` cannot
- * uniquely identify concurrent SDK sessions with per-session overrides. Outside
- * extension execution, the most recently constructed matching instance is the
- * best available scope; an unscoped lookup falls back to the global singleton.
- */
-export function findScopedSettings(cwd?: string, agentDir?: string): Settings | undefined {
-	const active = activeSettingsScope.getStore();
-	if (active) return active;
-
-	const wantCwd = cwd === undefined ? undefined : path.normalize(cwd);
-	const wantAgentDir = agentDir === undefined ? undefined : path.normalize(agentDir);
-	if (wantCwd === undefined && wantAgentDir === undefined) return globalInstance ?? undefined;
-
-	let found: Settings | undefined;
-	for (const ref of liveSettingsInstances) {
-		const instance = ref.deref();
-		if (
-			instance &&
-			(wantCwd === undefined || instance.getCwd() === wantCwd) &&
-			(wantAgentDir === undefined || instance.getAgentDir() === wantAgentDir)
-		) {
-			found = instance;
-		}
-	}
-	return found;
 }
 
 /**

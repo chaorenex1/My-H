@@ -2,11 +2,11 @@
  * Internal URL parser that handles colons in the host segment.
  *
  * Standard `new URL()` interprets colons as port separators, which breaks
- * namespaced internal URLs like `skill://plugin:name`. This parser extracts
+ * namespaced internal URLs like `local://notes:2024`. This parser extracts
  * components via regex first, then falls back to a minimal URL-like object
  * when `new URL()` fails.
  *
- * All code that parses internal URLs (router, protocol handlers, tools)
+ * All code that parses internal URLs (router, protocol handlers, renderers)
  * MUST use this function instead of calling `new URL()` directly.
  */
 import type { InternalUrl } from "./types";
@@ -26,8 +26,8 @@ const SELECTOR_CHAIN_RE = new RegExp(`^${SELECTOR_CHUNK_SRC}(?::${SELECTOR_CHUNK
  * Extract the lowercased scheme from a URI-shaped input, or `undefined` when
  * the input does not look like a URI.
  *
- * Accepts both hierarchical (`scheme://…`) and opaque (`scheme:rest`) forms —
- * MCP resource URIs may be opaque (`urn:example:document`, `custom:item`).
+ * Accepts both hierarchical (`scheme://…`) and opaque (`scheme:rest`) forms,
+ * since model-authored links may be opaque URIs (`urn:example:document`).
  * The opaque form is guarded against path-like false positives:
  * - Windows drive paths (`C:\…`, `C:/…`, `C:foo`) — single-letter scheme.
  * - Filenames with extensions (`foo.ts:50`) — dot in the scheme segment.
@@ -48,7 +48,7 @@ export function extractUriScheme(input: string): string | undefined {
 /**
  * Parse an internal URL into an InternalUrl.
  *
- * Handles URLs where `new URL()` would fail (e.g., `skill://plugin:name`
+ * Handles URLs where `new URL()` would fail (e.g., `local://notes:2024`
  * where the colon is not a port separator).
  */
 export function parseInternalUrl(input: string): InternalUrl {

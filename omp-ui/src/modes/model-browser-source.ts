@@ -1,11 +1,11 @@
-import { type Model, resolveModelServiceTier, type ServiceTier, shouldSendServiceTier } from "../vendor/ai/src/index.ts";
+import type { Model, ServiceTier } from "../vendor/ai/src/index.ts";
+import { resolveModelServiceTier, shouldSendServiceTier } from "../vendor/ai/src/index.ts";
 import type { ModelHubSource } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { findActiveModelPreset, getModelPresetNames } from "../config/model-presets";
 import { resolveModelRoleValue, rolePriorityDefaults } from "../config/model-resolver";
 import { getKnownRoleIds, getRoleInfo } from "../config/model-roles";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings } from "../config/settings";
-import { describeModelCompactionPoint } from "../session/model-compaction-threshold";
 
 import {
 	cfgCycleOrder,
@@ -22,7 +22,9 @@ import {
 } from "../session/settings";
 
 /**
- * Supply live model-overlay preferences and runtime resolution from the host.
+ * Supply live model-overlay preferences to the picker. The catalog itself comes from the
+ * authority (`model.options`), so this only carries the client-side presentation state:
+ * order, roles, presets and the configured tier used to label rows.
  * @param settings - Settings backing preferences, roles, and model perf
  * @param sessionServiceTier - The live session's effective tier for a model
  *   (`/fast`, `/fast ultra`, `/slow`, resumed tiers). Omit only where no session
@@ -46,10 +48,13 @@ export function createModelBrowserSource(
 			return getKnownRoleIds(settings);
 		},
 		get mruOrder() {
-			return settings.getStorage()?.getModelUsageOrder() ?? [];
+			// The client keeps no model history of its own: the catalog and the served model
+			// come from the authority (`model.options`, `session.info`).
+			return [];
 		},
 		get modelPerf() {
-			return settings.getStorage()?.getModelPerf() ?? new Map();
+			// Perf aggregates were measured from this process's requests; the shell sends none.
+			return new Map();
 		},
 		serviceTierFor: model => {
 			const tier = sessionServiceTier
@@ -86,6 +91,5 @@ export function createModelBrowserSource(
 		defaultRoleChain: role => rolePriorityDefaults(role),
 		resolveRoleValue: (value, models, roleLookup) => resolveModelRoleValue(value, models, { settings, roleLookup }),
 		getModelPresets: () => ({ names: getModelPresetNames(settings), active: findActiveModelPreset(settings) }),
-		compactionPointFor: model => describeModelCompactionPoint(settings, model),
 	};
 }

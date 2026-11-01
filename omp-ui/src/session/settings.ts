@@ -9,17 +9,6 @@ import {
 	SERVICE_TIER_OPENAI_OPTIONS,
 	SERVICE_TIER_OPENAI_VALUES,
 } from "../config/service-tier";
-import {
-	TINY_MODEL_DEVICE_DEFAULT,
-	TINY_MODEL_DEVICE_SETTING_OPTIONS,
-	TINY_MODEL_DEVICE_SETTING_VALUES,
-} from "../tiny/device";
-import {
-	TINY_MODEL_DTYPE_DEFAULT,
-	TINY_MODEL_DTYPE_SETTING_OPTIONS,
-	TINY_MODEL_DTYPE_SETTING_VALUES,
-} from "../tiny/dtype";
-import { DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, MAX_WEB_SEARCH_TIMEOUT_SECONDS } from "../web/search/types";
 import { DEFAULT_USAGE_RESERVE_PCT } from "../vendor/ai/src/auth-storage.ts";
 import { configureProviderStoreResponses } from "../vendor/ai/src/providers/openai-responses-state.ts";
 import { configureProviderMaxInFlightRequests } from "../vendor/ai/src/stream.ts";
@@ -979,25 +968,6 @@ export const cfgProvidersOllamaCloudMaxConcurrency = register({
 	},
 });
 
-export const cfgProvidersWebSearchTimeoutSeconds = register({
-	id: "providers.webSearchTimeoutSeconds",
-	type: "number",
-	default: DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
-	ui: {
-		tab: "providers",
-		group: "Services",
-		label: "Web Search Timeout",
-		description: `Hard timeout for each provider's search transport before web_search advances to the next fallback, in seconds (maximum ${MAX_WEB_SEARCH_TIMEOUT_SECONDS})`,
-		options: [
-			{ value: "30", label: "30 seconds" },
-			{ value: "60", label: "1 minute" },
-			{ value: "120", label: "2 minutes" },
-			{ value: "180", label: "3 minutes" },
-			{ value: "300", label: "5 minutes" },
-		],
-	},
-});
-
 export const cfgProvidersAntigravityEndpoint = register({
 	id: "providers.antigravityEndpoint",
 	type: "enum",
@@ -1047,44 +1017,6 @@ export const cfgProvidersFireworksTier = register({
 				description: "Priority serving path: higher reliability, premium per-token pricing",
 			},
 		],
-	},
-});
-
-export const cfgProvidersTinyModelDevice = register({
-	id: "providers.tinyModelDevice",
-	type: "enum",
-	values: TINY_MODEL_DEVICE_SETTING_VALUES,
-	default: TINY_MODEL_DEVICE_DEFAULT,
-	env: {
-		name: "PI_TINY_DEVICE",
-		parse: raw => TINY_MODEL_DEVICE_SETTING_VALUES.find(value => value === raw.trim().toLowerCase()),
-	},
-	ui: {
-		tab: "providers",
-		group: "Tiny Model",
-		label: "Tiny Model Device",
-		description:
-			"Inference backend for local tiny models (titles + memory): an ONNX execution provider, or `mlx` to download MLX weights and run them through mlx-lm on Apple silicon. Default uses CPU-only ONNX. The PI_TINY_DEVICE env var overrides this.",
-		options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
-	},
-});
-
-export const cfgProvidersTinyModelDtype = register({
-	id: "providers.tinyModelDtype",
-	type: "enum",
-	values: TINY_MODEL_DTYPE_SETTING_VALUES,
-	default: TINY_MODEL_DTYPE_DEFAULT,
-	env: {
-		name: "PI_TINY_DTYPE",
-		parse: raw => TINY_MODEL_DTYPE_SETTING_VALUES.find(value => value === raw.trim().toLowerCase()),
-	},
-	ui: {
-		tab: "providers",
-		group: "Tiny Model",
-		label: "Tiny Model Precision",
-		description:
-			"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. Ignored by the MLX backend (its repos are pre-quantized 4-bit). The PI_TINY_DTYPE env var overrides this.",
-		options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
 	},
 });
 
