@@ -426,8 +426,8 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 `session.resume` 显式带 `display_projection:true`，读 `display_messages`
 （`tui_gateway/session_history._history_to_messages`）；`session.create` 返回的 `messages` 是新会话的原始行
 （新会话为空，客户端优先读 `display_messages`）。实时列走附录 A。本节的网关增量与最终决定见
-`docs/adr/ADR-2-transcript-blocks.md`；其中 Skill 调用、Reaction、Transcript 选择器、`include_tools`
-的旧判断以 ADR-2 为准。
+`docs/adr/ADR-2-transcript-blocks.md`；其中 Skill 调用、Reaction、Transcript 选择器、`include_tools`、
+Todo 提醒的旧判断以 ADR-2 为准。
 
 | 区块 | Hermes 来源（快照 / 实时） | 消费点 | 状态 |
 |---|---|---|---|
@@ -435,7 +435,7 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | 助手消息 | `message.start`/`block_start`/`delta`/`interim`/`block_end`/`complete`、`turn.*`、`prompt.result`；快照 assistant 行 `text` + `reasoning*` 侧车 | `#openDraft`/`#complete`/`#mergeLastAssistant`；`rowToAgentMessage`。`message.block_end.content`、`rendered`、`response_transformed` 未消费（漏 delta 时无兜底）；`message.complete.usage` 是 session 累计（`gateway/session_usage.tui_usage`：input/output/total/context/cache_hit_pct），不是本回合 usage，usage 行会显示累计值且成本为 0 | 部分 |
 | Thinking | 实时 `reasoning.delta`（`display.show_reasoning` 或 `/reasoning show` 打开时才有）、`message.complete.reasoning`；快照 `reasoning`/`reasoning_content`/`reasoning_details`；`thinking.delta` 是 kawaii spinner 文本（`gateway/local_viewer_events.wire`），不是模型思考 | `handleNotification` 把 `reasoning.delta` 与 `thinking.delta` 都投成 `thinking_delta`；`#complete` 不读 `payload.reasoning`；`rowToAgentMessage` 不读 reasoning。映射层要过滤 spinner 文本，否则会伪造思考块 | 部分 |
 | Advisor | 行 `display_kind="adviser"`（`agent/adviser_delivery.py`、`agent/plugin_events.py`）；`message.adviser` 只在 sidecar 装了 `plugin_message_callback`（`tui_gateway/agent_callbacks.py`），canonical gateway 未装 | `addMessageToChat` 只认 `role:"custom"` + `customType:"advisor"`；`rowToAgentMessage` 把 adviser 行画成 user 气泡；`message.adviser` 未处理 | 待接 |
-| Background TAN | 本机 `/tan`（builtin，`executeBuiltinSlashCommand` 在网关调用前处理；`TanCommandController.start` 起本机 clone，并用 `sendCustomMessage` 写派发行）；网关的 `background.complete{task_id,text}` 是 `/bg` 的结果文本，语义不同 | `BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE` 由本机 custom message 渲染；clone 与结果都跑本机 agent，不进 Hermes transcript；`background.complete` 未处理，且不能填进派发状态条 | 部分 |
+| Background TAN | 现状：本机 `/tan` 随 §0.3 删除（`TanCommandController`/`sendCustomMessage` 不在 `omp-ui/src`）；网关的 `background.complete{task_id,text}` 是 `/bg` 的结果文本，语义不同。**决定见 ADR-3**：网关 `/tan` + 父 transcript 快照 clone + `tangent_dispatch`/`async_result` 行，本机实现不恢复；实现前本行保持 `部分` | `BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE` 渲染器仍在 `@oh-my-pi/pi-tui`，但当前无 producer；`background.complete` 未处理，且不能填进派发状态条 | 部分 |
 | Skill 调用 | `command.dispatch` 返回 `{type:"skill", name, message, display}`（`gateway/session_commands._skill_directive`、`tui_gateway/methods_tools._dispatch_skill`）；快照行 `display_kind="skill_invocation"`（文本是 `/skill …` 调用式） | `#gatewayPrompt` 只提交 `type:"send"`，其余 type 直接返回 false —— `/skill-*` 这一次提交不产生回合；`rowToAgentMessage` 忽略 `display_kind`；本机 `skill-command.ts` 走 `promptCustomMessage`，而 `AgentSession` 只有 `prompt()` 在挂网关时转 `#gatewayPrompt`（`#dispatchCustomPrompt` 仍跑本机 agent loop，会绕过 Hermes） | 待接 |
 | 自定义/hook 消息 | `agent.print`（压缩、子代理完成、错误、预算等 `_print_fn` 行）、`command.output`、`notification.show`；Hermes hooks 是服务端策略，没有 renderer 侧 widget 注册 | `addMessageToChat` 需要 `role:"custom"`/`"hookMessage"`；`rowToAgentMessage` 丢弃；`gateway-session.ts` 显式 `case "agent.print": return`。可展示的文本应先映射成通知行，不要伪造 custom entry | 无 producer |
 | 压缩摘要 | 快照把 compaction carrier 投影成 `display_content`，但 `display_kind="hidden"` 的独立 summary 在 `_history_to_messages` 被丢弃；合并进用户回合的 carrier 只保留真实尾部内容，退化成普通 user/assistant 行，也不是 compaction 块；实时只有 `status.update{kind:compacting…}` 与 `agent.print` 的压缩行 | `#compacting` 只影响输入排队；`CompactionSummaryMessageComponent` 要 `role:"compactionSummary"` entry，网关不产生。`status.update` 不能拼成摘要 | 无 producer |
@@ -457,7 +457,7 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | Reply write | 无。Hermes 的 `write_file` 是文件写入，没有 `write` 工具的 reply-scope `out://` | `isReplyWrite`/`ReplyWriteComponent` 只认 `write` + reply scheme | 无 producer |
 | 错误帧 | `message.complete{status:error, stop_reason, error_surface}`、`prompt.result.error{message, retryable, code, http_status}`、`error` 事件、`approval.cancelled` | `#complete` 写 `errorMessage`/`stopReason` → `#handleMessageEnd` 的 `showPinnedError`；`prompt.result.error` → `notice(level:error)` → `showError`。retry 仍读本机 `#recovery`，`error_surface.retryable` 未用；`approval.cancelled` 未提示 | 部分 |
 | 通知/分隔 | `notification.show`（canonical 本地 viewer 的 notice 主通道：`_local_notice_callback_sync`、`gateway/plugin_messages.py`、登录/低磁盘）、`status.update`、`notice{message}`、`error`、`agent.print`、`command.output`、`session.reclaimed`/`session.resume_progress` | `status.update`/`notice`/`error` → `notice` AgentSessionEvent → `showStatus`/`showWarning`/`showError`；`notification.show`（文本在 `text` 而非 `message`）、`agent.print`、`command.output`、`session.reclaimed`/`session.resume_progress` 都落到 `default` 丢弃；divider/frame 由消息结构自渲染 | 部分 |
-| Transcript 选择器 | `session.history`（`GatewayOmpSession.history(limit)`；`entries`/`next_cursor` 已有，`outline` 摘要仍是 §4.7 扩展）、`session.mutate`（rewind 截断） | `selector-controller.ts` 从本机 `sessionManager.getTree()`/`getEntry()` 重建，并调本机 `navigateTree`；`transcript-browser.ts`/`transcript-outline.ts` 在 shell 快照里无引用（实际入口是 pi-tui 的 `RewindSelectorComponent`）；`gateway.history()` 无调用方，rewind 未走 `session.mutate` | 待接 |
+| Transcript 选择器 | `session.history`（`GatewayOmpSession.history(limit)`；`entries`/`next_cursor` 已有，`outline` 摘要仍是 §4.7 扩展）、`session.mutate`（rewind 截断） | `selector-controller.ts` 从本机 `sessionManager.getMessages()` 拼线性链；`transcript-browser.ts`/`transcript-outline.ts` 在 shell 快照里无引用（pi-tui 的 `RewindSelectorComponent` 有定义、无构造点）；`gateway.history()` 无调用方，rewind 未走 `session.mutate` | 待接 |
 
 同一个 `rowToAgentMessage` 是快照的唯一投影点：它只读 `role`/`text`/`timestamp`/`model`/`tool_call_id`/
 `name`/`is_error`，`display_kind`、`display_metadata`、`reasoning*`、`args`、`labels`、`content`、`row_id`
@@ -760,7 +760,7 @@ session.plan.approve{session_id, request_id}     -> {status}
 |---|---|
 | `model.options` | `name`、`context_window`、`max_output`、`pricing`、`auth_status`、`available`、`provider_display` |
 | `session.list` | `query`（标题/预览搜索）、`pinned`、`archived`、`preview`、`last_active_at` |
-| `session.history` | `offset`/`limit`、`before_row_id`、`include_tool_content`（`none`/`text`/`full`）、`include_outline` → `outline [{row_id, role, summary}]`（ADR-2 D6） |
+| `session.history` | `since`/`cursor`/`limit`（按 durable row id 分页）、`include_tool_content`（`none`/`text`/`full`）、`include_outline` → `outline [{row_id, role, summary}]`（ADR-2 D6） |
 | `process.list` | `cpu`、`mem`、`started_at`、`log_tail`（受字节上限） |
 | `session.mutate`（branch） | payload `{target_message_id, summarize?, instructions?}`；摘要结果进 `branched_session_id` 回执 |
 | `subagent.config` | `{subagent_id, session_id?, source?, model?, provider?, prewalk?, advisor?, thinking?, pattern?, prompt_path?}`；行键 `(agent_id, source=prompt_path)`，存 profile `state.db` 的 `agent_config` 表（角色配置面板） |
@@ -939,11 +939,13 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 设计轨道的产出物：每项一份 ADR（问题、约束、选项、决定、验收），落在 `docs/adr/` 或本文件追加；
 决定为“做”时，再按 §4 的格式补 contract/handler/事件，并进入 §9 的 P2/P3（ADR-1 落 P7）。
 已落盘：ADR-2（Transcript 区块目录）见 `docs/adr/ADR-2-transcript-blocks.md`，取代 §2.3.2.1 中
-Skill 调用、Reaction、Transcript 选择器、`include_tools` 的旧判断；ADR-3（Background TAN）见
+Skill 调用、Reaction、Transcript 选择器、`include_tools`、Todo 提醒的旧判断；ADR-3（Background TAN）见
 `docs/adr/ADR-3-background-tan.md`，取代 §2.3.2.1 中 Background TAN / `background.complete` 的旧判断；
 ADR-4（Eval 执行）见 `docs/adr/ADR-4-eval-execution.md`，取代 §2.3.2.1 第 452 行把 Eval 判为“网关没有共享
 kernel”的判断；ADR-5（Recap 与压缩摘要）见 `docs/adr/ADR-5-recap-and-compaction.md`，取代 §2.3.2.1 中
-「压缩摘要」「Recap」两行的 `无 producer` 判断（默认快照不变，新投影按 `include_compaction` 显式请求）。
+「压缩摘要」「Recap」两行的 `无 producer` 判断（默认快照不变，新投影按 `include_compaction` 显式请求）；
+ADR-6（TTSR 通知）见 `docs/adr/ADR-6-ttsr-notification.md`，取代 §2.3.2.1 中「TTSR 通知」的
+`无 producer` 判断。
 
 ### 10.1 ADR-1：Pause freeze-all = 会话内冻结在跑执行（`session.freeze`）
 

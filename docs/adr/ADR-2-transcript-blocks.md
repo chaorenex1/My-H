@@ -6,6 +6,20 @@
 
 **关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7、§9；ADR-1（Pause）。
 
+**取代关系（以各自 ADR 为准）**：
+
+- **D4**（“压缩摘要不做 transcript 块”）与 **D9** 的 **Recap**、**压缩摘要块**两项：由
+  `docs/adr/ADR-5-recap-and-compaction.md` 取代（`include_compaction` 为显式参数，默认 payload 不变）。
+- **D9** 的 **TTSR** 一项：由 `docs/adr/ADR-6-ttsr-notification.md` 取代。
+- **D9** 的 **Background TAN** 一项：由 `docs/adr/ADR-3-background-tan.md` 取代。
+- D9 其余项（独立 late-diagnostics、被剥离工具调用、collab prompt、reply write、自定义/hook 消息）不变。
+
+**校准（2026-11-02，对照当前工作树）**：D1 改用独立的 `_last_step_usage`/`_last_step_cost_usd`
+（`_last_turn_usage` 的“最近一次 usage”语义被其它消费者依赖，不得为每步语义清空）；D3 的 callback
+安装范围限定为 gateway 路径；D5 的 rewind 入口判断限定在本仓库；D6 补 canonical
+`session.history` handler、参数名与 `outline.summary` 定义；D9 标注被后续 ADR 取代的条目；
+D10 写明 `is_error` 必须 merge 进 callback 返回的 `display_metadata`；客户端与网关行号按本日代码更新。
+
 ## 问题
 
 §2.3.2 的 27 个 transcript 区块，数据只有两个来源：`session.create`/`session.resume` 快照
@@ -31,7 +45,8 @@
 
 `contracts/common.py::Usage` 已经声明 `cache_read`、`cache_write`、`cost_usd`、`cache_hit_pct`，
 缺的是 producer：`tui_gateway/server.py::_get_usage` / `gateway/session_usage.py::tui_usage` 只填
-`cache_hit_pct`，`cache_read`/`cache_write` 一直是 `None`；这些视图都返回**会话累计**。
+`cache_hit_pct`，`cache_read`/`cache_write` 生产端**不写**（契约缺省为 `None`，wire 上通常缺键）；
+这些视图都返回**会话累计**。
 Ink/Desktop 状态行与 `/usage` 读的正是这个累计值（`gateway/session_usage.py::usage_frame` 的契约注释）。
 
 omp 的 usage 行与 cache 标记是**每条 assistant 消息**粒度：`event-controller.ts:304-317` 直接读
@@ -42,7 +57,7 @@ omp 的 usage 行与 cache 标记是**每条 assistant 消息**粒度：`event-c
 | 字段 | 粒度 / 语义 | 数据源 | 下发点 |
 |---|---|---|---|
 | `usage`（现有 + 补填） | 会话累计：input/output/reasoning/total/calls/context/cache_hit_pct；本 ADR 补填已声明的 `cache_read`/`cache_write`（仍为累计，additive） | `agent.session_*`，经 `tui_gateway/server.py::_get_usage` / `gateway/session_usage.py::usage_stats` | 现有 `message.complete` 路径 |
-| `step_usage`（新增） | **一步** = 一次 provider response（一条 assistant message / 一次 API 请求）：input/output/reasoning/cache_read/cache_write/total/cost_usd | `agent._last_turn_usage`（`agent/turn_usage.py:261`，MoA fold 后）+ 新增 `agent._last_turn_cost_usd`（同函数里的 `_cost_delta`） | `tool.start`（触发工具的这次响应）与 `message.complete`（最后一次响应） |
+| `step_usage`（新增） | **一步** = 一次 provider response（一条 assistant message / 一次 API 请求）：input/output/reasoning/cache_read/cache_write/total/cost_usd | 新增 `agent._last_step_usage` + `agent._last_step_cost_usd`（`agent/turn_usage.py::record_response_usage`：`_last_turn_usage` 赋值处暂存 token 字典，`_cost_delta` 计算后再暂存 cost；**无 usage 的响应置 `None`**）。`_last_turn_usage` 保持“最近一次有数据的 usage”语义，供 `on_turn_complete` 与 delegate summary budget 使用，不改为每步值 | `tool.start`（触发工具的这次响应）与 `message.complete`（最后一次响应） |
 
 决定：
 
@@ -51,18 +66,19 @@ omp 的 usage 行与 cache 标记是**每条 assistant 消息**粒度：`event-c
 - 新增 `step_usage: Usage | null`，分别挂在 `tool.start` 与 `message.complete` 上；同一响应触发的
   多个 `tool.start` 携带同一值，客户端只在关闭 assistant 段时取一次。客户端把它写进该条
   assistant message 的 `usage`，轮总量交给现有 `TurnUsageTally` 汇总，wire 不发轮总量。
-- 没有 provider usage 的响应保持 `null`，不填 0；`message.complete` 的 `step_usage` 只代表最后
-  一次响应，不是整轮。
-- **tool-only step**：`gateway-session.ts:1092-1097` 的 `#closeSegmentForTool` 在没有 text/thinking
+- 没有 provider usage 的响应保持 `null`，不填 0；因此 `record_response_usage` 的无 usage 早退路径
+  必须同时把 `_last_step_usage`/`_last_step_cost_usd` 置 `None`（不能只依赖回合开始的重置，否则同回合
+  上一步的值会被当成这一步）。`message.complete` 的 `step_usage` 只代表最后一次响应，不是整轮。
+- **tool-only step**：`gateway-session.ts:1132-1143` 的 `#closeSegmentForTool` 在没有 text/thinking
   时直接 return，不发 `message_end`。客户端收到 `tool.start.step_usage` 后必须把这一步直接计入
   `TurnUsageTally`（合成一条 usage-only assistant 记录即可），不渲染空块；`#mergeLastAssistant`
   也不得覆盖已计入的 step usage。
-- **managed / remote**：`gateway/run_turn_progress.py:78 publish_worker_tool_event` 对 worker 帧做
-  严格字段校验（`set(frame) != fields` 即拒绝），且 managed worker 的结果 allowlist 不含
-  `_last_turn_usage`。v1 中这类回合的 `step_usage` 为 `null`，验收不得假设每回合都有值；扩展 worker
-  帧与 allowlist 另立变更。
-- 不需要回合计数器差分，也不需要新增 instrumentation：`_last_turn_usage` 已在每次响应后写入，
-  本 ADR 只补一个 per-step cost 暂存。
+- **managed / remote**：`gateway/run_turn_progress.py:73 publish_worker_tool_event` 对 worker 帧做
+  严格字段校验（`set(frame) != fields` 即拒绝），且 managed worker 的结果 allowlist 不含 step 字段
+  （`agent/managed_worker.py::RESULT_FIELDS`）。v1 中这类回合的 `step_usage` 为 `null`，验收不得假设
+  每回合都有值；扩展 worker 帧与 allowlist 另立变更。
+- 不需要回合计数器差分，也不需要新增 instrumentation：`record_response_usage` 已在每次**有 usage
+  的**响应后写入，本 ADR 只新增每步暂存（含无 usage 时的 `None` 重置）与 per-step cost 暂存。
 
 ### D2. `served_model` / `requested_model` 新增到 `message.complete`
 
@@ -74,9 +90,10 @@ canonical 的 `completion_payload` 从 `captured['result']` 读取。`gateway/ru
 
 ### D3. canonical 本地 viewer 补发 `message.adviser`
 
-`plugin_message_callback` 目前只在 sidecar 安装（`tui_gateway/agent_callbacks.py:189,199`），
-canonical turn 的 `gateway/run_turn_runner.py:489 _wire_turn_agent_callbacks` 没有装，所以 advisor
-只有 resume 快照、没有实时卡片。
+`plugin_message_callback` 在 **gateway 路径**上目前只有 sidecar 安装（`tui_gateway/agent_callbacks.py:189,199`；
+classic CLI 另在 `hermes_cli/cli_agent_setup_mixin.py:816` 安装，与本 ADR 无关），canonical turn 的
+`gateway/run_turn_runner.py:489 _wire_turn_agent_callbacks` 没有装，所以 advisor 只有 resume 快照、
+没有实时卡片。
 
 决定：在 `_wire_turn_agent_callbacks` 装一个过滤 `display_kind=="adviser"` 的 callback，复用
 `tui_gateway/agent_callbacks.py::_adviser_payload`，通过 `_publish_execution("message.adviser", ...)`
@@ -95,12 +112,16 @@ display 投影必须移除模型侧 handoff），`display_kind="hidden"` 的行�
 决定：保持现状——压缩只留 `agent.print` / `status.update` 通知行，不合成摘要块。理由：模型侧
 handoff 文本不应进用户 transcript，且 `display_messages` 同时服务 Desktop，新增行型是跨客户端行为变化。
 
+**已取代**：本决定由 `docs/adr/ADR-5-recap-and-compaction.md` D1–D5 取代（`include_compaction` 为显式
+参数，默认 false，不传参客户端 payload 逐字不变）；此处仅保留历史判断。
+
 ### D5. Transcript 选择器 / rewind：新增客户端入口，不新增方法
 
 现状：`selector-controller.ts` 没有 `getTree`/`getEntry`/`navigateTree`；`#transcriptEntries()`（
-`selector-controller.ts:494`）用内存 `sessionManager.getMessages()` 拼线性链，只服务 CopySelector；
-`RewindSelectorComponent` 未被 shell 引用，`transcript-browser.ts` / `transcript-outline.ts` 也不在
-`omp-ui/src`。即 rewind **没有客户端入口**，不是“本机逻辑换成网关”。
+`selector-controller.ts:692`）用内存 `sessionManager.getMessages()` 拼线性链，只服务 CopySelector；
+pi-tui 的 `RewindSelectorComponent` 在本仓库依赖里只有定义、无构造点，`doubleEscape` 也无消费方；
+`transcript-browser.ts` / `transcript-outline.ts` 不在 `omp-ui/src`。即 rewind **没有客户端入口**，
+不是“本机逻辑换成网关”。（omp 外部 checkout 不在本仓库，不作断言。）
 
 决定：
 
@@ -114,15 +135,15 @@ handoff 文本不应进用户 transcript，且 `display_messages` 同时服务 D
 
 ### D6. `session.history` 增加 `include_tool_content`，替换悬空的 `include_tools`
 
-事实：`_history_to_messages` **始终**投影 tool 行（`session_history.py:330-343`），`args`/`labels`/
-`context` 都在；`entries` 只收带 `row_id` 的行（`tui_gateway/history_paging.py:19-35`），tool 行随
+事实：`_history_to_messages` **始终**投影 tool 行（`session_history.py:332-343`），`args`/`labels`/
+`context` 都在；`entries` 只收带 `row_id` 的行（`tui_gateway/history_paging.py:11-32`），tool 行随
 `messages` 切片同行。唯一缺的是结果 `content`：`session_history.py:339` 只对
 `write_file`/`patch`/`skill_manage` 放行。因此 §4.7 的 `include_tools` 若实现为“是否包含 tool 行”
 是 no-op。
 
 但 DB 里的 `content` 是**模型侧**文本：高风险工具（`web_extract`/`web_search`/`browser_*`/`mcp_*`）
 被 `_maybe_wrap_untrusted` 包上 `<untrusted_tool_result …>` 分隔符，大结果还会在包装前追加
-`_UPSTREAM_ELISION_NOTICE`（`agent/tool_dispatch_helpers.py:448-598`）；而 live 的
+`_UPSTREAM_ELISION_NOTICE`（`agent/tool_dispatch_helpers.py:513-603`）；而 live 的
 `tool.complete.result` 是包装前的原始结果。直接回 `m['content']` 会让 resume 后的 web/browser/MCP
 工具卡多出安全包装文本，与 live 不一致。
 
@@ -136,16 +157,25 @@ notice（多模态按每个 text part 处理），非高风险工具原样返回
 决定（该字段尚未实现，改名零成本）：
 
 ```text
-session.history {session_id, include_tool_content?: "none" | "text" | "full" = "none",
+session.history {session_id, since?: int, cursor?: int, limit?: int,
+                 include_tool_content?: "none" | "text" | "full" = "none",
                  include_outline?: bool = false, ...}
   -> {..., outline?: [{row_id, role, summary}]}
 ```
+
+分页参数沿用现有契约（`tui_gateway/contracts/sessions.py::SessionHistoryParams`：`since`/`cursor` 是
+同一游标的别名、`since` 优先，`limit` 1..500）；本 ADR 不新增 `offset`/`before_row_id`。两个 handler
+（canonical `gateway/session_tui_ops.py::session_history` 与 sidecar
+`tui_gateway/methods_session_history.py`）都要放行并透传两个新参数。
 
 - `none`（默认，resume 快照同）：tool 行只有 `context`/`args`/`labels`，`content` 仍按现有白名单；
 - `text`：追加 display-safe 文本块，图片部分丢弃；
 - `full`：display-safe 文本 + 图片块，单行受字节上限（复用现有 data-url 上限常量），超限回落
   `[image]`/路径占位；
-- `outline`：仅 `include_outline=true` 时按本页 entries 生成，避免每次分页都做摘要。
+- `outline`：仅 `include_outline=true` 时按本页 entries 生成，避免每次分页都做摘要。`summary` 取该
+  entry 的投影文本：`text` 的首个非空行按空白折叠后截断到 **80 字符**（tool 行用
+  `name + " " + context`；无文本的 entry 用 `display_kind`，都没有则为空串）。与 `entries` 同序、
+  同 `row_id`，不跨页补全。
 
 display-only，不进入模型上下文，不影响 prompt cache。
 
@@ -175,16 +205,18 @@ display-only，不进入模型上下文，不影响 prompt cache。
 - `todo.reminder` → `todo_reminder` 事件 → `TodoReminderComponent`；快照行
   `display_kind="todo_reminder"` 用 `display_metadata.todo_reminder` 还原，不画成 user 气泡；
 - 工具名别名：`read_file`→`read`、`todo_list`→`todo`；
-- `/skill-*` 已由 `command-controller.ts:160` 处理 `type:"skill"` 并提交回合；剩余工作是把
+- `/skill-*` 已由 `command-controller.ts:151` 处理 `type:"skill"` 并提交回合；剩余工作是把
   `command.dispatch` 的 `display` 与快照 `display_kind="skill_invocation"` 画成 invocation 块，
   而不是一次性状态行；
 - `error_surface`、`approval.cancelled` 映射到错误帧 / 取消提示。
 
 ### D9. 无 producer：保持空
 
-Recap、TTSR、独立 late-diagnostics 块、被剥离工具调用、collab prompt、reply write、
-自定义/hook 消息、Background TAN、压缩摘要块。Hermes 没有等价数据（或已随 §0.3 裁剪），不造块、
-不改布局。Todo 提醒已由 D11 决定实现，不在此列。
+独立 late-diagnostics 块、被剥离工具调用、collab prompt、reply write、自定义/hook 消息。Hermes
+没有等价数据（或已随 §0.3 裁剪），不造块、不改布局。
+
+**已取代/移出**：Recap 与压缩摘要块由 ADR-5 取代（`include_compaction`）；TTSR 由 ADR-6 取代；
+Background TAN 由 ADR-3 取代。Todo 提醒已由 D11 决定实现，不在此列。
 
 ### D10. 工具卡片补全：`is_error` + `inline_diff` 持久化
 
@@ -193,7 +225,7 @@ Recap、TTSR、独立 late-diagnostics 块、被剥离工具调用、collab prom
 - canonical `tool.complete` 经 `_tool_lifecycle_payload` **已带 labels**（`gateway/run_turn_progress.py:51-54`），
   不需要新增；客户端 `toolResultDetails` 会放进 `details.labels`。
 - `TranscriptMessage` 没有 `is_error`，`_history_to_messages` 不投影它，`_commit_tool_result`
-  （`agent/tool_executor.py:1073`）也没写进 `display_metadata`，所以 resume 的卡片全部显示成功。
+  （`agent/tool_executor.py:1074`）也没写进 `display_metadata`，所以 resume 的卡片全部显示成功。
 - `inline_diff` 只在 live `complete_fields`（canonical，`gateway/local_viewer_events.py:206`）里算；
   sidecar 的 `_prepare_tool_result_metadata` 会写进 `display_metadata.tool_result_metadata`。
   canonical 的 `_wire_turn_agent_callbacks` 没装该 callback，所以 resume 的 edit/patch 卡没有 diff。
@@ -206,7 +238,10 @@ Recap、TTSR、独立 late-diagnostics 块、被剥离工具调用、collab prom
 1. 统一存放形状：`display_metadata.tool_result_metadata.{is_error, inline_diff}`
    （与 sidecar 的 `_prepare_tool_result_metadata` 对齐）。
    - `_commit_tool_result` 在 append 前写 `is_error`（它已有该 verdict），不改动 callback 的
-     `inline_diff`；
+     `inline_diff`。**必须 merge，且顺序在 metadata callback 之后**：`tool_executor.py:1164-1174`
+     目前把 callback 返回值整体赋给 `tool_message["display_metadata"]`，先写会被覆盖；实现应为
+     `display_metadata.setdefault("tool_result_metadata", {})["is_error"] = is_error`（或等价 merge），
+     不得整键重写；
    - canonical `tool_result_metadata_callback`（`_wire_turn_agent_callbacks` 安装，仅 local viewer turn）
      只算 `inline_diff`，从 `_local_edit_snapshots` 只读 peek，不 pop（`complete_fields` 还要用）。
 2. `_history_to_messages` 从 `display_metadata.tool_result_metadata.is_error` 投影出 tool 行的
@@ -245,7 +280,9 @@ Recap、TTSR、独立 late-diagnostics 块、被剥离工具调用、collab prom
 - 动作：
   1. `_append_interim_answer(...)` 保留已停止的回答；
   2. append `{role:"user", content: reminder_text, display_kind:"todo_reminder",
-     display_metadata:{"todo_reminder":{todos, attempt, max_attempts}}}`；
+     display_metadata:{"todo_reminder":{todos, attempt, max_attempts}}}`。不能直接复用
+     `apply_stop_gates` 内的 `_continue(nudge, flag)`（它只收字符串、不带 display 字段）；用同一语义
+     的独立 append，并同样设置 `agent._session_messages = messages`；
   3. `attempts += 1`，`_todo_reminder_awaiting_progress = True`；
   4. `final_msg["finish_reason"] = "todo_reminder"`，返回 `continue_turn=True`
      （fallback = final_response）。
@@ -314,9 +351,12 @@ todo.reminder (new)
   max_attempts:   int
 
 session.history (E)
+  since?:                int        # 按 durable row id 分页（cursor 为别名，since 优先）
+  cursor?:               int
+  limit?:                int        # 1..500
   include_tool_content?: "none" | "text" | "full" = "none"
   include_outline?:      bool = false
-  -> outline?: [{row_id, role, summary}]
+  -> outline?: [{row_id, role, summary}]   # summary 定义见 D6
 ```
 
 `step_usage` 复用 `Usage` 形状，不新增类型；轮总量由客户端 `TurnUsageTally` 汇总，wire 从不发
@@ -329,10 +369,10 @@ session.history (E)
 | 契约 | `tui_gateway/contracts/events.py::ToolStartPayload` | `step_usage` |
 | 契约 | `tui_gateway/contracts/events.py::MessageCompletePayload` | `step_usage`、`served_model`、`requested_model` |
 | 契约 | `tui_gateway/contracts/sessions.py::SessionHistoryParams/Result` | `include_tool_content`、`include_outline`、`outline` |
-| 用量 | `agent/turn_usage.py::record_response_usage` | 在 `_last_turn_usage` 旁暂存 `_last_turn_cost_usd = _cost_delta` |
+| 用量 | `agent/turn_usage.py::record_response_usage` | 新增 `_last_step_usage = dict(usage_dict)` 与 `_last_step_cost_usd = _cost_delta`；无 usage 的早退路径把两者置 `None`。`_last_turn_usage` 语义不变 |
 | 用量 | `gateway/session_usage.py` | `tui_usage` 补填累计 `cache_read`/`cache_write`；`publish_usage(record=True)` 把 `step_usage` 写入 captured |
 | 用量 | `tui_gateway/server.py::_get_usage` | 补填累计 `cache_read`/`cache_write`（与 `session_cache_*_tokens` 一致） |
-| 用量 | `gateway/run_turn_progress.py::combined_tool_start_callback` | `tool.start` 附 `step_usage`（当前 agent 的 `_last_turn_usage` + `_last_turn_cost_usd`） |
+| 用量 | `gateway/run_turn_progress.py::combined_tool_start_callback` | `tool.start` 附 `step_usage`（当前 agent 的 `_last_step_usage` + `_last_step_cost_usd`） |
 | 用量 | `tui_gateway/tool_progress.py::_on_tool_start` | 同上（TUI 路径，`session["agent"]`） |
 | 用量 | `gateway/run_turn_progress.py::publish_worker_tool_event` | v1 不改：worker 帧字段严格校验，managed/remote 回合 `step_usage=null`；扩展需同时加帧字段、worker allowlist 与 `read` 白名单 |
 | 用量 | `tui_gateway/prompt_turn.py::_complete_turn_payload` | 填 `step_usage`、`served_model`、`requested_model` |
@@ -348,10 +388,11 @@ session.history (E)
 | history | `agent/tool_dispatch_helpers.py` | 新增 `display_tool_result_content(name, content)`：剥一层 untrusted wrapper + elision notice，逐 text part 处理 |
 | 卡片 | `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` | local viewer 安装 canonical `tool_result_metadata_callback`，只返回 `{"tool_result_metadata": {"inline_diff": ...}}` |
 | 卡片 | `gateway/local_viewer_events.py` | 新增只读 peek（不 pop `_local_edit_snapshots`），供 callback 与 `complete_fields` 共用 |
-| 卡片 | `agent/tool_executor.py::_commit_tool_result` | local viewer 的 tool 行在 append 前把 `is_error` 并入 `display_metadata.tool_result_metadata` |
+| 卡片 | `agent/tool_executor.py::_commit_tool_result` | metadata callback 返回后，把 `is_error` **merge** 进 `display_metadata.tool_result_metadata`（不得在 callback 前整块赋值，见 D10） |
 | 卡片 | `tui_gateway/contracts/common.py::TranscriptMessage` | 加 `is_error` |
 | 卡片 | `tui_gateway/session_history.py` | tool 行从 `display_metadata.tool_result_metadata.is_error` 投影 `is_error` |
-| history | `tui_gateway/history_paging.py` / `methods_session_history.py` | 透传参数、生成 `outline` |
+| history | `gateway/session_tui_ops.py::session_history` | 参数 allowlist 放行 `include_tool_content`/`include_outline`，传给 `history_page` |
+| history | `tui_gateway/history_paging.py` / `tui_gateway/methods_session_history.py` | 生成 `outline`（定义见 D6）；sidecar handler 透传两参数 |
 | 生成器 | `scripts/gen_gateway_contracts.py` | 重跑并提交 `gateway-contract.generated.ts` / OpenRPC |
 
 ## 未采纳
@@ -390,7 +431,8 @@ session.history (E)
    最后一次响应；`TurnUsageTally` 的汇总值等于整轮，且只在最后一条非 `toolUse` 消息上显示
    "this turn"；cache marker 用相邻消息的 `usage` 比较（`detectCacheInvalidation`），不得读累计值。
    `usage` 除新增的 `cache_read`/`cache_write` 外逐字段一致，两值等于 `session_cache_read_tokens`/
-   `session_cache_write_tokens`（Ink 回归）。无 provider usage 的步为 `null`，不填 0。
+   `session_cache_write_tokens`（Ink 回归）。无 provider usage 的步为 `null`，不填 0；同一回合里
+   “有 usage → 无 usage”两步时，后一步不得携带前一步的值。
 2. tool-only step（模型只调工具、没有 text/thinking）不产生空块，但该步 `step_usage` 仍计入整轮
    汇总；走 `#mergeLastAssistant` 的完成路径也不丢这一步。
 3. managed / remote 回合：`step_usage` 为 `null`，客户端不显示伪值、不报错，也不回退到累计
@@ -400,13 +442,15 @@ session.history (E)
    还原，不重复。
 6. `session.history`：`none` 的响应字节不高于现状；`text`/`full` 返回 **display-safe** 投影——
    `web_extract`/`browser_*`/`mcp_*` 的文本与 live `tool.complete.result` 一致，不含
-   `<untrusted_tool_result` 包装与 `[hermes note:`；非高风险工具逐字节一致；`full` 的图片超限回落
-   占位、不报错；`include_outline=true` 时 `outline` 与 `entries` 对齐。
+   `<untrusted_tool_result` 包装与 `[hermes note:`；写入时被 `_neutralize_delimiters` 中和的字面量
+   保持 `untrusted-tool-result` 形态（不要求还原）；非高风险工具逐字节一致；`full` 的图片超限回落
+   占位、不报错；`include_outline=true` 时 `outline` 与 `entries` 同序同 `row_id`。
 7. `/skill-*` 仍产生回合；invocation 块由客户端从 `display` + `display_kind` 渲染。
 8. rewind：选择 `entry_id` → `session.mutate rewind` 截断 → 重新提交成功；过期
    `expected_generation` 被拒；失败后客户端重读 `session.history`。
-9. `python scripts/gen_gateway_contracts.py --check`、`python scripts/gen_panel_inventory.py --check`、
-   `tests/tui_gateway/panels/test_panel_coverage.py` 通过；面板覆盖门不变（无新方法）。
+9. 在 PM 环境（`source ./activate` / `.venv`）内 `python scripts/gen_gateway_contracts.py --check`、
+   `python scripts/gen_panel_inventory.py --check`、`tests/tui_gateway/panels/test_panel_coverage.py`
+   通过；面板覆盖门不变（无新方法）。
 10. 工具卡：resume 的失败工具显示失败（`is_error=true`，来自
     `display_metadata.tool_result_metadata.is_error` 的投影）；edit/patch 卡 resume 后有
     `inline_diff` 并映射到 `details.diff`，与 live 一致；`summary`/`duration_s` 不作为通用卡要求。
@@ -415,9 +459,9 @@ session.history (E)
 
 | 原判断 | 修正 |
 |---|---|
-| Skill 调用“`#gatewayPrompt` 只提交 `type:"send"`，`/skill-*` 不产生回合”（待接） | 该符号不存在；`command-controller.ts:160` 已处理 `send`/`skill`。真实缺口是 invocation 块未渲染 → **部分** |
-| 跨区块第 3 条“`promptCustomMessage`/`sendCustomMessage` 无网关分支” | 符号已随 §0.3 删除；Background TAN 无本机实现，按无 producer 处理 |
+| Skill 调用“`#gatewayPrompt` 只提交 `type:"send"`，`/skill-*` 不产生回合”（待接） | 该符号不存在；`command-controller.ts:151` 已处理 `send`/`skill`。真实缺口是 invocation 块未渲染 → **部分** |
+| 跨区块第 3 条“`promptCustomMessage`/`sendCustomMessage` 无网关分支” | 符号已随 §0.3 删除；Background TAN 的 producer 由 ADR-3 决定（本 ADR 不再判“无 producer”） |
 | Reaction“快照行不带 reactions” | 错：在 `display_metadata.reactions`，投影已转发 → 纯客户端映射 |
-| Transcript 选择器“本机 `getTree`/`navigateTree`，入口是 `RewindSelectorComponent`” | 当前无任何 rewind 入口；需新增入口 + `session.history` + `session.mutate rewind` |
+| Transcript 选择器“本机 `getTree`/`navigateTree`，入口是 `RewindSelectorComponent`” | 本仓库内无任何 rewind 入口；需新增入口 + `session.history` + `session.mutate rewind` |
 | `include_tools` 扩展 | 改为 `include_tool_content` 三态；`include_tools` 是 no-op |
 | Todo 提醒“无 producer” | D11 决定做：agent 侧 stop gate + `todo.reminder` + 持久化 reminder 行；managed/remote 事件为 `null` |
