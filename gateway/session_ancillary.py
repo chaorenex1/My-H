@@ -267,6 +267,11 @@ async def read(connection, ref, params, *, kind):
             with owner_scope(authority):
                 return list_agent_definitions(cwd, authority.db)
         agents = await asyncio.to_thread(roster)
+    if kind == 'control':
+        # Persisted per session id, never the route's live objects: readable after a messaging
+        # route moved on to another conversation. The three state.db meta reads and the ESTOP
+        # sentinel probe run off the owner loop, as publish_async's snapshot read already does.
+        return {'control': await asyncio.to_thread(control_snapshot, authority, ref)}
     # In a worker thread (it inherits the dispatch's owner scope): the projection takes the session's
     # event lock, which every streamed token takes too, reads state.db (compression lineage, local
     # receipt, control meta) and the process registry under its lock. Clients poll these every 1-5 s per
@@ -291,10 +296,6 @@ def locked_projection(authority, live, ref, project):
 
 
 def _project(authority, ref, params, kind, agents=()):
-    if kind == 'control':
-        # Persisted per session id, never the route's live objects: readable after a messaging
-        # route moved on to another conversation.
-        return {'control': control_snapshot(authority, ref)}
     _require_current_route(authority, ref)
     agent, records = _owner_objects(authority, ref, include_fallback_evicted=kind == 'subagents')
     if kind == 'subagents':
@@ -533,8 +534,18 @@ def control_snapshot(authority, ref):
     loop = _safe_loop_snapshot(loop_state, deferred_by_goal=bool(
         deferred and loop_state and loop_state.status == 'active'))
     heartbeat = _safe_heartbeat_snapshot(heartbeat_state)
-    return {'goal': goal, 'loop': loop, 'heartbeat': heartbeat,
-            'revision': _snapshot_revision(goal, loop, heartbeat),
+    from gateway.session_freeze import freeze_state
+    freeze = freeze_state(authority, ref.session_id)
+    # ESTOP is a profile sentinel: read it under the OWNING profile's scope (one process serves
+    # many profiles; an unbound read answers the launch profile's sentinel).
+    from agent import estop as _estop
+    from gateway.session_authorities import owner_scope
+    with owner_scope(authority):
+        estop_state = _estop.get_state()
+    estop = ({'engaged': True, 'reason': estop_state.get('reason'),
+              'engaged_at': estop_state.get('engaged_at')} if estop_state is not None else None)
+    return {'goal': goal, 'loop': loop, 'heartbeat': heartbeat, 'freeze': freeze, 'estop': estop,
+            'revision': _snapshot_revision(goal, loop, heartbeat, freeze=freeze, estop=estop),
             'updated_at': _snapshot_updated_at(*states)}
 
 

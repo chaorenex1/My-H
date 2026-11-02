@@ -361,6 +361,9 @@ def _build_child_agent(
         child._credential_pool = child_pool
 
     _attach_child(parent_agent, child)  # interrupt propagation
+    # One freeze covers the execution tree: a subagent parks on the parent's gate, never a copy.
+    from agent.pause_gate import share_gate
+    share_gate(child, parent_agent)
     # spawn_requested now — the child may queue for seconds when the pool is
     # saturated — then the subagent_start lifecycle hook.
     _safe_progress(child_progress_cb, "subagent.spawn_requested", preview=goal)

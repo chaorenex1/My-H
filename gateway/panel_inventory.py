@@ -162,10 +162,9 @@ PANELS: tuple[Panel, ...] = (
           note="session.plan.updated is a P4 event"),
     Panel("annotation_overlay", "Annotation overlay", UNSUPPORTED,
           note="no annotation backend; storage and protocol are undesigned (P6)"),
-    Panel("pause_screen", "Pause screen", PARTIAL,
-          (_m("session.control.read", "read", AUTHORITY), _m("delegation.pause", "write", AUTHORITY)),
-          note="delegation.pause only gates new spawns; freezing in-flight turns needs a new "
-               "primitive (P6)"),
+    Panel("pause_screen", "Pause screen", READY,
+          (_m("session.control.read", "read", AUTHORITY), _m("session.freeze", "write", AUTHORITY),
+           _m("delegation.pause", "write", AUTHORITY))),
     Panel("session_info_overlay", "Session info overlay", READY,
           (_m("session.info", "read", AUTHORITY), _m("session.stats", "read", AUTHORITY))),
     Panel("transcript_browser", "Transcript browser / outline", PENDING,

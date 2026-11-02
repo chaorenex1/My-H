@@ -180,9 +180,16 @@ class SessionAuthority:
         self.retired = False
         self._classic_evict_at = {}  # route -> last leaked/reaped-slot eviction check (monotonic)
         self.executing = {}  # session id -> generation whose execution is in progress (publish fence)
-        # session id -> end_reason of a last-viewer close still waiting for an idle FIFO
+        # session -> end_reason of a last-viewer close still waiting for an idle FIFO
         # (gateway/session_viewer_close); a viewer attaching again cancels it.
         self.pending_closes = {}
+        # session id -> its ADR-1 freeze (gateway/session_freeze.FreezeBinding). Generation-bound:
+        # released when the execution returns, its last viewer detaches, or the FIFO fails it.
+        self._freezes = {}
+        # session id -> {request_id: receipt} for a retried session.freeze (cleared with the freeze).
+        self._freeze_receipts = {}
+        # session id -> (generation, send): a managed worker's pause control frame sink.
+        self._freeze_senders = {}
         self.orphan_closes = {}  # session id -> grace timer of a session left with no viewer, never closed
         # Logical owner rotated away by the exhaustion auto-reset -> its session key: an admission
         # that reserved it before the rotation commits on that key's current route instead.
@@ -420,6 +427,10 @@ class SessionAuthority:
                 if transport is not None:
                     live.event_stream.fanout.detach(transport)
                 if not live.subscribers:
+                    from gateway.session_freeze import release_and_publish
+                    # No viewer is left to release it (omp releases on modal teardown): a freeze
+                    # without an owner is exactly the permanent freeze ADR-1 forbids.
+                    await release_and_publish(self, session_id)
                     from gateway.session_local_mcp import release_editor_mcp
                     live.detaching += 1  # unwatched off the loop, its close not yet pending: not retirable
                     try:
@@ -1310,6 +1321,8 @@ class SessionAuthority:
             self.pending_stop_causes.pop(ref.session_id, None)
             self.pending_steers.pop(ref.session_id, None)
             self.adopted.pop(ref.session_id, None)
+            from gateway.session_freeze import release_and_publish
+            await release_and_publish(self, ref.session_id)
             # An automation turn nobody waits on settles here, at the exit that fenced it (GW-10),
             # so the followers already queued run in this drain; a person's turn still pauses.
             from gateway.session_unattended_unknown import settle_unattended_unknown

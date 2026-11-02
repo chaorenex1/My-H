@@ -170,7 +170,7 @@ jobs/agents hub/MCP/SSH/STT/TTS/live/extensions hooks/工作树/树-分支-回�
 | OMFG | — | — | — | — | no Hermes backend: the omp rule-forging workflow has no gateway equivalent (P6) |
 | Plan review / save / TOC | `session.plan.read` | `session.plan.save`、`session.plan.approve` | A | — | 方法已直服；`session.plan.updated` 属 P4 |
 | Annotation overlay | — | — | — | — | no annotation backend; storage and protocol are undesigned (P6) |
-| Pause screen | `session.control.read` | `session.freeze`（新，ADR-1）、`delegation.pause` | A（现有）/ D→A（ADR-1） | — | `delegation.pause` 只挡新 spawn；在跑冻结由 `session.freeze` 承担（ADR-1，P7 实现）。落地前面板保持 `partial`，不得渲染成 omp 的冻结状态 |
+| Pause screen | `session.control.read` | `session.freeze`（新，ADR-1）、`delegation.pause` | A | — | `delegation.pause` 只挡新 spawn；在跑冻结由 `session.freeze` 承担（ADR-1，已落地）：停在回合顶、每次 API 请求前与工具批开始前的安全边界，Stop 立即解开 |
 | Session info overlay | `session.info`、`session.stats` | — | A | — |  |
 | Transcript browser / outline | `session.history` | — | A | E | session.history pagination/outline extension (E) is pending |
 | Skill picker | `commands.catalog`、`complete.slash` | `skills.manage` | A/L | — |  |
@@ -266,8 +266,8 @@ Hermes 网关对 omp-ui 暴露的不是“每个面板各有一个后端”，�
 Kanban board 快照、Bot Mode、多窗口、富媒体预览、Tern Surface）由
 `runtime.describe.panels` 返回 `supported:false`，UI 不渲染假入口（见 §10）。
 
-Pause 的“冻结在跑执行”不属于 `unsupported`：已出决定（ADR-1，§10.1），实现前面板为 `partial`，
-`runtime.describe.panels` 不广告 `session.freeze`。
+Pause 的“冻结在跑执行”不属于 `unsupported`：ADR-1 已实现（§10.1），`pause_screen` 为 `ready`，
+`runtime.describe.panels` 广告 `session.freeze`。
 
 ### 2.2 面板入口：omp TUI 从哪里打开
 
@@ -750,8 +750,8 @@ session.plan.approve{session_id, request_id}     -> {status}
     `tools/delegate_tool_registry.set_spawn_paused`）；
   - `session.freeze {session_id, execution_generation, frozen}`：会话级、非持久，冻结在跑执行树
     （主 turn/子代理/advisor）—— 这是本 ADR 决定新增的唯一原语，**不改名挪用 ESTOP，也不与它互相触发**。
-- 在 `session.freeze` 落地前，Pause 面板保持 **partial**，不得把 ESTOP 或 `delegation.pause` 渲染成
-  omp 的冻结状态。
+- `session.freeze` 已落地（ADR-1 §10.1）：Pause 面板为 `ready`，冻结态只由 `session.freeze` 产生；
+  ESTOP 与 `delegation.pause` 仍各自独立，客户端不得把它们渲染成 omp 的冻结状态。
 - 因此不新增 `session.control.write`；goal/loop 已有两条写入口，在跑冻结走 ADR-1 的 `session.freeze`。
 
 ### 4.7 扩展项
@@ -924,7 +924,7 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 
 | 项 | 现状/差距 | 待设计要点 | 方案选项 | 退出条件 |
 |---|---|---|---|---|
-| **Pause freeze-all** | **已决定（ADR-1，§10.1）**：ESTOP 负责准入（profile 级、持久），`delegation.pause` 负责新 spawn（进程级），缺“在跑执行树冻结” | —（见 ADR-1） | **A. 协作式会话级 gate（`session.freeze`）**；B（SIGSTOP）/C（改名只挡新任务）已否决 | 见 ADR-1 §验收；实现前 `pause_screen` 保持 `partial` |
+| **Pause freeze-all** | **已决定（ADR-1，§10.1）**：ESTOP 负责准入（profile 级、持久），`delegation.pause` 负责新 spawn（进程级），缺“在跑执行树冻结” | —（见 ADR-1） | **A. 协作式会话级 gate（`session.freeze`）**；B（SIGSTOP）/C（改名只挡新任务）已否决 | 见 ADR-1 §验收；已落地，`pause_screen` 为 `ready` |
 | **Extensions Control Center** | Hermes 无 in-process extension（tool/renderer 注册）；现有 plugins/hooks | ① 统一“扩展”身份模型（omp extension vs plugin vs hook）② 可检查的注册面（commands/tools/renderers）③ 启停与热重载 ④ 安全/权限 ⑤ 与 `plugins.*`/`hooks.*` 的映射 | A. 只做 plugins+hooks 的只读视图；B. 新 `extensions.*` 抽象层；C. 不提供面板 | 面板展示真实能力，不伪造 omp 的 tool/renderer 注册；启停可回滚 |
 | **Annotation overlay** | 无通用注释后端 | ① 注释对象（消息/文件/区域）② 存储（会话 DB vs 本地）③ 协议（`annotation.*` + 事件）④ 导出/分享 ⑤ 权限 | A. 仅本地草稿（不进网关）；B. `annotation.*` 会话级；C. 不做 | resume 后注释仍在；导出包含注释；不污染 prompt cache |
 | **Collab / QR / LIVE** | Hermes 有 `groups.*`（桌面 hosted rooms）；omp collab 是另一套 | ① 协议映射（guest/host、权限、中继）② 终端 QR/加入流程 ③ LIVE 观众与消息回流 ④ 安全模型 | A. 复用 `groups.*` 做终端只读观众；B. 新 `collab.*`；C. 仅桌面 | 两个客户端可加入同一会话；guest 权限受控；断线重连可恢复 |
@@ -947,9 +947,8 @@ kernel”的判断；ADR-5（Recap 与压缩摘要）见 `docs/adr/ADR-5-recap-a
 
 ### 10.1 ADR-1：Pause freeze-all = 会话内冻结在跑执行（`session.freeze`）
 
-**状态**：已决定（2026-11-01）。实现未开始，落在 §9 的 **P7**。实现完成前：`pause_screen` 保持
-`partial`，`runtime.describe.panels` 不广告 `session.freeze`，客户端不得把 ESTOP 或
-`delegation.pause` 渲染成冻结。
+**状态**：已实现（2026-11-02）。`gateway/session_freeze.py` + `agent/pause_gate.py` 落地，`pause_screen`
+在 `runtime.describe.panels` 中为 `ready` 并广告 `session.freeze`；实现细节以本节 + 代码为准。
 
 #### 问题
 
@@ -988,10 +987,14 @@ omp 的 `/pause` 是全屏模态 + 进程级协作式 gate（`packages/tui/src/o
 - **park 心跳**：wait 循环每 30s `agent._touch_activity("frozen: …")`，否则 `TurnLivenessWatchdog`
   （默认 600s）与 gateway inactivity reaper（`HERMES_AGENT_TIMEOUT` 1800s / warning 900s）会把冻结
   记成失败回合。
-- **Stop 解冻**：wait 以 ≤1s 切片轮询 `_interrupt_requested` / `_hard_interrupt_requested`，命中即
-  返回，交给既有 `begin_iteration` / `handle_api_interrupt` 收尾；代际结束自动丢弃冻结。
+- **Stop 解冻**：wait 以 ≤1s 切片轮询 `_interrupt_requested` / `_hard_interrupt_requested`，命中返回
+  `interrupted`：API 缝（`_run_api_retry_loop` 内）`raise InterruptedError`，由既有
+  `except InterruptedError → handle_api_interrupt` 收尾；回合顶缝（`begin_iteration` 之后）按
+  `begin_iteration` 已有的中断出口 `break` 进 `finalize_turn`，**不得**继续
+  `assemble_api_request` / `announce_api_call`（否则 Stop 后仍会构建并宣布一次请求）。
+  代际结束自动丢弃冻结。
 - **子代理与 advisor**：子代理共享父 gate 对象（`_build_child_agent` 构造后绑定），不复制；
-  advisor（`agent/adviser_runtime.py::_run_batch`）单独在模型调用前 park（在跑 batch 跑完）。
+  advisor（`agent/adviser_runtime.py::_run_batch`）在 batch 边界 park（在跑 batch 跑完）。
 - **范围外**：`/btw`、`/bg`、preview 的 detached side agents（`authority._side_agents`，无 session
   维度映射，Stop 也单独扇出）与交付后运行的 `background_review`。暂停屏的“未完成 job”仍可用
   `process.list` 展示，但不冻结它们。
@@ -1004,6 +1007,7 @@ omp 的 `/pause` 是全屏模态 + 进程级协作式 gate（`packages/tui/src/o
 ```text
 session.freeze {session_id, profile?, execution_generation, frozen: bool = true, request_id?}
   -> {freeze: {frozen, frozen_at, held_seconds, execution_generation, parked_agents, running}}
+FreezeState = {frozen, frozen_at, execution_generation, parked_agents}
 ```
 
 - 权限 `session:control`；`execution_generation` **必填**，沿用
@@ -1015,9 +1019,12 @@ session.freeze {session_id, profile?, execution_generation, frozen: bool = true,
 - 幂等：重复 `frozen:true` 返回当前状态，`frozen_at` 不变；布尔 set 天然幂等，可选 `request_id`
   只用于回执去重（重复 `request_id` 返回首次回执）；代际匹配但 `execution_state != running` 时
   返回 `frozen:false, running:false`，不产生状态。
-- 读路径复用 `session.control.read`：`SessionControlSnapshot` 增加 `freeze: FreezeState | null`
-  （含 `execution_generation`）与 `estop: {engaged, reason, engaged_at} | null`
-  （`agent.estop.get_state()` 只读）；`freeze` 纳入 `revision` 哈希。
+- 读路径复用 `session.control.read`：`SessionControlSnapshot` 增加 `freeze: FreezeState | null` 与
+  `estop: {engaged: true, reason, engaged_at} | null`。ESTOP 映射：`agent.estop.get_state()` 返回
+  None 即 `null`（不产生 `engaged:false` 对象），否则 `engaged:true`；读取必须在
+  `owner_scope(authority)` 内（multiplex 下一个进程服务多 profile，未绑定会读 launch profile 的
+  哨兵）。`freeze` 纳入 `revision` 哈希。
+- `held_seconds` 只在 RPC 回执里按 `frozen_at` 现算；快照读不造时钟（Pause 计时器用 `frozen_at`）。
 - 事件复用 `session.control.update`（不新增事件类型）；toggle 后 `publish(only_if_changed=True)`。
 - 客户端：omp `/pause` 映射到 `session.freeze`（映射只在 `omp-ui/src/modes/rpc/`）；RPC 失败或
   `frozen:false` 时不进入模态；模态任何退出路径都必须 `frozen:false`（`stale_generation` 按 no-op
@@ -1028,11 +1035,12 @@ session.freeze {session_id, profile?, execution_generation, frozen: bool = true,
 | 层 | 位置 | 改动 |
 |---|---|---|
 | 原语 | `agent/pause_gate.py`（新） | `AgentPauseGate`（pause/resume/wait/parked/onChange）+ `gate_for(agent)` |
-| 循环 | `agent/conversation_loop.py`（`_run_conversation_turn` 顶、`_run_api_retry_loop`） | 两处 park |
+| 循环 | `agent/conversation_loop.py`（`_run_conversation_turn` 的 while 顶，`begin_iteration` 之后 :1731；`_run_api_retry_loop` 的 `build_api_request` 之前 :1583） | 两处 park |
 | 工具 | `agent/tool_executor.py::execute_tool_calls_concurrent` / `_execute_tool_calls_sequential` | 批开始前 park |
 | 子代理 | `tools/delegate_tool.py::_build_child_agent` | 共享父 gate |
-| advisor | `agent/adviser_runtime.py::_run_batch` / `_call_model` | 模型调用前 park |
-| authority | `gateway/session_freeze.py`（新）+ `SessionAuthority._freezes` | handler、按代际闩锁、快照、发布 |
+| advisor | `agent/adviser_runtime.py::_run_batch` 顶（:417，batch 边界） | 起新 batch 前 park；`_call_model`（:718）是工厂，在工厂里 park 只会停在构建期，**不得**写在那里 |
+| authority | `gateway/session_freeze.py`（新）+ `SessionAuthority._freezes` | handler、按代际闩锁、发布 |
+| 读路径 | `gateway/session_ancillary.py::control_snapshot`（:485，`session.control.read` 与 `session.control.update` 共用的唯一 builder）与共享的 `tui_gateway/methods_session_control.py::_snapshot_revision` / `_snapshot_control` | `freeze`/`estop` 进快照；`_snapshot_revision` 加 `freeze=None` 形参（sidecar 传 None）——不进哈希则 `only_if_changed=True` 会把冻结/解冻广播去重掉；`owner_scope(authority)` 绑在 `control_snapshot` 内（同步 `publish` 走 `scoped=False`、`read` 也不带 scope） |
 | in-process 绑定 | `gateway/run_turn_runner.py:564` 旁 | 新增 `bind_freeze(sid, generation, agent)`；**不放进 `adopt_agent`** |
 | managed | `gateway/session_managed_worker.py::execute_managed`、`agent/managed_worker.py::WorkerControls` | bootstrap 之后（建议 `ready` 之后）发 `{"type":"pause","paused":bool}`；`read` 白名单加该帧 |
 | 契约 | `tui_gateway/contracts/*` | `session.freeze`、`SessionControlSnapshot.freeze/estop`；跑生成器 |
@@ -1076,7 +1084,8 @@ session.freeze {session_id, profile?, execution_generation, frozen: bool = true,
    **断言未走 `invalid_worker_frame`/unknown**。
 5. gateway：鉴权/幂等、无在跑 turn 返回 `running:false`、过期 `execution_generation` 返回
    `stale_generation`（unfreeze 的 stale 按 no-op）、`session.control.update` 广播、`detach`
-   自动解冻；两个 profile 探针：A 冻结不影响 B；ESTOP 与 freeze 互不影响。
+   自动解冻；两个 profile 探针：A 冻结不影响 B；A 的 ESTOP 不出现在 B 的
+   `session.control.read.estop`；ESTOP 与 freeze 互不影响。
 6. 存活：冻结超过 `agent.turn_liveness.timeout_s` 不被 abort。
 7. `python scripts/gen_gateway_contracts.py --check`、`python scripts/gen_panel_inventory.py --check`、
    `tests/tui_gateway/panels/test_panel_coverage.py`。

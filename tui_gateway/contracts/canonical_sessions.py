@@ -299,6 +299,27 @@ class CanonicalControlParams(CanonicalSessionParams):
     execution_generation: int
 
 
+class CanonicalFreezeParams(CanonicalControlParams):
+    """ADR-1: engage/release this generation's execution-tree freeze. Idempotent per booleans."""
+
+    frozen: bool = True
+    # Receipt dedupe only: a retried request id answers the first receipt unchanged.
+    request_id: str | None = None
+
+
+class CanonicalFreezeState(Result):
+    frozen: bool
+    frozen_at: float | None = None
+    held_seconds: float | None = None  # computed per reply; snapshot reads never manufacture a clock
+    execution_generation: int | None = None
+    parked_agents: int | None = None  # managed sessions: null (v1 never crosses the seam)
+    running: bool
+
+
+class CanonicalFreezeResult(Result):
+    freeze: CanonicalFreezeState
+
+
 class CanonicalCorrectionParams(CanonicalControlParams):
     text: str
 
@@ -359,6 +380,7 @@ for _name, _params, _result in (
     ('session.resume', CanonicalResumeParams, CanonicalSnapshot),
     ('session.list', CanonicalListParams, CanonicalListResult),
     ('session.interrupt', CanonicalControlParams, CanonicalSessionHandle),
+    ('session.freeze', CanonicalFreezeParams, CanonicalFreezeResult),
     ('session.steer', CanonicalCorrectionParams, CanonicalCorrectionResult),
     ('session.redirect', CanonicalCorrectionParams, CanonicalCorrectionResult),
     ('session.events.since', CanonicalEventsParams, CanonicalEventsResult),

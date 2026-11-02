@@ -45,6 +45,7 @@ from agent.inline_tool_executors import (
     tool_hook_ids,
 )
 from agent.message_metadata import stamp_data_use
+from agent.pause_gate import park as park_frozen
 from agent.session_persistence import sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
@@ -1581,6 +1582,9 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     segmented dispatcher owns turn-end work)."""
     tool_calls = assistant_message.tool_calls
     num_tools = len(tool_calls)
+    # A frozen session must not start new side effects: park here, outside every worker/start-order
+    # slot, so a Stop during the pause leaves no in-flight call holding a deadline.
+    park_frozen(agent, boundary=f"tool batch ({num_tools} concurrent)")
     _tool_budget = _budget_for_agent(agent)  # once per turn, not per result
 
     if agent._interrupt_requested:
@@ -1883,6 +1887,9 @@ def _execute_tool_calls_sequential(agent, assistant_message, messages: list, eff
     owns turn-end work)."""
     _tool_budget = _budget_for_agent(agent)  # once per turn, not per result
     tool_calls = assistant_message.tool_calls
+    # Batch boundary, never inside a call: an in-flight tool runs to completion before the freeze
+    # takes effect, and a Stop during the pause is handled by the per-tool check below.
+    park_frozen(agent, boundary=f"tool batch ({len(tool_calls)} sequential)")
 
     for i, tool_call in enumerate(tool_calls, 1):
         if getattr(agent, "_incremental_persistence_failed", False):

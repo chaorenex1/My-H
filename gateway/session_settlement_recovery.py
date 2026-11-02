@@ -343,6 +343,9 @@ async def settle_and_deliver(authority, live, ref, row, response, outcome):
             authority.pending_stop_causes.pop(ref.session_id, None)
             authority.pending_steers.pop(ref.session_id, None)
             authority.adopted.pop(ref.session_id, None)
+            # ADR-1: a freeze belongs to its execution generation; the generation just ended.
+            from gateway.session_freeze import release_and_publish
+            await release_and_publish(authority, ref.session_id)
             from gateway.session_queued_controls import publish_transfers
             publish_transfers(authority, ref, row['generation'])
             if settled is None or discarded:

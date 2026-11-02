@@ -947,6 +947,8 @@ export interface SessionControlSnapshot {
   goal: GoalSnapshot | null
   loop: LoopSnapshot | null
   heartbeat: HeartbeatSnapshot | null
+  freeze: FreezeState | null
+  estop: EstopState | null
   revision: string
   updated_at: number
 }
@@ -1017,6 +1019,19 @@ export interface HeartbeatSnapshot {
   created_at: number
   last_fired_at: number
   fire_count: number
+}
+/** ADR-1: this session's execution tree is frozen at its next safe boundary. ``parked_agents`` counts agents currently parked; ``None`` on a managed session (v1 does not report the count across the process seam). */
+export interface FreezeState {
+  frozen: boolean
+  frozen_at?: number | null
+  execution_generation?: number | null
+  parked_agents?: number | null
+}
+/** The profile's ESTOP sentinel (``agent.estop``); present only while engaged. */
+export interface EstopState {
+  engaged: boolean
+  reason?: string | null
+  engaged_at?: string | null
 }
 /** ``action`` is validated by the handler (unknown / gate actions answer ``4004``), so it stays a string on the wire; ``SessionControlAction`` lists the accepted set. */
 export interface SessionControlParams {
@@ -5614,6 +5629,25 @@ export interface CanonicalSessionHandle {
   execution_generation: number
   execution_state: 'idle' | 'running' | 'waiting' | 'unknown' | 'terminal'
 }
+/** ADR-1: engage/release this generation's execution-tree freeze. Idempotent per booleans. */
+export interface CanonicalFreezeParams {
+  profile?: string | null
+  session_id: string
+  execution_generation: number
+  frozen?: boolean
+  request_id?: string | null
+}
+export interface CanonicalFreezeResult {
+  freeze: CanonicalFreezeState
+}
+export interface CanonicalFreezeState {
+  frozen: boolean
+  frozen_at?: number | null
+  held_seconds?: number | null
+  execution_generation?: number | null
+  parked_agents?: number | null
+  running: boolean
+}
 export interface CanonicalCorrectionParams {
   profile?: string | null
   session_id: string
@@ -7499,6 +7533,7 @@ export interface CanonicalRpcMethods {
   'session.events.since': { params: CanonicalEventsParams; result: CanonicalEventsResult }
   /** The /save transcript rendered for the client to write (the gateway writes nothing). */
   'session.export': { params: SessionExportParams; result: SessionExportResult }
+  'session.freeze': { params: CanonicalFreezeParams; result: CanonicalFreezeResult }
   /** Frozen launch policy projection of one local session. */
   'session.info': { params: CanonicalSessionInfoParams; result: CanonicalSessionInfo }
   'session.interrupt': { params: CanonicalControlParams; result: CanonicalSessionHandle }
@@ -7587,6 +7622,7 @@ export const CANONICAL_RPC_METHODS = [
   'session.detach',
   'session.events.since',
   'session.export',
+  'session.freeze',
   'session.info',
   'session.interrupt',
   'session.lease',

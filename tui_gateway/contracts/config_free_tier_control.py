@@ -746,6 +746,27 @@ class HeartbeatSnapshot(Result):
     fire_count: int
 
 
+class FreezeState(Result):
+    """ADR-1: this session's execution tree is frozen at its next safe boundary.
+
+    ``parked_agents`` counts agents currently parked; ``None`` on a managed session (v1 does
+    not report the count across the process seam).
+    """
+
+    frozen: bool
+    frozen_at: float | None = None
+    execution_generation: int | None = None
+    parked_agents: int | None = None
+
+
+class EstopState(Result):
+    """The profile's ESTOP sentinel (``agent.estop``); present only while engaged."""
+
+    engaged: bool
+    reason: str | None = None
+    engaged_at: str | None = None
+
+
 class SessionControlSnapshot(Result):
     """``_snapshot_control`` — ``revision`` is a hash of the visible state (``""`` when empty);
     ``updated_at`` is the newest persisted timestamp (``0`` when none)."""
@@ -753,6 +774,8 @@ class SessionControlSnapshot(Result):
     goal: GoalSnapshot | None
     loop: LoopSnapshot | None
     heartbeat: HeartbeatSnapshot | None
+    freeze: FreezeState | None
+    estop: EstopState | None
     revision: str
     updated_at: float
 

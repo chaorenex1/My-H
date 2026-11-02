@@ -21,6 +21,8 @@ from pathlib import Path
 import sys
 import threading
 
+from agent.pause_gate import AgentPauseGate
+
 logger = logging.getLogger(__name__)
 
 MAX_FRAME = 4 * 1024 * 1024
@@ -179,6 +181,7 @@ class WorkerControls:
     def __init__(self, channel, route):
         self.channel, self.route = channel, route
         self.agent = None
+        self.gate = AgentPauseGate()
         self.stopped = threading.Event()
         self.finish = threading.Event()
         self.clarifications = {}
@@ -207,6 +210,14 @@ class WorkerControls:
                 if frame == {'type': 'finish'}:
                     self.finish.set()
                     return
+                if set(frame) == {'type', 'paused'} and frame['type'] == 'pause' and type(frame['paused']) is bool:
+                    # ADR-1: the owner's session.freeze reaches this fresh interpreter as a frame,
+                    # never through authority.adopt_agent (that adopts a ManagedWorker, not an agent).
+                    if frame['paused']:
+                        self.gate.pause()
+                    else:
+                        self.gate.resume()
+                    continue
                 if (set(frame) != {'type', 'prompt_id', 'value'} or frame['type'] not in {'approval', 'clarify'}
                         or not isinstance(frame['prompt_id'], str) or not isinstance(frame['value'], str)
                         or len(frame['value']) > 16384):
@@ -382,6 +393,7 @@ def execute(frame, channel):
                 tool_complete_callback=lambda call_id, name, args, result: channel.send('tool.complete',
                                                                                          **tool_frame(call_id, name, args, result)))
             controls.agent = agent
+            agent._pause_gate = controls.gate
             if controls.stopped.is_set():
                 from agent.interrupt_compat import request_hard_interrupt
                 request_hard_interrupt(agent)

@@ -244,6 +244,8 @@ class AuthorityConnection:
                     'approval.respond': self.respond, 'clarify.respond': self.respond_clarify}
         from gateway.session_busy_controls import handlers as busy_handlers
         handlers.update(busy_handlers(self))
+        from gateway.session_freeze import handlers as freeze_handlers
+        handlers.update(freeze_handlers(self))
         from gateway.session_queued_controls import handlers as queued_handlers
         handlers.update(queued_handlers(self))
         from gateway.session_config import handlers as config_handlers

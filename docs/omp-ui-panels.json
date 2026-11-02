@@ -763,13 +763,19 @@
     {
       "id": "pause_screen",
       "title": "Pause screen",
-      "status": "partial",
-      "supported": false,
-      "note": "delegation.pause only gates new spawns; freezing in-flight turns needs a new primitive (P6)",
+      "status": "ready",
+      "supported": true,
+      "note": "",
       "methods": [
         {
           "name": "session.control.read",
           "access": "read",
+          "status": "A",
+          "change": []
+        },
+        {
+          "name": "session.freeze",
+          "access": "write",
           "status": "A",
           "change": []
         },

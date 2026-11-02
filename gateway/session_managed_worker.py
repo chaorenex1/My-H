@@ -700,6 +700,11 @@ async def execute_managed(authority, ref, row, policy):
                 raise RuntimeStoreError('managed_worker_failed')
             kind = frame.get('type')
             if kind == 'ready' and set(frame) == {'type', 'pid'} and frame['pid'] == scope['pid']:
+                # ADR-1: after bootstrap the worker owns a pause gate; a freeze engaged meanwhile
+                # is delivered now, and every later toggle rides the same control frame.
+                from gateway.session_freeze import bind_freeze_sender
+                bind_freeze_sender(authority, ref.session_id, row['generation'],
+                                   lambda paused: worker.control({'type': 'pause', 'paused': bool(paused)}))
                 continue
             if kind == 'delta' and set(frame) == {'type', 'text'} and isinstance(frame['text'], str):
                 authority.publish_execution(ref.session_id, row['generation'], 'message.delta', {'text': frame['text']})
@@ -755,4 +760,6 @@ async def execute_managed(authority, ref, row, policy):
         raise ManagedExecutionUnknown('managed_worker_unknown') from exc
     finally:
         workers.pop(ref.session_id, None)
+        from gateway.session_freeze import unbind_freeze_sender
+        unbind_freeze_sender(authority, ref.session_id)
         await asyncio.to_thread(worker.close)

@@ -287,8 +287,9 @@ class AdviserRuntime:
 
     def __init__(self, *, config: AdviserConfig, settings: AdviserSettings,
                  model: AdviserModel, recorder: AdviserRecorder,
-                 advise: AdviseTool) -> None:
+                 advise: AdviseTool, agent: Any = None) -> None:
         self.config = config
+        self.agent = agent  # the reviewed session's agent: freeze heartbeats and the pause gate
         self.name = config.name
         self.slug = config.slug
         self.advise = advise
@@ -421,6 +422,10 @@ class AdviserRuntime:
             with self._lock:
                 if self._stop.is_set() or self._state.epoch != epoch:
                     return
+            from agent.pause_gate import park as park_frozen
+            if park_frozen(self.agent, boundary="adviser batch"):
+                # A Stop during the freeze ends the reviewer too; the turn it advised is stopping.
+                return
             self._recorder.begin_review()
             try:
                 if self.evict_stale:
@@ -660,6 +665,7 @@ class AdviserSession:
             model=model,
             recorder=recorder,
             advise=advise,
+            agent=self.agent,
         )
         self._last_status[config.slug] = STATUS_RUNNING
         return runtime

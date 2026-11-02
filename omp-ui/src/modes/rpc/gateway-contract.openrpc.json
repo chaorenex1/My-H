@@ -9176,6 +9176,135 @@
         "title": "CanonicalEventsResult",
         "type": "object"
       },
+      "CanonicalFreezeParams": {
+        "additionalProperties": false,
+        "description": "ADR-1: engage/release this generation's execution-tree freeze. Idempotent per booleans.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "execution_generation": {
+            "title": "Execution Generation",
+            "type": "integer"
+          },
+          "frozen": {
+            "default": true,
+            "title": "Frozen",
+            "type": "boolean"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "session_id",
+          "execution_generation"
+        ],
+        "title": "CanonicalFreezeParams",
+        "type": "object"
+      },
+      "CanonicalFreezeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "freeze": {
+            "$ref": "#/components/schemas/CanonicalFreezeState"
+          }
+        },
+        "required": [
+          "freeze"
+        ],
+        "title": "CanonicalFreezeResult",
+        "type": "object"
+      },
+      "CanonicalFreezeState": {
+        "additionalProperties": false,
+        "properties": {
+          "frozen": {
+            "title": "Frozen",
+            "type": "boolean"
+          },
+          "frozen_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Frozen At"
+          },
+          "held_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Held Seconds"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Generation"
+          },
+          "parked_agents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parked Agents"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "frozen",
+          "running"
+        ],
+        "title": "CanonicalFreezeState",
+        "type": "object"
+      },
       "CanonicalListParams": {
         "additionalProperties": false,
         "properties": {
@@ -18717,6 +18846,45 @@
         "title": "ErrorSurface",
         "type": "object"
       },
+      "EstopState": {
+        "additionalProperties": false,
+        "description": "The profile's ESTOP sentinel (``agent.estop``); present only while engaged.",
+        "properties": {
+          "engaged": {
+            "title": "Engaged",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "engaged_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Engaged At"
+          }
+        },
+        "required": [
+          "engaged"
+        ],
+        "title": "EstopState",
+        "type": "object"
+      },
       "FailedDelegation": {
         "additionalProperties": false,
         "description": "``async_delegation.failed_delegations_for_session`` row: one failed task of an async delegation.",
@@ -19323,6 +19491,57 @@
           "label"
         ],
         "title": "FreeTierStatusResult",
+        "type": "object"
+      },
+      "FreezeState": {
+        "additionalProperties": false,
+        "description": "ADR-1: this session's execution tree is frozen at its next safe boundary.\n\n``parked_agents`` counts agents currently parked; ``None`` on a managed session (v1 does\nnot report the count across the process seam).",
+        "properties": {
+          "frozen": {
+            "title": "Frozen",
+            "type": "boolean"
+          },
+          "frozen_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Frozen At"
+          },
+          "execution_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Execution Generation"
+          },
+          "parked_agents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parked Agents"
+          }
+        },
+        "required": [
+          "frozen"
+        ],
+        "title": "FreezeState",
         "type": "object"
       },
       "GatewayCapabilitiesResult": {
@@ -38969,6 +39188,26 @@
               }
             ]
           },
+          "freeze": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FreezeState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EstopState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "title": "Revision",
             "type": "string"
@@ -38982,6 +39221,8 @@
           "goal",
           "loop",
           "heartbeat",
+          "freeze",
+          "estop",
           "revision",
           "updated_at"
         ],
@@ -52510,6 +52751,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SessionExportResult"
+        }
+      }
+    },
+    {
+      "name": "session.freeze",
+      "summary": "",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CanonicalFreezeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalFreezeResult"
         }
       }
     },

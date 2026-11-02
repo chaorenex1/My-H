@@ -580,6 +580,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         if self._approval_owner is not None:
             authority, owner_id, generation = self._approval_owner
             authority.adopt_agent(owner_id, generation, agent)
+            # ADR-1: the freeze gate binds here, never inside adopt_agent (a managed worker is
+            # adopted as a ManagedWorker and gets control frames instead).
+            from gateway.session_freeze import bind_freeze
+            bind_freeze(authority, owner_id, generation, agent)
         # The titler fires from the turn prologue, so attach the rename lane before the run.
         self._attach_session_title_callback(agent, ctx)
         # Publish turn ownership for /stop, /new, disconnect and shutdown interrupts; older session

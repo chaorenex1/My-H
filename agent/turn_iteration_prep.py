@@ -384,6 +384,12 @@ def begin_iteration(
     # Reset per-turn checkpoint dedup so each iteration can take one snapshot.
     agent._checkpoint_mgr.new_turn()
 
+    # ADR-1: an iteration boundary is a freeze boundary. Parking here (after the redirect and
+    # checkpoint bookkeeping) means a Stop during the pause falls into the interrupt exit below,
+    # and nothing past this point — request assembly included — starts while frozen.
+    from agent.pause_gate import park as park_frozen
+    park_frozen(agent, boundary="iteration")
+
     if agent._interrupt_requested:
         interrupted = True
         _issuer = interrupt_issuer(agent)
