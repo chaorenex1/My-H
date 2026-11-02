@@ -1526,18 +1526,48 @@ $ hermes model
 → Configure auxiliary models
 
 [ ] vision               currently: auto / main model
+[ ] smol                 currently: auto / main model
+[ ] slow                 currently: auto / main model
+[ ] plan                 currently: auto / main model
+[ ] widget               currently: auto / main model
 [ ] title_generation     currently: openrouter / google/gemini-3-flash-preview
+[ ] commit_message       currently: auto / main model
 [ ] tts_audio_tags       currently: auto / main model
 [ ] voice_chat           currently: auto / main model
 [ ] compression          currently: auto / main model
 [ ] approval             currently: auto / main model
+[ ] side_question        currently: auto / main model
 [ ] triage_specifier     currently: auto / main model
 [ ] kanban_decomposer    currently: auto / main model
+[ ] kanban_estimator     currently: auto / main model
 [ ] profile_describer    currently: auto / main model
 [ ] delegation           currently: auto / inherit main agent
 ```
 
 Select a task, pick a provider (OAuth flows open a browser; API-key providers prompt), pick a model. The change persists to `auxiliary.<task>.*` in `config.yaml`. Same machinery as the main-model picker — no extra syntax to learn.
+
+The same slots are editable as **roles** in omp-ui's `/models` hub (`hermes omp`), backed by the gateway methods `model.roles.get` / `model.roles.set`: assigning a row writes `auxiliary.<task>.provider` / `.model`, the thinking column writes `.reasoning_effort`, and its fallback rows write the ordered `.fallback_chain`. The hub also knows two roles that are not auxiliary tasks, because Hermes stores their model elsewhere:
+
+| Hub role | Hermes config | Notes |
+|----------|---------------|-------|
+| `task` | `delegation.provider` / `delegation.model` (+ `delegation.fallback_providers`) | `auto` = inherit the parent agent |
+| `advisor` | `adviser.provider` / `adviser.model` | no per-role effort or chain; `adviser.enabled` still gates it |
+
+Three more hub features map onto the profile config:
+
+- **Presets** — `/models` saves the current role assignments into `model_presets.<name>` (a snapshot of every assignable role's provider/model/effort/chain) and re-applies one as a whole; roles a preset does not name return to `auto`.
+- **Cycle order** — the hub's `ctrl+p` role cycle lives in `omp.cycle_order` (role ids). Empty (the default) keeps the shell cycling the catalog instead.
+- **Model-keyed fallback chains** — `auxiliary.fallback_chains` in the hub's chunk keys a chain to `provider/model` or `provider/*`; see [auxiliary fallback chains](features/fallback-providers.md#auto-detection-chain).
+
+`plan`, `smol`, `slow` and `widget` exist as ordinary auxiliary slots so omp's role vocabulary is
+addressable (`auxiliary.plan`, `.smol`, `.slow`, `.widget`) and assignable in the hub, but **no
+built-in workload consumes them yet**: `/plan` drafts on the main agent, and nothing writes
+background-job widget specs. They stay `auto` and therefore on the main model unless you pin them;
+a plugin can already call `call_llm(task="smol")` and pick them up.
+
+omp's model-kind roles (`image`, `speech`, `dictation`, `web`) are deliberately absent: their models live in `tts.*`, `stt.*` and the image/search provider registries, not the chat catalog the hub browses, so `/models` shows only chat-model roles.
+
+The dashboard's Models page assigns provider/model per task (`GET /api/model/auxiliary` now also returns each slot's `fallback_chain`, and `POST /api/model/set` accepts one) but does not yet edit chains, presets or the cycle order. A "reset all to auto" clears the chains too.
 
 The **Delegation** entry is special: it routes the model used by `delegate_task` subagents and persists to the top-level `delegation.*` section (`delegation.provider` / `delegation.model`) rather than `auxiliary.*`, because subagents are full child agents, not side-LLM calls. Its `auto` means "inherit the parent agent's provider, model, and credentials."
 

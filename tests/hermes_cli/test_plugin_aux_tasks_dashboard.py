@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 import hermes_cli.plugins as plugins_mod
 from agent.auxiliary_client import _get_auxiliary_task_config
+from hermes_cli.aux_slots import AUX_TASK_META
 from hermes_cli.plugins import PluginManager
 from hermes_cli.web_server_config import (
     _AUX_TASK_SLOTS, _apply_aux_assignment_sync, _apply_model_assignment_sync, _aux_task_slots,
@@ -82,9 +83,11 @@ def _resolved_model(profile):
 
 def test_listing_is_per_profile_and_carries_inheritance(two_profile_homes):
     listing = get_auxiliary_models(profile=None)["tasks"]
-    # Built-ins first, in their fixed order and pre-existing shape; plugin rows appended.
+    # Built-ins first, in picker order, each carrying its own label/hint/group; plugin rows appended.
     assert [row["task"] for row in listing][: len(_AUX_TASK_SLOTS)] == list(_AUX_TASK_SLOTS)
-    assert "label" not in listing[0] and "plugin" not in listing[0]
+    first = _AUX_TASK_SLOTS[0]
+    assert (listing[0]["label"], listing[0]["hint"]) == AUX_TASK_META[first]
+    assert listing[0]["group"] == "builtin" and "plugin" not in listing[0]
 
     rows_a, rows_b = _rows(None), _rows("b")
     assert "alpha_task" in rows_a and "alpha_task" not in rows_b

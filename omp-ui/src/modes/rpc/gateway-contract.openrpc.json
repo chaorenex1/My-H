@@ -1969,6 +1969,24 @@
       }
     },
     {
+      "name": "model.cycle.set",
+      "summary": "Persist the Models-hub role cycle order (``omp.cycle_order``).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelCycleSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelCycleSetResult"
+        }
+      }
+    },
+    {
       "name": "model.disconnect",
       "summary": "Remove every credential (env keys and OAuth state) for a provider.",
       "params": [
@@ -2001,6 +2019,96 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/ModelOptionsResult"
+        }
+      }
+    },
+    {
+      "name": "model.presets.apply",
+      "summary": "Restore a preset; roles absent from the snapshot reset to auto.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelPresetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelPresetsApplyResult"
+        }
+      }
+    },
+    {
+      "name": "model.presets.delete",
+      "summary": "Remove a preset (5126 when it does not exist).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelPresetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelPresetsDeleteResult"
+        }
+      }
+    },
+    {
+      "name": "model.presets.save",
+      "summary": "Snapshot every assignable role into ``model_presets.<name>``, overwriting.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelPresetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelPresetsSaveResult"
+        }
+      }
+    },
+    {
+      "name": "model.roles.get",
+      "summary": "Every role (picker slots in canonical order, then imported roles, then plugin tasks) with its stored route, the main route, cycle order and presets.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ProfileParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelRolesGetResult"
+        }
+      }
+    },
+    {
+      "name": "model.roles.set",
+      "summary": "Assign or clear one role (or a model-keyed fallback chain); the profile's config.yaml stays the single truth.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/ModelRolesSetParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ModelRolesSetResult"
         }
       }
     },
@@ -25551,6 +25659,47 @@
         "title": "ModelCost",
         "type": "object"
       },
+      "ModelCycleSetParams": {
+        "additionalProperties": false,
+        "description": "omp's ``cycle_order``: role ids in cycle order. Every id must be an assignable role.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "title": "ModelCycleSetParams",
+        "type": "object"
+      },
+      "ModelCycleSetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "title": "ModelCycleSetResult",
+        "type": "object"
+      },
       "ModelDisconnectParams": {
         "additionalProperties": false,
         "properties": {
@@ -26094,6 +26243,106 @@
         "title": "ModelOptionsResult",
         "type": "object"
       },
+      "ModelPresetParams": {
+        "additionalProperties": false,
+        "description": "A preset name: 1\u201364 characters of ``[A-Za-z0-9._-]`` (5127 otherwise).",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelPresetParams",
+        "type": "object"
+      },
+      "ModelPresetsApplyResult": {
+        "additionalProperties": false,
+        "description": "Same shapes as ``model.roles.get`` minus the main route.",
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRoleRow"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "presets": {
+            "$ref": "#/components/schemas/ModelPresetsSummary"
+          },
+          "cycle_order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cycle Order",
+            "type": "array"
+          }
+        },
+        "title": "ModelPresetsApplyResult",
+        "type": "object"
+      },
+      "ModelPresetsDeleteResult": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelPresetsDeleteResult",
+        "type": "object"
+      },
+      "ModelPresetsSaveResult": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelPresetsSaveResult",
+        "type": "object"
+      },
+      "ModelPresetsSummary": {
+        "additionalProperties": false,
+        "description": "Configured preset names plus the one whose snapshot equals the live assignments (``\"\"`` none).",
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          },
+          "active": {
+            "default": "",
+            "title": "Active",
+            "type": "string"
+          }
+        },
+        "title": "ModelPresetsSummary",
+        "type": "object"
+      },
       "ModelPricing": {
         "additionalProperties": false,
         "description": "``hermes_cli/inventory.py::_apply_pricing`` \u2014 formatted $/Mtok strings (``\"\"`` unknown,\n``\"free\"``); the sale fields are Nous Portal-only.",
@@ -26165,6 +26414,285 @@
           "free"
         ],
         "title": "ModelPricing",
+        "type": "object"
+      },
+      "ModelRoleFallbackEntry": {
+        "additionalProperties": false,
+        "description": "One ``auxiliary.<task>.fallback_chain`` route (``hermes_cli/aux_fallback.py``):\n``provider`` + ``model`` are required to serve, ``base_url`` pins an explicit endpoint.",
+        "properties": {
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "",
+            "title": "Base Url",
+            "type": "string"
+          }
+        },
+        "title": "ModelRoleFallbackEntry",
+        "type": "object"
+      },
+      "ModelRoleRow": {
+        "additionalProperties": false,
+        "description": "One role as the profile's ``config.yaml`` stores it.\n\n``reasoning_effort`` is the slot's own override: a level, ``\"none\"``, or ``null`` (inherit\n``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config\nsection the row writes (``auxiliary``, ``delegation``, ``adviser`` or ``chain`` \u2014\n``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots,\nplugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base\nslot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the\nslot's stored values, exactly like the dashboard's auxiliary rows).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "title": "Label",
+            "type": "string"
+          },
+          "hint": {
+            "default": "",
+            "title": "Hint",
+            "type": "string"
+          },
+          "tag": {
+            "default": "",
+            "title": "Tag",
+            "type": "string"
+          },
+          "section": {
+            "const": "chat",
+            "default": "chat",
+            "title": "Section",
+            "type": "string"
+          },
+          "provider": {
+            "default": "auto",
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Effort"
+          },
+          "fallback_chain": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRoleFallbackEntry"
+            },
+            "title": "Fallback Chain",
+            "type": "array"
+          },
+          "group": {
+            "default": "builtin",
+            "enum": [
+              "builtin",
+              "plugin",
+              "imported",
+              "chain"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "target": {
+            "default": "auxiliary",
+            "enum": [
+              "auxiliary",
+              "delegation",
+              "adviser",
+              "chain"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "inherit_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Inherit From"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ModelRoleRow",
+        "type": "object"
+      },
+      "ModelRolesGetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/ModelRoleRow"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "main": {
+            "$ref": "#/components/schemas/ModelRolesMain"
+          },
+          "default_thinking_level": {
+            "default": "",
+            "title": "Default Thinking Level",
+            "type": "string"
+          },
+          "cycle_order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cycle Order",
+            "type": "array"
+          },
+          "presets": {
+            "$ref": "#/components/schemas/ModelPresetsSummary"
+          },
+          "model_chains": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/ModelRoleFallbackEntry"
+              },
+              "type": "array"
+            },
+            "title": "Model Chains",
+            "type": "object"
+          }
+        },
+        "title": "ModelRolesGetResult",
+        "type": "object"
+      },
+      "ModelRolesMain": {
+        "additionalProperties": false,
+        "description": "The main model route roles inherit from (``provider: auto`` / ``main`` resolve to it).",
+        "properties": {
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "title": "ModelRolesMain",
+        "type": "object"
+      },
+      "ModelRolesSetParams": {
+        "additionalProperties": false,
+        "description": "Assign one role. ``clear`` resets it to its \"auto\" route with no endpoint/override.\n\n``reasoning_effort``: a level, ``\"none\"``, or ``\"inherit\"`` to clear the override; ``null``\n(omitted) leaves it unchanged. ``fallback_chain``: ``null`` (omitted) leaves it unchanged,\n``[]`` clears it, a list replaces it. The imported ``advisor`` role has neither knob and\nrefuses them with 5127.\n\n``role`` may instead be a model-keyed chain (``provider/model`` or ``provider/*``) when it\ncarries ``fallback_chain``: the list replaces ``auxiliary.fallback_chains[<key>]`` and ``[]``\nremoves the entry. ``clear`` is refused for a chain key (write the shortened chain instead).",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "title": "Model",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "api_key": {
+            "default": "",
+            "title": "Api Key",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Effort"
+          },
+          "fallback_chain": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModelRoleFallbackEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fallback Chain"
+          },
+          "clear": {
+            "default": false,
+            "title": "Clear",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "ModelRolesSetParams",
+        "type": "object"
+      },
+      "ModelRolesSetResult": {
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/ModelRoleRow"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "ModelRolesSetResult",
         "type": "object"
       },
       "ModelSaveKeyParams": {

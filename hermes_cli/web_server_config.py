@@ -7,6 +7,12 @@ from dataclasses import replace
 from fastapi import HTTPException
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from agent.model_metadata import is_local_endpoint
+from hermes_cli.aux_fallback import (
+    clear_slot_fallback_chain,
+    normalize_fallback_chain,
+    set_slot_fallback_chain,
+)
+from hermes_cli.aux_slots import aux_picker_keys
 from hermes_cli.config import (
     DEFAULT_CONFIG,
     cfg_get,
@@ -244,6 +250,11 @@ def _build_schema_from_config(config: dict[str, Any], prefix: str = "") -> dict[
     for key, value in config.items():
         full_key = f"{prefix}.{key}" if prefix else key
         if full_key == "_config_version":
+            continue
+        if key == "fallback_chain":
+            # A list of {provider, model, base_url} routes has no flat Config-page editor: the
+            # generated "list" field would comma-join the objects and save them back as strings,
+            # silently destroying the chain. The Models page owns this field.
             continue
         if isinstance(value, dict):
             schema.update(_build_schema_from_config(value, full_key))
@@ -604,12 +615,9 @@ def _normalize_config_for_web(config: dict[str, Any]) -> dict[str, Any]:
 # JSON-RPC from tui_gateway but over REST so the Models page can drive it.
 # ---------------------------------------------------------------------------
 
-# Canonical auxiliary task slots. Keep in sync with DEFAULT_CONFIG["auxiliary"]
-# in hermes_cli/config.py — listed here for deterministic ordering in the UI.
-_AUX_TASK_SLOTS: tuple[str, ...] = (
-    "vision", "compression", "approval", "mcp", "title_generation", "review", "voice_chat",
-    "triage_specifier", "kanban_decomposer", "profile_describer", "curator",
-)
+# Canonical auxiliary task slots, derived from hermes_cli.aux_slots so the dashboard, the CLI
+# picker and DEFAULT_CONFIG["auxiliary"] can never drift apart.
+_AUX_TASK_SLOTS: tuple[str, ...] = aux_picker_keys()
 
 
 def _plugin_aux_tasks() -> list[dict[str, Any]]:
@@ -890,8 +898,18 @@ def _aux_default_effort(slot: str) -> str:
     return str(block.get("reasoning_effort") or "") if isinstance(block, dict) else ""
 
 
+def _validated_fallback_chain(raw: Any) -> list[dict[str, str]]:
+    """``auxiliary.<task>.fallback_chain`` for an assignment: validated, else HTTP 400 naming the
+    offending index (aux_fallback.normalize_fallback_chain owns the rules)."""
+    try:
+        return normalize_fallback_chain(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid fallback_chain: {exc}") from exc
+
+
 def _apply_aux_assignment_sync(cfg: dict, provider: str, model: str, task: str, base_url: str, api_key: str,
-                               reasoning_effort: Optional[str] = _UNSET) -> dict:
+                               reasoning_effort: Optional[str] = _UNSET,
+                               fallback_chain: Any = _UNSET) -> dict:
     from hermes_cli.config import save_config
     aux = cfg.get("auxiliary")
     if not isinstance(aux, dict):
@@ -902,6 +920,7 @@ def _apply_aux_assignment_sync(cfg: dict, provider: str, model: str, task: str, 
         return slot_cfg if isinstance(slot_cfg, dict) else {}
 
     effort = _normalize_aux_reasoning_effort(reasoning_effort) if reasoning_effort is not _UNSET else _UNSET
+    chain = _validated_fallback_chain(fallback_chain) if fallback_chain is not _UNSET else _UNSET
     slots = _aux_task_slots()
 
     if task == "__reset__":
@@ -912,6 +931,7 @@ def _apply_aux_assignment_sync(cfg: dict, provider: str, model: str, task: str, 
             slot_cfg["model"] = ""
             slot_cfg.pop("reasoning_effort", None)
             slot_cfg.pop("base_url", None)
+            clear_slot_fallback_chain(slot_cfg)
             clear_model_endpoint_credentials(slot_cfg)
             aux[slot] = slot_cfg
         cfg["auxiliary"] = aux
@@ -953,6 +973,8 @@ def _apply_aux_assignment_sync(cfg: dict, provider: str, model: str, task: str, 
                 slot_cfg.pop("reasoning_effort", None)
         elif effort is not _UNSET:
             slot_cfg["reasoning_effort"] = effort
+        if chain is not _UNSET:
+            set_slot_fallback_chain(slot_cfg, chain)
         aux[slot] = slot_cfg
 
     cfg["auxiliary"] = aux
@@ -960,12 +982,15 @@ def _apply_aux_assignment_sync(cfg: dict, provider: str, model: str, task: str, 
     result = {"ok": True, "scope": "auxiliary", "tasks": targets, "provider": provider, "model": model}
     if effort is not _UNSET:
         result["reasoning_effort"] = effort
+    if chain is not _UNSET:
+        result["fallback_chain"] = chain
     return result
 
 
 def _apply_model_assignment_sync(
     scope: str, provider: str, model: str, task: str, base_url: str, api_key: str = "",
     reasoning_effort: Optional[str] = _UNSET, prepared: "Optional[tuple[str, ModelSwitchResult]]" = None,
+    fallback_chain: Any = _UNSET,
 ):
     """Synchronous body of POST /api/model/set.
 
@@ -977,7 +1002,8 @@ def _apply_model_assignment_sync(
     cfg = load_config()
     if scope == "main":
         return _apply_main_assignment_sync(cfg, provider, model, base_url, api_key, prepared)
-    return _apply_aux_assignment_sync(cfg, provider, model, task, base_url, api_key, reasoning_effort)
+    return _apply_aux_assignment_sync(
+        cfg, provider, model, task, base_url, api_key, reasoning_effort, fallback_chain)
 
 
 def _infer_provider_on_model_change(model_val: str, prev_provider: str) -> tuple[str, str]:

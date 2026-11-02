@@ -68,6 +68,7 @@ export class CommandController {
 	/** Local shell commands; every name not listed here is a gateway command. */
 	readonly #localHandlers: Record<string, (argument: string) => void | Promise<void>> = {
 		model: () => this.ctx.showModelSelector(),
+		models: () => this.ctx.showModelHub(),
 		thinking: () => this.ctx.showThinkingSelector(),
 		settings: () => this.ctx.showSettingsSelector(),
 		theme: () => this.ctx.showSettingsSelector(),

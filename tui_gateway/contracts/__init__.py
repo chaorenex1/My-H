@@ -16,6 +16,7 @@ from . import (
     lease_auth,
     liveness,
     machine,
+    model_roles,
     plans_btw,
     profiles_vault_complete_foreign_subagents,
     projects_pets,

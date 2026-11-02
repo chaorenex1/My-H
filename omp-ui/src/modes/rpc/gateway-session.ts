@@ -53,6 +53,30 @@ import {
 } from "./gateway-client"
 import { connectGateway, type GatewayConnection, type GatewayConnectOptions } from "./gateway-socket"
 import { setLiveGatewayClient } from "./gateway-live-client"
+import { GatewayRolesClient, type ModelRoleRows } from "./gateway-roles"
+
+/** One step of the ctrl+p role cycle: the role and the model route it pins. */
+export interface RoleCycleRoute {
+	role: string
+	provider: string
+	model: string
+}
+
+/**
+ * The pinned routes of `roles.cycleOrder`, skipping rows that are auto or carry no route. The
+ * caller resolves each route against the live catalog, so an unknown model is skipped there.
+ */
+export function roleCycleRoutes(roles: ModelRoleRows): RoleCycleRoute[] {
+	const routes: RoleCycleRoute[] = []
+	for (const role of roles.cycleOrder) {
+		const row = roles.byId(role)
+		const provider = row?.provider?.trim()
+		const model = row?.model?.trim()
+		if (!provider || !model || provider === "auto") continue
+		routes.push({ role, provider, model })
+	}
+	return routes
+}
 
 /** One session event plus the gateway metadata the shell does not need but a replay guard does. */
 export type GatewaySessionEvent = AgentSessionEvent
@@ -328,6 +352,7 @@ export class GatewayOmpSession {
 
 	#state: GatewaySessionSnapshot
 	#listeners = new Set<(event: AgentSessionEvent) => void>()
+	#roles: GatewayRolesClient | undefined
 	#draft: AssistantDraft | undefined
 	#messages: AgentMessage[] = []
 	#running = false
@@ -351,6 +376,21 @@ export class GatewayOmpSession {
 		this.#running = snapshot.running
 		this.#onError = options.onError
 		this.#onServerRequest = options.onServerRequest
+	}
+
+	/** Role table over `model.roles.*`; one cache per session, created on first `/models`. */
+	get roles(): GatewayRolesClient {
+		return (this.#roles ??= new GatewayRolesClient(this.client))
+	}
+
+	/**
+	 * The ctrl+p model cycle: `omp.cycle_order` resolved to the roles' pinned routes. The first
+	 * use loads the role table, so cycling works before `/models` was opened.
+	 */
+	async roleCycle(): Promise<readonly RoleCycleRoute[]> {
+		const roles = this.roles
+		if (!roles.loaded) await roles.refresh()
+		return roleCycleRoutes(roles)
 	}
 
 	/** Project a persisted transcript row onto the shell's `AgentMessage` vocabulary. */

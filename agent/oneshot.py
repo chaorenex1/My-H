@@ -83,7 +83,7 @@ def run_oneshot(
     user_input: str = "",
     template: Optional[str] = None,
     variables: Optional[dict[str, Any]] = None,
-    task: str = "title_generation",
+    task: Optional[str] = None,
     max_tokens: int = 1024,
     temperature: Optional[float] = 0.3,
     timeout: float = 60.0,
@@ -91,9 +91,16 @@ def run_oneshot(
 ) -> str:
     """Run a single stateless LLM request and return its text (fence-stripped).
 
+    ``task`` names the auxiliary slot to bill; omitted, a template whose name IS an auxiliary
+    task key routes to that slot (``commit_message`` → ``auxiliary.commit_message``), else the
+    cheap ``title_generation`` backend. An explicit ``task`` always wins.
+
     Raises RuntimeError when no provider is configured (from :func:`call_llm`),
     KeyError for an unknown template, ValueError when the prompt is empty.
     """
+    from hermes_cli.aux_slots import AUX_TASK_KEYS
+
+    resolved_task = (task or "").strip() or (template if template in AUX_TASK_KEYS else "") or "title_generation"
     if template:
         instructions, user_input = render_template(template, variables)
     has_instructions = bool((instructions or "").strip())
@@ -102,7 +109,7 @@ def run_oneshot(
     messages = [{"role": "system", "content": instructions}] if has_instructions else []
     messages.append({"role": "user", "content": user_input or ""})
     response = call_llm(
-        task=task,
+        task=resolved_task,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,

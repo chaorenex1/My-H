@@ -188,6 +188,8 @@ _LONG_HANDLERS = frozenset({
     "billing.state", "subscription.state", "subscription.preview", "subscription.change",
     "subscription.resume", "subscription.upgrade", "usage.bars", "session.usage", "billing.step_up",
     "browser.manage", "cli.exec", "complete.path", "complete.slash", "llm.oneshot", "model.options",
+    "model.roles.get", "model.roles.set", "model.cycle.set",
+    "model.presets.save", "model.presets.apply", "model.presets.delete",
     "pet.cells", "pet.gallery", "pet.generate", "pet.hatch", "pet.info", "pet.select", "pet.thumb",
     "image.render", "learning.frames", "plugins.manage", "plugins.catalog.lookup", "reload.mcp", "mcp.servers.test",
     "mcp.servers.oauth.start",
@@ -2024,7 +2026,7 @@ from . import (
     methods_display as _methods_display, methods_display_watch as _methods_display_watch,
     methods_onboarding as _methods_onboarding, methods_i18n as _methods_i18n, methods_machine as _methods_machine,
     methods_shared_metrics as _methods_shared_metrics, methods_plugin_catalog as _methods_plugin_catalog,
-    methods_omp_ui as _methods_omp_ui)
+    methods_model_roles as _methods_model_roles, methods_omp_ui as _methods_omp_ui)
 
 for _m in (
     _session_registry, _agent_factory, _slash_worker_client,
@@ -2038,6 +2040,6 @@ for _m in (
     _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_connectors,
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
     _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog,
-    _methods_omp_ui):
+    _methods_model_roles, _methods_omp_ui):
     _m.register(sys.modules[__name__])
 del _m

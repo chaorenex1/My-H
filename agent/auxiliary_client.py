@@ -35,6 +35,15 @@ from agent.error_classifier import (
 )
 from agent.errors import InvalidProviderResponseError
 from agent.auxiliary_fallback_recovery import reapply_repairs
+from agent.auxiliary_error_shapes import (
+    _botocore_error, _exc_http_status, _is_invalid_aux_response_error, _is_statusless_structured_provider_error,
+)
+from agent.auxiliary_fallback_chains import (
+    coerce_positive_timeout as _coerce_positive_timeout,
+    fallback_chain_entry as _fallback_chain_entry,
+    fallback_entry_timeout as _fallback_entry_timeout,
+    fallback_provider_from_label as _fallback_provider_from_label,
+)
 from agent.auxiliary_managed_local import _is_managed_local_endpoint
 from agent.auxiliary_reasoning_floor import remember_reasoning_floor, with_reasoning_floor
 from agent.auxiliary_structured_output import _route_key, _without_structured_output_format, remember_structured_output_rejection
@@ -3750,48 +3759,6 @@ def _auth_refresh_provider_for_route(
     return host_provider or normalized
 
 
-def _fallback_chain_entry(task: Optional[str], fb_label: str) -> Optional[dict[str, Any]]:
-    """Resolve the ``fallback_chain`` entry a ``fallback_chain[<i>](<provider>)`` label points at,
-    or None when the label is not a configured-chain candidate or the index no longer resolves."""
-    if not task or not fb_label:
-        return None
-    m = re.match(r"fallback_chain\[(\d+)\]", fb_label)
-    if not m:
-        return None
-    try:
-        chain = _get_auxiliary_task_config(task).get("fallback_chain")
-        entry = chain[int(m.group(1))] if isinstance(chain, list) else None
-    except Exception:
-        return None
-    return entry if isinstance(entry, dict) else None
-
-
-def _coerce_positive_timeout(raw: Any) -> Optional[float]:
-    """Coerce a config ``timeout`` to a positive float, or None (rejects bools, which are ints)."""
-    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
-        return float(raw)
-    return None
-
-
-def _fallback_entry_timeout(task: Optional[str], fb_label: str) -> Optional[float]:
-    """Per-entry ``timeout`` for a configured fallback candidate, or None (keep the task-level
-    timeout). Inheriting the primary's deadline used to kill healthy-but-slower fallbacks.
-
-    A fallback candidate previously inherited the exact timeout the primary provider was called with. When
-    that deadline was tuned for the primary (or the primary simply consumed its whole budget before failing
-    over), the fallback aborted on the same clock even when independently healthy — a 163k-token compression
-    that needs ~90s on the fallback died at the primary's 30s deadline every turn (#62452).
-    """
-    entry = _fallback_chain_entry(task, fb_label)
-    return _coerce_positive_timeout(entry.get("timeout") if entry else None)
-
-
-def _fallback_provider_from_label(label: str) -> str:
-    """Recover the provider identifier from a fallback display label."""
-    match = re.match(r"(?:fallback_chain\[\d+\]|fallback_providers\[\d+\]|main-agent)\(([^)]+)\)$", label or "")
-    return match.group(1).strip() if match else str(label or "").strip()
-
-
 class _FallbackDestination(NamedTuple):
     provider: str
     base_url: str
@@ -4219,23 +4186,14 @@ def _context_too_small(
     return f"{label} (context too small: {fb_ctx}<{min_ctx})"
 
 
-def _try_configured_fallback_chain(
-    task: str, failed_provider: str, reason: str = "error", failed_model: Optional[str] = None, *,
-    failed_base_url: str = "", failure_scope: Any = None, skip_lanes=(),
+def _walk_configured_chain(
+    chain: Any, *, task: Optional[str], failed_provider: str, reason: str,
+    skip: Callable[..., bool], min_ctx: Optional[int], tried: list[str],
+    label_for: Callable[[int, str], str], skip_lanes=(),
 ) -> tuple[Optional[Any], Optional[str], str]:
-    """Try auxiliary.<task>.fallback_chain entries in order (each needs ``provider``; model/base_url/api_key optional).
-    ``failed_model`` scoping per ``_failed_backend_skip`` (sibling models on the same provider still run after a
-    model-scoped failure); this walk's ``skip_lanes`` are passed over. Returns (client, model, label)."""
-    if not task:
-        return None, None, ""
-    chain = _get_auxiliary_task_config(task).get("fallback_chain")
-    if not chain or not isinstance(chain, list):
-        return None, None, ""
-    skip = _failed_backend_skip(
-        failed_provider, failed_model, failed_base_url=failed_base_url, failure_scope=failure_scope)
-    tried = []
-    min_ctx = _task_minimum_context_length(task)
-    for i, entry in enumerate(chain):
+    """Walk one configured route list; returns (client, model, label) at the first viable entry.
+    ``skip_lanes`` are candidate identities this call already tried, passed over."""
+    for i, entry in enumerate(chain if isinstance(chain, list) else []):
         if not isinstance(entry, dict):
             continue
         fb_provider = str(entry.get("provider", "")).strip()
@@ -4245,15 +4203,15 @@ def _try_configured_fallback_chain(
         fb_base_url = _custom_health_base_url(fb_provider, entry.get("base_url"))
         if skip(fb_provider, fb_model_raw, fb_base_url):
             continue
+        label = label_for(i, fb_provider)
         if _is_provider_unhealthy(fb_provider, fb_base_url, fb_model_raw):
             _log_skip_unhealthy(fb_provider, task, base_url=fb_base_url, model=fb_model_raw)
-            tried.append(f"fallback_chain[{i}]({fb_provider}) (unhealthy)")
+            tried.append(f"{label} (unhealthy)")
             continue
         fb_model = fb_model_raw or None
-        label = f"fallback_chain[{i}]({fb_provider})"
         try:
             fb_client, resolved_model = _resolve_fallback_entry(entry)
-        except Exception:
+        except Exception:  # health: allow BLE001 -- provider client construction raises SDK-specific errors; a failed candidate must advance the chain, never break aux calls
             fb_client, resolved_model = None, None
         if fb_client is not None and _fallback_lane(fb_client, resolved_model or fb_model, label) not in skip_lanes:
             too_small = _context_too_small(
@@ -4266,6 +4224,50 @@ def _try_configured_fallback_chain(
                         task, reason, failed_provider, label, resolved_model or fb_model or "default")
             return fb_client, resolved_model or fb_model, label
         tried.append(label)
+    return None, None, ""
+
+
+def _try_configured_fallback_chain(
+    task: str, failed_provider: str, reason: str = "error", failed_model: Optional[str] = None, *,
+    failed_base_url: str = "", failure_scope: Any = None, skip_lanes=(),
+) -> tuple[Optional[Any], Optional[str], str]:
+    """Try the configured fallback tiers in order, most specific first: the model-keyed chains
+    (``auxiliary.fallback_chains[provider/model]``, then ``[provider/*]``), then
+    ``auxiliary.<task>.fallback_chain``. Each entry needs a ``provider``; model/base_url/api_key are
+    optional. ``failed_model`` scoping per ``_failed_backend_skip`` (sibling models on the same
+    provider still run after a model-scoped failure) and selects the exact key; without it only the
+    provider wildcard applies. Returns (client, model, provider_label) or (None, None, "")."""
+    from agent.auxiliary_fallback_chains import label_for as _model_chain_label
+    from agent.auxiliary_fallback_chains import model_fallback_chains_for_route
+
+    skip = _failed_backend_skip(
+        failed_provider, failed_model, failed_base_url=failed_base_url, failure_scope=failure_scope)
+    min_ctx = _task_minimum_context_length(task)
+    model_tried: list[str] = []
+    for key, model_chain in model_fallback_chains_for_route(failed_provider, failed_model):
+        found = _walk_configured_chain(
+            model_chain, task=task, failed_provider=failed_provider, reason=reason, skip=skip,
+            min_ctx=min_ctx, tried=model_tried, skip_lanes=skip_lanes,
+            label_for=lambda i, p, key=key: _model_chain_label(key, i, p),
+        )
+        if found[0] is not None:
+            return found
+    if model_tried:
+        logger.debug("Auxiliary %s: configured fallback_chains exhausted (tried: %s)",
+                     task or "call", ", ".join(model_tried))
+    if not task:
+        return None, None, ""
+    chain = _get_auxiliary_task_config(task).get("fallback_chain")
+    if not chain or not isinstance(chain, list):
+        return None, None, ""
+    tried: list[str] = []
+    found = _walk_configured_chain(
+        chain, task=task, failed_provider=failed_provider, reason=reason, skip=skip,
+        min_ctx=min_ctx, tried=tried, skip_lanes=skip_lanes,
+        label_for=lambda i, p: f"fallback_chain[{i}]({p})",
+    )
+    if found[0] is not None:
+        return found
     if tried:
         logger.debug("Auxiliary %s: configured fallback_chain exhausted (tried: %s)", task, ", ".join(tried))
     return None, None, ""

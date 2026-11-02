@@ -181,3 +181,16 @@ def test_inheritance_cycle_does_not_recurse(aux_home, patched_manager, caplog):
     with caplog.at_level(logging.WARNING, logger="agent.auxiliary_task_config"):
         assert resolve("plug_a")["timeout"] == 90
     assert "circular inherit_from" in caplog.text
+
+
+@pytest.mark.parametrize("key", ["task", "advisor"])
+def test_plugin_cannot_register_an_imported_hub_role_id(patched_manager, key):
+    """`task`/`advisor` are the Models hub's ids for `delegation`/`adviser`.
+
+    Letting a plugin claim one would put two rows under a single hub id and route every
+    `model.roles.set` to the imported writer, so the registration is refused like a built-in key.
+    """
+    manifest = PluginManifest(name="collides")
+    ctx = PluginContext(manifest, patched_manager)
+    with pytest.raises(ValueError, match="reserved"):
+        ctx.register_auxiliary_task(key=key, display_name=key.title(), description="collision probe")

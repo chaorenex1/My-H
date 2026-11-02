@@ -2468,6 +2468,10 @@ export class InteractiveMode {
 		this.#selectorController.showModelSelector(options);
 	}
 
+	showModelHub(): void {
+		this.#selectorController.showModelHub();
+	}
+
 	async switchSessionModel(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void> {
 		await this.session.setModel(model);
 		if (thinkingLevel !== undefined) this.session.setThinkingLevel(thinkingLevel);

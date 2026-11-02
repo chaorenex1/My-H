@@ -31,8 +31,9 @@ import {
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resizeImage } from "../../utils/image-resize";
 import { resendProgramStatus } from "../../utils/run-status";
-import type { ImageContent } from "../../vendor/ai/src/index.ts";
+import type { ImageContent, Model } from "../../vendor/ai/src/index.ts";
 import type { CompleteSlashResult } from "../rpc/gateway-contract.generated";
+import type { RoleCycleRoute } from "../rpc/gateway-session";
 import { cfgImagesAutoResize } from "../settings";
 import type { InteractiveModeContext, SubmittedUserInput } from "../types";
 
@@ -49,6 +50,41 @@ interface Expandable {
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+/** One resolved step of the ctrl+p model cycle. */
+export interface CycleModelTarget {
+	model: Model;
+	/** Role whose pinned route won; absent when the catalog pool was cycled instead. */
+	role?: string;
+}
+
+/**
+ * Resolve the next ctrl+p model: the roles' pinned routes in the gateway's cycle order first,
+ * the session catalog pool (`session.cycleModel`) only when no route resolves. Routes the
+ * catalog does not know are skipped, so an uninstalled model never stalls the cycle.
+ */
+export async function cycleSessionModel(
+	routes: readonly RoleCycleRoute[],
+	find: (provider: string, id: string) => Model | undefined,
+	current: Model | undefined,
+	direction: "forward" | "backward",
+	cycleCatalog: () => Promise<{ model: Model } | undefined>,
+): Promise<CycleModelTarget | undefined> {
+	const pool = routes.flatMap((route) => {
+		const model = find(route.provider, route.model);
+		return model ? [{ role: route.role, model }] : [];
+	});
+	if (pool.length === 0) {
+		const fallback = await cycleCatalog();
+		return fallback ? { model: fallback.model } : undefined;
+	}
+	const index = pool.findIndex(
+		(entry) => entry.model.provider === current?.provider && entry.model.id === current.id,
+	);
+	const step = direction === "forward" ? 1 : -1;
+	const next = index < 0 ? (step === 1 ? 0 : pool.length - 1) : (index + step + pool.length) % pool.length;
+	return pool[next];
 }
 
 /**
@@ -515,13 +551,33 @@ export class InputController {
 
 	async #cycleModel(direction: "forward" | "backward"): Promise<void> {
 		try {
-			const result = await this.ctx.session.cycleModel(direction);
-			if (!result) {
+			const session = this.ctx.session;
+			const gateway = session.gateway;
+			let routes: readonly RoleCycleRoute[] = [];
+			if (gateway) {
+				// A failed role read must not block ctrl+p: the catalog pool still cycles.
+				try {
+					routes = await gateway.roleCycle();
+				} catch {
+					routes = [];
+				}
+			}
+			const next = await cycleSessionModel(
+				routes,
+				(provider, id) => session.modelRegistry.find(provider, id),
+				session.model,
+				direction,
+				() => session.cycleModel(direction),
+			);
+			if (!next) {
 				this.ctx.showStatus("No models available to cycle");
 				return;
 			}
+			// The catalog branch already switched the session model.
+			if (next.role) await session.setModel(next.model);
 			this.ctx.statusLine.invalidate();
-			this.ctx.showStatus(`Model: ${result.model.provider}/${result.model.id}`);
+			const suffix = next.role ? ` (${next.role})` : "";
+			this.ctx.showStatus(`Model: ${next.model.provider}/${next.model.id}${suffix}`);
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}

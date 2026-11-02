@@ -7,6 +7,7 @@ Split out of ``hermes_cli/main.py``. Names that still live in main are imported 
 import contextlib
 
 from typing import Optional
+from hermes_cli.aux_slots import AUX_TASK_META, aux_picker_keys
 from hermes_cli.model_setup_flows_common import _ask, _ensure_dict_section, _print_numbered, _radiolist, _say
 
 
@@ -49,22 +50,11 @@ def _clear_stale_openai_base_url():
         print(f"Cleared stale OPENAI_BASE_URL from .env (was: {shown})")
 
 
-# (task_key, display_name, short_description)
+# (task_key, display_name, short_description) — derived from hermes_cli.aux_slots so the CLI
+# picker, the dashboard REST surface and DEFAULT_CONFIG["auxiliary"] share one order and one set.
 _AUX_TASKS: list[tuple[str, str, str]] = [
-    ("vision", "Vision", "image/screenshot analysis"),
-    ("compression", "Compression", "context summarization"),
-    ("approval", "Approval", "smart command approval"),
-    ("mcp", "MCP", "MCP tool reasoning"),
-    ("title_generation", "Title generation", "session titles"),
-    ("review", "Review", "/review reviewer subagent"),
-    ("memory_query_rewrite", "Memory query rewrite", "memory retrieval queries"),
-    ("tts_audio_tags", "TTS audio tags", "Gemini TTS tag insertion"),
-    ("voice_chat", "Voice chat", "spoken voice-mode replies"),
-    ("triage_specifier", "Triage specifier", "kanban spec fleshing"),
-    ("kanban_decomposer", "Kanban decomposer", "task decomposition"),
-    ("profile_describer", "Profile describer", "auto profile descriptions"),
-    ("curator", "Curator", "skill-usage review pass"),
-    ("group_router", "Group router", "who answers in auto-routed Group Chats")]
+    (key, *AUX_TASK_META[key]) for key in aux_picker_keys()
+]
 
 # Special non-auxiliary task surfaced in the same picker: subagent delegation. Routing lives
 # under top-level `delegation.*` (NOT `auxiliary.delegation`) because delegate_task spawns full
@@ -216,6 +206,11 @@ def _reset_aux_to_auto() -> int:
             if (entry.get(field) or entry.get(field) is False or default) and entry.get(field) != default:
                 entry[field] = default
                 changed = True
+        # A reset route must not keep falling back to the provider it just left: the chain is
+        # a list of routes, so it resets to empty rather than to a per-field default.
+        if entry.get("fallback_chain"):
+            entry["fallback_chain"] = []
+            changed = True
         return changed
 
     cfg = load_config()

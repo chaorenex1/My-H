@@ -2012,6 +2012,86 @@ export interface MachineInfo {
   wsl?: boolean | null
   container?: boolean | null
 }
+export interface ModelRolesGetResult {
+  roles?: ModelRoleRow[]
+  main?: ModelRolesMain
+  default_thinking_level?: string
+  cycle_order?: string[]
+  presets?: ModelPresetsSummary
+  model_chains?: Record<string, ModelRoleFallbackEntry[]>
+}
+/** One role as the profile's ``config.yaml`` stores it. ``reasoning_effort`` is the slot's own override: a level, ``"none"``, or ``null`` (inherit ``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config section the row writes (``auxiliary``, ``delegation``, ``adviser`` or ``chain`` — ``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots, plugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base slot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the slot's stored values, exactly like the dashboard's auxiliary rows). */
+export interface ModelRoleRow {
+  id: string
+  label?: string
+  hint?: string
+  tag?: string
+  section?: 'chat'
+  provider?: string
+  model?: string
+  base_url?: string
+  reasoning_effort?: string | null
+  fallback_chain?: ModelRoleFallbackEntry[]
+  group?: 'builtin' | 'plugin' | 'imported' | 'chain'
+  target?: 'auxiliary' | 'delegation' | 'adviser' | 'chain'
+  inherit_from?: string | null
+}
+/** One ``auxiliary.<task>.fallback_chain`` route (``hermes_cli/aux_fallback.py``): ``provider`` + ``model`` are required to serve, ``base_url`` pins an explicit endpoint. */
+export interface ModelRoleFallbackEntry {
+  provider?: string
+  model?: string
+  base_url?: string
+}
+/** The main model route roles inherit from (``provider: auto`` / ``main`` resolve to it). */
+export interface ModelRolesMain {
+  provider?: string
+  model?: string
+}
+/** Configured preset names plus the one whose snapshot equals the live assignments (``""`` none). */
+export interface ModelPresetsSummary {
+  names?: string[]
+  active?: string
+}
+/** Assign one role. ``clear`` resets it to its "auto" route with no endpoint/override. ``reasoning_effort``: a level, ``"none"``, or ``"inherit"`` to clear the override; ``null`` (omitted) leaves it unchanged. ``fallback_chain``: ``null`` (omitted) leaves it unchanged, ``[]`` clears it, a list replaces it. The imported ``advisor`` role has neither knob and refuses them with 5127. ``role`` may instead be a model-keyed chain (``provider/model`` or ``provider/*``) when it carries ``fallback_chain``: the list replaces ``auxiliary.fallback_chains[<key>]`` and ``[]`` removes the entry. ``clear`` is refused for a chain key (write the shortened chain instead). */
+export interface ModelRolesSetParams {
+  profile?: string | null
+  role: string
+  provider?: string
+  model?: string
+  base_url?: string
+  api_key?: string
+  reasoning_effort?: string | null
+  fallback_chain?: ModelRoleFallbackEntry[] | null
+  clear?: boolean
+}
+export interface ModelRolesSetResult {
+  role: ModelRoleRow
+}
+/** omp's ``cycle_order``: role ids in cycle order. Every id must be an assignable role. */
+export interface ModelCycleSetParams {
+  profile?: string | null
+  order?: string[]
+}
+export interface ModelCycleSetResult {
+  order?: string[]
+}
+/** A preset name: 1–64 characters of ``[A-Za-z0-9._-]`` (5127 otherwise). */
+export interface ModelPresetParams {
+  profile?: string | null
+  name: string
+}
+export interface ModelPresetsSaveResult {
+  name: string
+}
+/** Same shapes as ``model.roles.get`` minus the main route. */
+export interface ModelPresetsApplyResult {
+  roles?: ModelRoleRow[]
+  presets?: ModelPresetsSummary
+  cycle_order?: string[]
+}
+export interface ModelPresetsDeleteResult {
+  name: string
+}
 /** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
 export interface CompletePathParams {
   profile?: string | null
@@ -6732,10 +6812,22 @@ export interface RpcMethods {
   'mcp.servers.test': { params: McpServerNameParams; result: McpServersTestResult }
   /** Set/clear one author's emoji reaction on a message; returns the row's full reaction list. */
   'message.react': { params: MessageReactParams; result: MessageReactResult }
+  /** Persist the Models-hub role cycle order (``omp.cycle_order``). */
+  'model.cycle.set': { params: ModelCycleSetParams; result: ModelCycleSetResult }
   /** Remove every credential (env keys and OAuth state) for a provider. */
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult }
   /** Provider/model inventory for the picker, layered over the session's live provider when given. */
   'model.options': { params: ModelOptionsParams; result: ModelOptionsResult }
+  /** Restore a preset; roles absent from the snapshot reset to auto. */
+  'model.presets.apply': { params: ModelPresetParams; result: ModelPresetsApplyResult }
+  /** Remove a preset (5126 when it does not exist). */
+  'model.presets.delete': { params: ModelPresetParams; result: ModelPresetsDeleteResult }
+  /** Snapshot every assignable role into ``model_presets.<name>``, overwriting. */
+  'model.presets.save': { params: ModelPresetParams; result: ModelPresetsSaveResult }
+  /** Every role (picker slots in canonical order, then imported roles, then plugin tasks) with its stored route, the main route, cycle order and presets. */
+  'model.roles.get': { params: ProfileParams; result: ModelRolesGetResult }
+  /** Assign or clear one role (or a model-keyed fallback chain); the profile's config.yaml stays the single truth. */
+  'model.roles.set': { params: ModelRolesSetParams; result: ModelRolesSetResult }
   /** Save an API key for a provider and return its refreshed inventory row. */
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult }
   /** Every omp-ui Appearance setting in config.yaml's ``omp.appearance``, defaulted as omp defines it. */
@@ -7144,8 +7236,14 @@ export const RPC_METHODS = [
   'mcp.servers.status',
   'mcp.servers.test',
   'message.react',
+  'model.cycle.set',
   'model.disconnect',
   'model.options',
+  'model.presets.apply',
+  'model.presets.delete',
+  'model.presets.save',
+  'model.roles.get',
+  'model.roles.set',
   'model.save_key',
   'omp.appearance.get',
   'omp.appearance.set',

@@ -11,6 +11,11 @@ import { ThinkingLevel } from "../../vendor/agent/src/index.ts";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
 import { type TranscriptEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import {
+	ModelHubComponent,
+	type ModelHubCallbacks,
+	type ModelHubRegistry,
+} from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { ModelPickerComponent, type ModelPickerRegistry } from "@oh-my-pi/pi-tui/overlays/model-picker";
 import type { PluginSettingsHost } from "@oh-my-pi/pi-tui/overlays/plugin-settings";
 import { SessionSelectorComponent, type SessionSelectorEntry } from "@oh-my-pi/pi-tui/overlays/session-selector";
@@ -22,11 +27,14 @@ import {
 import { ThinkingSelectorComponent } from "@oh-my-pi/pi-tui/overlays/thinking-selector";
 import type { StatusLineSettings } from "@oh-my-pi/pi-tui/status-line/types";
 import { getAvailableThemes, previewTheme } from "@oh-my-pi/pi-tui/theme";
-import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING, type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { all, lookup, type AnySetting } from "../../config/registry";
 import type { Settings } from "../../config/settings";
 import type { InteractiveModeContext, SelectOnlyModelSelectorOptions } from "../types";
+import type { Model } from "../../vendor/ai/src/index.ts";
+import { createHermesModelHubSource } from "../model-hub-source";
 import { createModelBrowserSource } from "../model-browser-source";
+import type { ModelRoleStore, RolesThinkingLevel } from "../rpc/gateway-roles";
 import { copyToClipboard } from "../../utils/clipboard";
 import { openPath } from "../../utils/open";
 
@@ -160,8 +168,121 @@ function toResumeEntry(row: {
 	};
 }
 
+/** omp's configured level as the wire's effort override ("auto"/inherit mean no override). */
+function toRolesThinking(level: ConfiguredThinkingLevel | undefined): RolesThinkingLevel | null {
+	if (level === undefined || level === AUTO_THINKING || level === ThinkingLevel.Inherit) return "inherit";
+	if (level === ThinkingLevel.Off) return "none";
+	return level;
+}
+
+/** What the hub's assignment callbacks need from the shell (a fake satisfies it in tests). */
+export interface ModelHubCallbackHost {
+	roles: ModelRoleStore;
+	session: { readonly model: Model | undefined; setModel(model: Model): Promise<void> };
+	showStatus(message: string): void;
+	showError(message: string): void;
+	invalidateStatusLine(): void;
+	requestRender(): void;
+	/** Re-read roles after an asynchronous write (the hub's own refresh runs too early for it). */
+	refreshHub(): void;
+	close(): void;
+}
+
+/**
+ * The hub's Roles callbacks over `model.roles.*`. Hermes keeps the main model on the session and
+ * the `default` fallback chain under `fallback_providers`, so those two stay outside the role table.
+ * Failures are surfaced with `showError` and never thrown into the overlay.
+ */
+export function createModelHubCallbacks(host: ModelHubCallbackHost): ModelHubCallbacks {
+	const surface = (run: () => Promise<void>): void => {
+		void run().catch((error: unknown) => host.showError(error instanceof Error ? error.message : String(error)));
+	};
+	return {
+		onAssign: async (model, role, thinkingLevel) => {
+			if (role === "default") {
+				try {
+					await host.session.setModel(model);
+					host.invalidateStatusLine();
+					host.showStatus(`Model: ${model.provider}/${model.id}`);
+					host.requestRender();
+				} catch (error) {
+					host.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			try {
+				await host.roles.assign({
+					role,
+					provider: model.provider,
+					model: model.id,
+					reasoning_effort: toRolesThinking(thinkingLevel),
+				});
+				host.refreshHub();
+				host.showStatus(`${role}: ${model.provider}/${model.id}`);
+			} catch (error) {
+				host.showError(error instanceof Error ? error.message : String(error));
+			}
+		},
+		onUnassign: (role) => {
+			if (role === "default") {
+				host.showStatus("The main model is switched with /model");
+				return;
+			}
+			surface(async () => {
+				await host.roles.clear(role);
+				host.refreshHub();
+				host.showStatus(`${role}: automatic`);
+			});
+		},
+		onFallbackChainChange: (role, chain) => {
+			// `fallback_providers` owns the default chain; `hermes fallback` edits it.
+			if (role === "default") return;
+			const entries = chain.flatMap((selector) => {
+				const slash = selector.indexOf("/");
+				if (slash <= 0 || slash === selector.length - 1) return [];
+				return [{ provider: selector.slice(0, slash), model: selector.slice(slash + 1) }];
+			});
+			surface(async () => {
+				// Role ids and model-keyed chains (`provider/model`, `provider/*`) are edited by the
+				// same hub row; only the latter go through the chain-key branch of `model.roles.set`.
+				const isRole = host.roles.byId(role) !== undefined;
+				if (isRole) await host.roles.setFallbackChain(role, entries);
+				else await host.roles.setModelChain(role, entries);
+				host.refreshHub();
+				host.showStatus(`${role}: ${entries.length === 0 ? "no fallbacks" : `${entries.length} fallback(s)`}`);
+			});
+		},
+		onSavePreset: (name) => {
+			surface(async () => {
+				const saved = await host.roles.savePreset(name);
+				// The save answer carries only the name; re-read the summary so the strip finds it.
+				await host.roles.refresh();
+				host.refreshHub();
+				host.showStatus(`Preset saved: ${saved}`);
+			});
+		},
+		onSwitchPreset: async (name) => {
+			try {
+				const rows = await host.roles.applyPreset(name);
+				host.refreshHub();
+				host.showStatus(`Preset applied: ${name} (${rows.length} role${rows.length === 1 ? "" : "s"})`);
+			} catch (error) {
+				host.showError(error instanceof Error ? error.message : String(error));
+			}
+		},
+		onCycleOrderChange: (order) => {
+			surface(async () => {
+				const saved = await host.roles.setCycleOrder(order);
+				host.refreshHub();
+				host.showStatus(saved.length === 0 ? "Model cycle: off" : `Model cycle: ${saved.join(" → ")}`);
+			});
+		},
+		onCancel: host.close,
+	};
+}
+
 /** Menus that open at most once: a repeat request focuses the open one. */
-type MenuKind = "settings" | "model-picker" | "model-picker-select";
+type MenuKind = "settings" | "model-picker" | "model-picker-select" | "model-hub";
 
 /** An open menu: registered when the request runs, filled once its component mounts. */
 interface OpenMenu {
@@ -432,6 +553,83 @@ export class SelectorController {
 			return handle;
 		});
 		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * The `/models` hub: omp's full-screen model browser with a Roles view backed by Hermes'
+	 * `auxiliary.<task>` table. `/model` remains the session picker; only role writes leave the shell.
+	 */
+	showModelHub(): void {
+		const kind: MenuKind = "model-hub";
+		if (this.#focusOpenMenu(kind)) return;
+		const gateway = this.ctx.session.gateway;
+		if (!gateway) {
+			this.ctx.showError("This session is not connected to the Hermes gateway.");
+			return;
+		}
+		const menu = this.#claimMenu(kind);
+		const session = this.ctx.session;
+		let hub: ModelHubComponent | undefined;
+		const done = () => {
+			if (this.#openMenus.get(kind) !== menu) return;
+			menu.handle?.hide();
+			hub?.dispose();
+			this.#releaseMenu(kind, menu);
+			this.focusActiveEditorArea();
+			this.ctx.ui.requestRender();
+		};
+		void (async () => {
+			try {
+				await gateway.roles.refresh();
+			} catch (error) {
+				this.#releaseMenu(kind, menu);
+				this.ctx.showError(`Failed to load model roles: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+			if (this.#openMenus.get(kind) !== menu) return;
+			const source = createHermesModelHubSource(gateway.roles, this.ctx.settings, session);
+			const registry: ModelHubRegistry = {
+				getAvailable: (entryKind) => session.modelRegistry.getAvailable(entryKind),
+				getAll: (entryKind) => session.modelRegistry.getAll(entryKind),
+				// The authority owns the catalog: no local discovery error or refresh exists here.
+				getError: () => undefined,
+				find: (provider, id) => session.modelRegistry.find(provider, id),
+				authStorage: { keys: { source: () => undefined } },
+				getDiscoverableProviders: () => [
+					...new Set(session.modelRegistry.getAll("all").map((model) => model.provider)),
+				],
+				getProviderDiscoveryState: () => undefined,
+				refresh: async () => {},
+				refreshProvider: async () => {},
+			};
+			const component = new ModelHubComponent(
+				this.ctx.ui,
+				source,
+				registry,
+				session.scopedModels,
+				createModelHubCallbacks({
+					roles: gateway.roles,
+					session: {
+						get model() {
+							return session.model;
+						},
+						setModel: (model) => session.setModel(model),
+					},
+					showStatus: (message) => this.ctx.showStatus(message),
+					showError: (message) => this.ctx.showError(message),
+					invalidateStatusLine: () => this.ctx.statusLine.invalidate(),
+					requestRender: () => this.ctx.ui.requestRender(),
+					refreshHub: () => hub?.refreshAfterExternalMutation(),
+					close: done,
+				}),
+				{
+					currentSelector: session.model ? `${session.model.provider}/${session.model.id}` : undefined,
+				},
+			);
+			hub = component;
+			this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
+			this.ctx.ui.requestRender();
+		})();
 	}
 
 	/**
