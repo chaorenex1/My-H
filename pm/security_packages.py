@@ -15,6 +15,7 @@ from pm.package import InstallError
 from pm.packages import BinaryPackage, _RUST_TRIPLE
 from pm.registry import register
 from pm.store import MUSL_TARGETS, flatten_single_dir
+from pm.update import github_release_tags
 
 
 @register
@@ -36,6 +37,38 @@ class Bws(BinaryPackage):
         binary = self.binary(staged, target)
         if binary is not None and binary.is_file():
             binary.chmod(0o755)
+
+
+@register
+class Gopass(BinaryPackage):
+    """The Go password store CLI (`gopasspw/gopass`), installed on request.
+
+    A pure-Go binary, so upstream's Linux build is static (no PT_INTERP) and
+    one archive serves glibc and musl. gopass delegates the crypto backend and
+    the store's history to the host: it shells out to `gpg`/`age` and `git`,
+    which PM does not pin, so this package ships the CLI only. `--version`
+    (the install probe) needs neither. Termux installs gopass from its own
+    repository: upstream publishes no Android artifact.
+    """
+
+    name = "gopass"
+    optional = True
+    binary_rel = {"posix": "gopass", "win32": "gopass.exe"}
+    gaps = {"linux-arm64-bionic": "upstream does not ship an Android binary"}
+
+    def fetch_url(self, version: str, target: str) -> str:
+        lookup = target.removesuffix("-musl") if target in MUSL_TARGETS else target
+        osname, arch = lookup.split("-")
+        platform = {"win32": "windows", "linux": "linux", "darwin": "darwin"}[osname]
+        arch = {"x64": "amd64", "arm64": "arm64"}[arch]
+        ext = "zip" if osname == "win32" else "tar.gz"
+        return (
+            f"https://github.com/gopasspw/gopass/releases/download/v{version}/"
+            f"gopass-{version}-{platform}-{arch}.{ext}"
+        )
+
+    def latest_versions(self, target: str, locked=None) -> list[str]:
+        return github_release_tags("gopasspw/gopass", strip_prefix="v")
 
 
 class _SignedBinary(BinaryPackage):

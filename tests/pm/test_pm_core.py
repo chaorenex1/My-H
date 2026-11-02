@@ -82,6 +82,10 @@ def pm_env(tmp_path, served, monkeypatch):
     # Restore the real registry wholesale on teardown. Tests must not
     # monkeypatch.setitem into the cleared dict: that undo runs after this
     # restore and deletes the built-in entry from the live registry.
+    # Load the builtins first: `_packages` starts empty (they import on first
+    # read), and restoring that empty snapshot would leave every package
+    # definition missing for the rest of the process.
+    registry.all_packages()
     saved = dict(registry._packages)
     registry._packages.clear()
     for cls in (FakeTool, DepTool, TopTool, SideTool, MultiTool, Venv):

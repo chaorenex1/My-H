@@ -226,10 +226,16 @@ requires trust in that plugin and its dependencies.
 
 ## Optional security tools
 
-PM owns the pinned `bws` and `iron-proxy` packages in
+PM owns the pinned `bws`, `gopass`, and `iron-proxy` packages in
 `pm/security_packages.py`. Their versions, artifact URLs, and SHA-256 hashes
 come from `pm/lock.json`. Downloads and publication use the shared tool store,
 not private installers under `$HERMES_HOME/bin`.
+
+`gopass` is the Go password-store CLI, installed on request with
+`hermes pm install gopass`. PM pins the binary only: its GPG/age backend and
+git history stay the host's tools, so it opens an existing store instead of
+becoming one. Upstream publishes no Android artifact; Termux installs gopass
+from its own repository.
 
 For iron-proxy, PM also acquires pinned signature files and checks that the
 release checksums cover the pinned archive. Package staging calls the
@@ -602,7 +608,13 @@ hermes pm doctor
 hermes pm status
 hermes pm install
 hermes pm install chromium
+hermes pm install bun
 ```
+
+`bun` is an optional tool package: `hermes omp` uses PM's installed copy, then a Bun
+on `PATH`, then `~/.bun`, and otherwise installs it through PM on first launch.
+Termux has no bionic Bun build, so there `hermes omp` needs a Bun installed from
+another source.
 
 | Command | Effect |
 |---|---|

@@ -14,7 +14,7 @@ def build_omp_parser(subparsers, *, cmd_omp: Callable) -> None:
             "(@oh-my-pi/pi-tui). The shell runs from omp-ui/src with its agent "
             "directory (config, keybindings, session DBs) scoped under the Hermes home. "
             "First run installs the Bun workspace in "
-            "omp-ui/ (needs https://bun.sh).")
+            "omp-ui/ (Bun comes from PM: `hermes pm install bun`, or https://bun.sh).")
     omp_parser.add_argument(
         "--resume", "-r", metavar="SESSION",
         help="Resume a Hermes session by id or title (the gateway session, not an omp-local one)")

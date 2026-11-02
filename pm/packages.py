@@ -62,6 +62,17 @@ _NODE_PLAT = {
     "darwin-arm64": "darwin-arm64",
 }
 
+_BUN_PLAT = {
+    "win32-x64": "windows-x64",
+    "win32-arm64": "windows-aarch64",
+    "linux-x64": "linux-x64",
+    "linux-arm64": "linux-aarch64",
+    "linux-x64-musl": "linux-x64-musl",
+    "linux-arm64-musl": "linux-aarch64-musl",
+    "darwin-x64": "darwin-x64",
+    "darwin-arm64": "darwin-aarch64",
+}
+
 
 class BinaryPackage(Package):
     """A downloaded archive exposing one binary. Covers most tools."""
@@ -636,6 +647,39 @@ class Nodejs(_BionicDebArm, BinaryPackage, DebPackage):
         if "libatomic.so.1" in retried:
             return retried, "the libatomic package installed, but Node still cannot load libatomic.so.1; check the loader path"
         return retried, ""
+
+
+@register
+class Bun(BinaryPackage):
+    """oven-sh/bun release zips: glibc, musl, macOS and Windows.
+
+    Optional on purpose: `hermes omp` needs it, the default install does not.
+    Each zip holds one top-level dir (`bun-<platform>/bun[.exe]`), which
+    `BinaryPackage.stage` hoists with `flatten_single_dir`. Termux stays a gap:
+    upstream publishes Android builds, not a bionic package verified on Termux.
+    """
+
+    name = "bun"
+    optional = True
+    binary_rel = {"win32": "bun.exe", "posix": "bun"}
+    gaps = {"linux-arm64-bionic": "Bun publishes no Termux/bionic package; install a Termux-native Bun separately"}
+
+    def fetch_url(self, version: str, target: str) -> str:
+        plat = _BUN_PLAT.get(target)
+        if plat is None:
+            raise InstallError(self.name, f"no Bun build for target {target}")
+        return (f"https://github.com/oven-sh/bun/releases/download/bun-v{version}/"
+                f"bun-{plat}.zip")
+
+    def latest_versions(self, target: str, locked: Optional[str] = None) -> list[str]:
+        return github_release_tags("oven-sh/bun", strip_prefix="bun-v")
+
+    def known_sha256(self, version: str, url: str) -> Optional[str]:
+        # GitHub publishes every release asset's digest: pinning eight zips
+        # costs one API call instead of streaming ~400 MB.
+        return _github_release_digests("oven-sh/bun", f"bun-v{version}").get(
+            url.rsplit("/", 1)[-1]
+        )
 
 
 @register

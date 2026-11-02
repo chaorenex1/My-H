@@ -1,5 +1,42 @@
 {
   "packages": {
+    "bun": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip"
+        },
+        "darwin-x64": {
+          "sha256": "50a3491f73abc2fe81673171a85762d3bc2cc1680ccecadd983de99adf77977e",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-x64.zip"
+        },
+        "linux-arm64": {
+          "sha256": "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip"
+        },
+        "linux-arm64-musl": {
+          "sha256": "57f01b02ac7113c61c935f28f38c2eab849e3c970dab21f8b640a87b1ef65009",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-musl.zip"
+        },
+        "linux-x64": {
+          "sha256": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip"
+        },
+        "linux-x64-musl": {
+          "sha256": "a5a8ccc5e74dcb883fe974f125a7bdb3b41e5195ed1b870e73f17effd3eb2b2d",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl.zip"
+        },
+        "win32-arm64": {
+          "sha256": "2d57a0eec0cb44d95c918c3f9734f60455a1306ae5085d76fc68f44e3ee30d09",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-aarch64.zip"
+        },
+        "win32-x64": {
+          "sha256": "cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip"
+        }
+      },
+      "version": "1.4.4"
+    },
     "bws": {
       "artifacts": {
         "darwin-arm64": {
@@ -190,6 +227,43 @@
         }
       },
       "version": "2.53.0+3"
+    },
+    "gopass": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "b052f36631e619fa9391edeee581d1f3937c4c41d432aa4ba673b53401800c0f",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-darwin-arm64.tar.gz"
+        },
+        "darwin-x64": {
+          "sha256": "c02174953a396c4c457f238505f2efa1cb5eee9439087654d7d3d7e72e978495",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-darwin-amd64.tar.gz"
+        },
+        "linux-arm64": {
+          "sha256": "5534508600159b8a7c3909e9ea094a3ed3887b0a5de182bb3f223be0221c9026",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-arm64.tar.gz"
+        },
+        "linux-arm64-musl": {
+          "sha256": "5534508600159b8a7c3909e9ea094a3ed3887b0a5de182bb3f223be0221c9026",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-arm64.tar.gz"
+        },
+        "linux-x64": {
+          "sha256": "fe63584ba2275409c54d060d7f601de24d03ca980b11e617cd30cd9c4814597a",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-amd64.tar.gz"
+        },
+        "linux-x64-musl": {
+          "sha256": "fe63584ba2275409c54d060d7f601de24d03ca980b11e617cd30cd9c4814597a",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-amd64.tar.gz"
+        },
+        "win32-arm64": {
+          "sha256": "f110f9dfde85db79e12d7e087df2aa9b08e8b7c1eaf0f43702d0f789bb00fc27",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-windows-arm64.zip"
+        },
+        "win32-x64": {
+          "sha256": "8965ee29f9ede2acfde2de6f5564ecc98de9965a612b675acb453c784d847eaa",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-windows-amd64.zip"
+        }
+      },
+      "version": "1.17.4"
     },
     "iron-proxy": {
       "artifacts": {

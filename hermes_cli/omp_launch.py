@@ -36,11 +36,30 @@ def omp_ui_dir() -> Path:
     return project_root() / "omp-ui"
 
 
+def _pm_bun(*, install: bool) -> str | None:
+    """Bun from PM's store. ``install=False`` only reads the installed state."""
+    try:
+        import pm
+
+        if not install:
+            installed = pm.installed_package("bun")
+            return str(installed.binary) if installed is not None and installed.binary is not None else None
+        runner = pm.ensure("bun", explicit=True)
+    except Exception:
+        # Offline, an unsupported target, or a refused lazy install all mean the
+        # caller gets the actionable "Bun is required" message instead of a traceback.
+        return None
+    return shutil.which("bun", path=runner.env.get("PATH", ""))
+
+
 def _bun_bin() -> str | None:
-    """$HERMES_BUN, then PATH, then the default installer location (not always on PATH)."""
+    """$HERMES_BUN, then PM's installed copy, then PATH, then the default installer
+    location; a Bun nobody installed is provisioned through PM on first use."""
     override = os.environ.get("HERMES_BUN", "").strip()
     if override:
         return override if Path(override).is_file() else None
+    if pm_bun := _pm_bun(install=False):
+        return pm_bun
     found = shutil.which("bun")
     if found:
         return found
@@ -48,7 +67,8 @@ def _bun_bin() -> str | None:
     for candidate in (home / ".bun" / "bin" / "bun.exe", home / ".bun" / "bin" / "bun"):
         if candidate.is_file():
             return str(candidate)
-    return None
+    print("omp-ui: preparing Bun through PM (`hermes pm install bun`)…", file=sys.stderr)
+    return _pm_bun(install=True)
 
 
 def _workspace_digest(ui_dir: Path) -> str:
@@ -123,8 +143,9 @@ def cmd_omp(args) -> int:
     if not bun:
         print(
             "Bun is required for `hermes omp` but `bun` was not found.\n"
-            "Install it from https://bun.sh (for example `curl -fsSL https://bun.sh/install | bash` "
-            "or `powershell -c \"irm bun.sh/install.ps1 | iex\"`), or point HERMES_BUN at the binary.",
+            "Run `hermes pm install bun`, install it from https://bun.sh (for example "
+            "`curl -fsSL https://bun.sh/install | bash` or "
+            "`powershell -c \"irm bun.sh/install.ps1 | iex\"`), or point HERMES_BUN at the binary.",
             file=sys.stderr,
         )
         return 1

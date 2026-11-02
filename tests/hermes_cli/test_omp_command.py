@@ -103,7 +103,9 @@ def test_cmd_omp_refuses_without_bun(fake_workspace, monkeypatch, capsys) -> Non
     monkeypatch.setattr(omp_launch, "_bun_bin", lambda: None)
 
     assert omp_launch.cmd_omp(SimpleNamespace(resume=None)) == 1
-    assert "https://bun.sh" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "https://bun.sh" in err
+    assert "hermes pm install bun" in err
     assert fake_workspace.launches == []
 
 
@@ -127,3 +129,62 @@ def test_cmd_omp_requires_a_tty(monkeypatch, capsys) -> None:
         omp_launch._require_terminal()
     assert excinfo.value.code == 1
     assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_bun_bin_prefers_the_pm_installed_copy(monkeypatch):
+    monkeypatch.delenv("HERMES_BUN", raising=False)
+    monkeypatch.setattr(omp_launch, "_pm_bun", lambda *, install: None if install else "/pm/bun")
+    monkeypatch.setattr(omp_launch.shutil, "which", lambda *args, **kwargs: "/path/bun")
+
+    assert omp_launch._bun_bin() == "/pm/bun"
+
+
+def test_bun_bin_falls_back_to_path_before_installing(monkeypatch, tmp_path):
+    monkeypatch.delenv("HERMES_BUN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(omp_launch, "_pm_bun", lambda *, install: "/pm/bun" if install else None)
+    monkeypatch.setattr(omp_launch.shutil, "which",
+                        lambda name, path=None: "/path/bun" if path is None else None)
+
+    assert omp_launch._bun_bin() == "/path/bun"
+
+
+def test_bun_bin_provisions_through_pm_when_absent(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("HERMES_BUN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(omp_launch.shutil, "which", lambda *args, **kwargs: None)
+    calls = []
+
+    def pm_bun(*, install):
+        calls.append(install)
+        return "/pm/bun" if install else None
+
+    monkeypatch.setattr(omp_launch, "_pm_bun", pm_bun)
+
+    assert omp_launch._bun_bin() == "/pm/bun"
+    assert calls == [False, True]
+    assert "hermes pm install bun" in capsys.readouterr().err
+
+
+def test_pm_bun_reads_the_composed_path(monkeypatch):
+    import pm
+
+    monkeypatch.setattr(pm, "ensure",
+                        lambda name, explicit=False: SimpleNamespace(env={"PATH": "/pm/store/bin"}))
+    monkeypatch.setattr(omp_launch.shutil, "which",
+                        lambda name, path=None: "/pm/store/bin/bun" if path == "/pm/store/bin" else None)
+
+    assert omp_launch._pm_bun(install=True) == "/pm/store/bin/bun"
+
+
+def test_pm_bun_reports_absence_instead_of_raising(monkeypatch):
+    import pm
+    from pm.package import InstallError
+
+    def refuse(*args, **kwargs):
+        raise InstallError("bun", "offline")
+
+    monkeypatch.setattr(pm, "ensure", refuse)
+    assert omp_launch._pm_bun(install=True) is None
