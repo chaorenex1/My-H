@@ -19,7 +19,7 @@
       "title": "Model hub / picker / browser",
       "status": "pending",
       "supported": false,
-      "note": "model.options metadata (E) is pending",
+      "note": "model.options metadata (E) is pending; model.roles.*/cycle/presets back the Roles view",
       "methods": [
         {
           "name": "model.options",
@@ -28,6 +28,12 @@
           "change": [
             "E"
           ]
+        },
+        {
+          "name": "model.roles.get",
+          "access": "read",
+          "status": "L",
+          "change": []
         },
         {
           "name": "config.get",
@@ -39,6 +45,36 @@
           "name": "session.mutate",
           "access": "write",
           "status": "A",
+          "change": []
+        },
+        {
+          "name": "model.roles.set",
+          "access": "write",
+          "status": "L",
+          "change": []
+        },
+        {
+          "name": "model.cycle.set",
+          "access": "write",
+          "status": "L",
+          "change": []
+        },
+        {
+          "name": "model.presets.save",
+          "access": "write",
+          "status": "L",
+          "change": []
+        },
+        {
+          "name": "model.presets.apply",
+          "access": "write",
+          "status": "L",
+          "change": []
+        },
+        {
+          "name": "model.presets.delete",
+          "access": "write",
+          "status": "L",
           "change": []
         },
         {

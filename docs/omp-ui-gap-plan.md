@@ -434,8 +434,15 @@ Fork 到 pane/window、worktree/move/多根目录、加密分享链接/collab �
 
 其中 **OMFG、Cleanse、Ratchet、Prewalk、Auto-graph** 归入 **待设计（D）**：Hermes 没有等价后端，
 设计要点、方案选项与退出条件见 `omp-ui-panels-gateway-plan.md` §10；Advisor / Model roles /
-Auto-thinking 在 Hermes 有部分等价物（MoA/refine、模型与配置选择），未接通的形态按
-`pending`/`unsupported` 标记，不当新后端立项。其余为 UI/渲染能力。
+Auto-thinking 在 Hermes 有部分等价物（MoA/refine、模型与配置选择）。**Model roles 已接通**：
+`/models` 经 `model.roles.get` / `model.roles.set` 读写 `auxiliary.<task>`，`default` 角色走 `session.setModel`，
+导入角色 `task`→`delegation`、`advisor`→`adviser`（`tui_gateway/methods_model_roles.py`）；
+presets 落 `model_presets`（`model.presets.*`）、cycle 落 `omp.cycle_order`（`model.cycle.set`）、
+模型键回退链落 `auxiliary.fallback_chains`（解析在 `agent/auxiliary_client.py`）。
+omp 的 `plan` / `smol` / `slow` / `widget` 作为普通 aux 槽提供（`auxiliary.<name>`，hub 可分配、
+插件可 `call_llm(task=...)` 调用），但暂无内置消费者，默认 `auto` 走主模型。
+仅 **kind roles**（image/speech/dictation/web）仍 `unsupported`：其模型在 `tts.*`/`stt.*`/图像与搜索 provider
+注册表里，不在 hub 浏览的 chat catalog 中。Advisor / Auto-thinking 未接通的形态仍按 `pending`/`unsupported` 标记，不当新后端立项。其余为 UI/渲染能力。
 
 ### 8.3 两边都有、只是形态不同（避免重复实现）
 

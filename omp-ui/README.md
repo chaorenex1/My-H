@@ -30,9 +30,31 @@ everything else to `command.dispatch`; `SelectorController` reads the gateway ca
 
 ## Shell commands (local)
 
-`/model`, `/thinking`, `/settings` (`/theme`), `/resume`, `/help`, `/hotkeys`, `/quit`, `/clear`,
-`/rename`, `/copy`, `/todo`, `/usage`, `/session`, `/tools`, `/context`, `/dequeue`.
+`/model`, `/models`, `/thinking`, `/settings` (`/theme`), `/resume`, `/help`, `/hotkeys`, `/quit`,
+`/clear`, `/rename`, `/copy`, `/todo`, `/usage`, `/session`, `/tools`, `/context`, `/dequeue`.
 Any other slash command is dispatched to the Hermes gateway, which owns the command catalog.
+
+## Models hub (`/models`)
+
+`/models` mounts omp's hub overlay: the provider sidebar and catalog come from `model.options`, and
+the Roles view is backed by **Hermes** config over `model.roles.get` / `model.roles.set`
+(`tui_gateway/methods_model_roles.py`). Each role is one `auxiliary.<task>` block:
+
+- the `default` role is the live session model and assigns through `session.setModel` — `/model`
+  stays the session-scoped picker;
+- every other row is either an auxiliary task (`provider: "auto"` = follow the main model) or one of
+  the two imported roles: `task` writes `delegation.*` and `advisor` writes `adviser.*`;
+- assigning a row writes that route, the thinking column writes its effort
+  (`auxiliary.<task>.reasoning_effort`; imported rows accept only `inherit` for `advisor`), and the
+  fallback rows write `auxiliary.<task>.fallback_chain` / `delegation.fallback_providers`;
+- presets are `model_presets.<name>` snapshots saved and re-applied from the hub (`model.presets.*`);
+  the `ctrl+p` role cycle follows `omp.cycle_order` and falls back to the catalog when it is empty;
+- a chain keyed by `provider/model` or `provider/*` (the hub's "+ New fallback chain") lands in
+  `auxiliary.fallback_chains`, which the auxiliary resolver consults before the per-task chain;
+- omp's `plan` / `smol` / `slow` / `widget` rows are ordinary auxiliary slots: assignable and
+  visible here, `auto` until pinned, and without a built-in workload behind them yet;
+- model-kind roles (`image`, `speech`, `dictation`, `web`) stay unset: their models live in `tts.*`,
+  `stt.*` and the image/search provider registries, not in the chat catalog this hub browses.
 
 ## Settings / Appearance
 
