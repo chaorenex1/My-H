@@ -193,8 +193,13 @@ def _stored_breakdown(row, conversation, usage) -> dict:
         except (TypeError, ValueError):
             pin = None  # a pin hash whose row was swept resolves to itself
         breakdown = stored_context_breakdown(prompt, pinned_tool_defs(pin), conversation)
-    return {**breakdown, 'context_max': int(usage.get('context_max') or 0),
-            'context_percent': int(usage.get('context_percent') or 0), 'context_used': int(usage.get('context_used') or 0),
+    context_max = int(usage.get('context_max') or 0)
+    context_used = int(usage.get('context_used') or 0)
+    return {**breakdown, 'context_max': context_max,
+            'context_percent': int(usage.get('context_percent') or 0), 'context_used': context_used,
+            # No compressor without an agent: compaction threshold unknown, so only free space is derivable.
+            'context_threshold': 0, 'auto_compact_buffer': 0,
+            'free_tokens': max(0, context_max - context_used) if context_max else 0,
             'context_estimated': bool(usage.get('context_estimated', False)),
             'context_source': str(usage.get('context_source') or 'provider_usage'), 'model': str(usage.get('model') or '')}
 

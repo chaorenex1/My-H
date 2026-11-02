@@ -1462,7 +1462,9 @@ def _(rid, params: dict, session: dict) -> dict:
             "estimated_total": 0,
             "context_estimated": usage.get("context_estimated", False),
             "context_source": usage.get("context_source", "provider_usage"),
-            "model": _metadata_mirror(session).get("model", "")})
+            "model": _metadata_mirror(session).get("model", ""),
+            "message_parts": [], "tool_outputs": [],
+            "context_threshold": 0, "auto_compact_buffer": 0, "free_tokens": 0})
     with session["history_lock"]:
         history = list(session.get("history", []))
     # Bind the session context (on the RPC thread the session cwd is unset, so the prompt build inside

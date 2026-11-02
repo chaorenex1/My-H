@@ -16030,6 +16030,51 @@
         "title": "ContextFileSource",
         "type": "object"
       },
+      "ContextMessagePart": {
+        "additionalProperties": false,
+        "description": "One per-role slice of the conversation estimate (wire ids; clients own the labels).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "tokens"
+        ],
+        "title": "ContextMessagePart",
+        "type": "object"
+      },
+      "ContextToolOutput": {
+        "additionalProperties": false,
+        "description": "Estimated tokens one tool's results occupy in the transcript.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "tokens"
+        ],
+        "title": "ContextToolOutput",
+        "type": "object"
+      },
       "ContextUsage": {
         "additionalProperties": false,
         "description": "Current context occupancy against the window (``percent`` clamped 0..100).",
@@ -38643,6 +38688,37 @@
             },
             "title": "Context Files",
             "type": "array"
+          },
+          "message_parts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContextMessagePart"
+            },
+            "title": "Message Parts",
+            "type": "array"
+          },
+          "tool_outputs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContextToolOutput"
+            },
+            "title": "Tool Outputs",
+            "type": "array"
+          },
+          "context_threshold": {
+            "default": 0,
+            "title": "Context Threshold",
+            "type": "integer"
+          },
+          "auto_compact_buffer": {
+            "default": 0,
+            "title": "Auto Compact Buffer",
+            "type": "integer"
+          },
+          "free_tokens": {
+            "default": 0,
+            "title": "Free Tokens",
+            "type": "integer"
           }
         },
         "required": [

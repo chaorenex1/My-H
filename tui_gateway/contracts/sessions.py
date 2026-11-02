@@ -542,6 +542,21 @@ class ContextCategory(Result):
     tokens: int
 
 
+class ContextMessagePart(Result):
+    """One per-role slice of the conversation estimate (wire ids; clients own the labels)."""
+
+    id: str
+    label: str
+    tokens: int
+
+
+class ContextToolOutput(Result):
+    """Estimated tokens one tool's results occupy in the transcript."""
+
+    name: str
+    tokens: int
+
+
 class ContextFileSource(Result):
     """One row of ``agent.context_file_sources.list_context_file_sources``."""
 
@@ -566,6 +581,13 @@ class SessionContextBreakdownResult(Result):
     context_source: str
     model: str
     context_files: list[ContextFileSource] = []
+    # ``conversation`` split by message role; the parts sum to that category's tokens.
+    message_parts: list[ContextMessagePart] = []
+    tool_outputs: list[ContextToolOutput] = []
+    # Whole-window budget: fire point, buffer between it and the ceiling, and the remainder.
+    context_threshold: int = 0
+    auto_compact_buffer: int = 0
+    free_tokens: int = 0
 
 
 method("session.context_breakdown", params=SessionContextBreakdownParams, result=SessionContextBreakdownResult,

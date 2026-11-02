@@ -3707,6 +3707,11 @@ export interface SessionContextBreakdownResult {
   context_source: string
   model: string
   context_files?: ContextFileSource[]
+  message_parts?: ContextMessagePart[]
+  tool_outputs?: ContextToolOutput[]
+  context_threshold?: number
+  auto_compact_buffer?: number
+  free_tokens?: number
 }
 export interface ContextCategory {
   color: string
@@ -3722,6 +3727,17 @@ export interface ContextFileSource {
   est_tokens: number
   loaded: boolean
   status: string
+}
+/** One per-role slice of the conversation estimate (wire ids; clients own the labels). */
+export interface ContextMessagePart {
+  id: string
+  label: string
+  tokens: number
+}
+/** Estimated tokens one tool's results occupy in the transcript. */
+export interface ContextToolOutput {
+  name: string
+  tokens: number
 }
 export interface SessionCompressParams {
   session_id: string
