@@ -271,7 +271,7 @@ _DEFAULT_EXPORT_INCLUDE_ROOT = frozenset({
     # Desktop appearance overlay (written/applied by the desktop app's export/import).
     "desktop.json",
     # User-facing skill, cron, and session artifacts
-    "skills", "cron", "scripts", "sessions",
+    "skills", "cron", "scripts", "sessions", "agents", "rules", ".agents",
     # Plugin / memory surfaces (per-profile overrides live here)
     "plugins", "memories", "knowledge", "preferences",
 })
@@ -282,7 +282,7 @@ _RESERVED_NAMES = frozenset({"hermes", "default", "test", "tmp", "root", "sudo"}
 # Hermes subcommands that cannot be used as profile names/aliases
 _HERMES_SUBCOMMANDS = frozenset({
     "chat", "model", "gateway", "setup", "whatsapp", "login", "logout",
-    "status", "cron", "doctor", "dump", "config", "pairing", "skills", "tools",
+    "status", "cron", "doctor", "dump", "config", "pairing", "skills", "rules", "tools",
     "mcp", "connectors", "sessions", "insights", "version", "update", "uninstall", "profile", "plugins", "honcho", "acp",
 })
 

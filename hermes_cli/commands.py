@@ -119,7 +119,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("snapshot", "Create or restore state snapshots of Hermes config/state", "Session",
                cli_only=True, aliases=("snap",), args_hint="[create|restore <id>|prune]",
                desktop="terminal"),
-    CommandDef("export", "Export a profile (config, skills, theme) to a shareable archive", "Configuration",
+    CommandDef("export", "Export a profile (config, skills, agents, rules, theme) to a shareable archive", "Configuration",
                cli_only=True, args_hint="[profile] [-o output.tar.gz]"),
     CommandDef("import", "Import a shared profile archive as a new profile", "Configuration",
                cli_only=True, args_hint="<archive.tar.gz> [--name <name>]"),

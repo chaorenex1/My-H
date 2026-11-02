@@ -490,3 +490,41 @@ class TestBOMToleranceSiblingSites:
         assert fm is not None
         assert fm.get("name") == "bp"
 
+
+
+def test_agents_skills_dir_is_a_lower_tier_below_profile_skills(tmp_path, monkeypatch):
+    """HERMES_HOME/.agents/skills loads after the native profile skills, before create_dir."""
+    from agent import skill_utils
+
+    home = tmp_path / ".hermes"
+    profile_skills = home / "skills"
+    agents_skills = home / ".agents" / "skills"
+    profile_skills.mkdir(parents=True)
+    agents_skills.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    roots = skill_utils.get_skill_search_roots(include_project=False)
+    by_dir = {directory: tier for tier, directory in roots}
+
+    assert by_dir[profile_skills] == skill_utils.TIER_LOCAL
+    assert by_dir[agents_skills] == skill_utils.TIER_AGENTS
+    assert skill_utils.TIER_LOCAL < skill_utils.TIER_AGENTS < skill_utils.TIER_CREATE_DIR
+
+
+def test_agents_skill_is_visible_in_the_catalog(tmp_path, monkeypatch):
+    """The .agents/skills tier is scanned by the shared catalog, not just listed as a root."""
+    from agent import skill_utils
+    from tools.skills_tool import _skill_catalog
+
+    home = tmp_path / ".hermes"
+    skill_dir = home / ".agents" / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: from .agents\n---\n\nBody\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+
+    entries = [entry for entry in _skill_catalog() if entry.get("load_name") == "demo"]
+    assert len(entries) == 1
+    assert entries[0]["tier"] == skill_utils.TIER_AGENTS
+    assert entries[0]["status"] == "unique"

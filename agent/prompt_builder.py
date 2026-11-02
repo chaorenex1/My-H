@@ -1258,7 +1258,7 @@ def build_skills_system_prompt(
 ) -> str:
     """Compact skill index for the system prompt.
 
-    Same-named skills resolve like skill_view: project > local > create_dir > external_dirs, and a
+    Same-named skills resolve like skill_view: project > local > agents > create_dir > external_dirs, and a
     same-tier duplicate is listed under its exact relative path (``agent.skill_utils.resolve_skill_catalog``).
     ``compact_categories`` (coding posture) demotes categories to a names-only line — nothing is ever hidden.
     ``skills_dir_override`` makes home resolution EXPLICIT: a build thread that never bound the HERMES_HOME
@@ -1437,7 +1437,7 @@ def _build_skills_system_prompt_inner(
             is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
             candidates.append((_build_snapshot_entry(skill_file, skills_dir, frontmatter, desc), is_compatible))
     # Every tier is resolved together, exactly as skill_view resolves names (agent.skill_utils precedence:
-    # project > local > create_dir > external_dirs; same-tier duplicates listed by exact path). Hidden and
+    # project > local > agents > create_dir > external_dirs; same-tier duplicates listed by exact path). Hidden and
     # incompatible copies still take part — skill_view sees them too.
     from agent.skill_utils import TIER_PROJECT, is_disabled_entry, iter_project_skill_files, resolve_skill_catalog
     project_roots = [d for t, d in extra_roots if t == TIER_PROJECT and d.exists()]
