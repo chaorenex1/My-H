@@ -92,6 +92,7 @@ The install also ships `hermes-agent`, a minimal runner that sends one query and
 | `hermes bundles` | Group several skills under a single `/<name>` slash command. See [Skill Bundles](../user-guide/features/skills.md#skill-bundles). |
 | `hermes curator` | Background skill maintenance — status, run, pause, pin. See [Curator](../user-guide/features/curator.md). |
 | `hermes journey` (aliases `learning`, `memory-graph`) | Timeline of learned skills + memories over time. |
+| `hermes graph` | Local property graph: `status`, `schema`, `node`, `edge`, `query`, `neighbors`, `path`, `analyze`, `snapshot`, `backup`, `doctor`. Requires the optional `[graph]` extra. See [Graph](../user-guide/features/graph.md). |
 | `hermes memory` | Configure external memory provider. Plugin-specific subcommands (e.g. `hermes honcho`) register automatically when their provider is active. |
 | `hermes acp` | Run Hermes as an ACP server for editor integration. |
 | `hermes mcp` | Manage MCP server configurations. Running Hermes as an MCP server is the [mcp-serve plugin](../user-guide/features/mcp.md#running-hermes-as-an-mcp-server). |

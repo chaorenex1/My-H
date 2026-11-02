@@ -67,6 +67,9 @@ ANCHORS: dict[str, str | tuple[str, ...]] = {
     # back-compat alias — Pillow is core — but ensure_import("vision") must
     # still resolve an anchor so availability checks work).
     "vision": "PIL",
+    # The graph extra also carries networkx, but CRUD/query only need ladybug;
+    # algorithms probe networkx themselves and degrade independently.
+    "graph": "ladybug",
 }
 
 

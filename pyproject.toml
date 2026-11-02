@@ -258,6 +258,13 @@ kittentts = [
   "misaki[en] @ git+https://github.com/NousResearch/misaki.git@f03fd2be7346952a83d3d4845c217fc7667f322d ; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
   "soundfile==0.14.0; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
 ]
+# Local property graph. Ladybug ships native cp310-cp314 wheels for Windows,
+# macOS 15+ and glibc/musl Linux; NetworkX stays pure Python. Both are only
+# imported by the `hermes graph` CLI / explicit SDK callers, never at startup.
+graph = [
+  "ladybug==0.22.1; sys_platform != 'android'",
+  "networkx==3.6.1; sys_platform != 'android'",
+]
 # onnxruntime has no Intel macOS or Android wheel. Piper has no Windows ARM64 wheel.
 piper = [
   "piper-tts==1.8.0; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
@@ -643,6 +650,8 @@ kittentts = "(platform_machine != 'ARM64' or sys_platform != 'win32') and (platf
 piper = "(platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'"
 # no playwright on android
 google-meet = "sys_platform != 'android'"
+# LadybugDB has no Android/Termux wheel (and cannot be built there).
+graph = "sys_platform != 'android'"
 
 [tool.uv]
 # uv otherwise enables the dev group by default, including in payload builds.
@@ -731,6 +740,8 @@ include = [
   "hermes_agent.*",
   "pm",
   "pm.*",
+  "hermes_graph",
+  "hermes_graph.*",
   "tools",
   "tools.*",
 ]

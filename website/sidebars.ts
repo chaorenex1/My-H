@@ -90,6 +90,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/features/lsp',
             'user-guide/features/curator',
             'user-guide/features/memory',
+            'user-guide/features/graph',
             'user-guide/features/memory-providers',
             'user-guide/features/honcho',
             'user-guide/features/context-files',
