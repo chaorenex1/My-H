@@ -1,0 +1,15 @@
+Third-party content notice
+==========================
+
+The Markdown rule files in this directory are copied verbatim from oh-my-pi:
+
+  https://github.com/can1357/oh-my-pi
+  packages/coding-agent/src/discovery/builtin-rules
+  revision d846b4a6d9982c95179295963aea271ccb695234
+
+They are licensed under the MIT License, reproduced in LICENSE alongside this
+file. Copyright (c) 2025 Mario Zechner, (c) 2025-2026 Can Bölük,
+(c) 2026 Stencil Labs, Inc.
+
+Do not edit the copied rule files without recording the change here; keeping
+the upstream revision traceable is what makes future re-syncs reviewable.

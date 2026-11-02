@@ -199,6 +199,62 @@ def cmd_skills(args):
         return skills_command(args)
 
 
+def cmd_rules(args):
+    """``hermes rules list|show|check`` — inspect the rule files visible to this profile."""
+    import json
+
+    from agent import rule_utils
+
+    action = getattr(args, "rules_action", None) or "list"
+    as_json = bool(getattr(args, "json", False))
+    if action == "show":
+        try:
+            rule = rule_utils.find_rule(getattr(args, "rule_id", ""))
+        except rule_utils.RuleError as exc:
+            print(f"Error: {exc}")
+            return 1
+        if rule is None:
+            print(f"Rule not found: {getattr(args, 'rule_id', '')}")
+            return 1
+        payload = rule_utils.rule_summary(rule, include_body=True)
+        if as_json:
+            print(json.dumps({"success": True, "rule": payload}, ensure_ascii=False, indent=2))
+        else:
+            print(f"# {payload['rule_id']}  [{payload['scope']}]  {payload['source']}")
+            print(payload["body"])
+        return 0
+    if action == "check":
+        problems = rule_utils.check_rules()
+        errors = [problem for problem in problems if problem.get("severity") == "error"]
+        if as_json:
+            print(json.dumps({"success": not errors, "problems": problems},
+                             ensure_ascii=False, indent=2))
+        elif problems:
+            for problem in problems:
+                print(f"{problem['severity']:<7} {problem['rule_id']}: {problem['issue']}")
+        else:
+            print("No rule problems found.")
+        return 1 if errors else 0
+
+    rules = rule_utils.discover_rules()
+    scope = str(getattr(args, "scope", "") or "").strip().casefold()
+    if scope:
+        rules = [rule for rule in rules if rule.get("scope", "").casefold() == scope]
+    rows = [rule_utils.rule_summary(rule) for rule in rules]
+    if as_json:
+        print(json.dumps({"success": True, "count": len(rows), "rules": rows},
+                         ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("No rules found.")
+        return 0
+    width = max(len(row["rule_id"]) for row in rows)
+    for row in rows:
+        description = row["description"] or "(no description)"
+        print(f"{row['rule_id']:<{width}}  {row['scope']:<12}  {description}")
+    return 0
+
+
 def _cmd_skills_trust(args):
     """``hermes skills trust|untrust [path]`` — manage ``skills.trusted_project_dirs``.
 

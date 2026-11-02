@@ -14,6 +14,7 @@ _HERMES_CORE_TOOLS = [
     "read_file", "write_file", "patch", "search_files",
     "vision_analyze", "image_generate",
     "skills_list", "skill_view", "skill_manage",
+    "rules_list", "rule_view", "rule_manage",
     "browser_exec",  # THE browser: Python over CDP (browser-harness)
     "browser_cdp", "browser_dialog",
     "browser_vault",  # rides with the browser; deferred by default (tools.tool_search.defer)
@@ -101,6 +102,11 @@ TOOLSETS = {
         "Access, create, edit, and manage skill documents with specialized "
         "instructions and knowledge",
         ["skills_list", "skill_view", "skill_manage"],
+    ),
+    "rules": _ts(
+        "Discover, inspect, and manage rule documents (Markdown + YAML frontmatter) "
+        "from project, profile, and installation scopes",
+        ["rules_list", "rule_view", "rule_manage"],
     ),
     # web_search belongs to `web`/`search` only. Listing it here too let
     # `disabled_toolsets: [browser]` (headless/Docker deployments) strip

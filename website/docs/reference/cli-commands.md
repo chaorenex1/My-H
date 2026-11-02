@@ -88,6 +88,7 @@ The install also ships `hermes-agent`, a minimal runner that sends one query and
 | `hermes console` | Open the safe Hermes command console. |
 | `hermes pairing` | Approve or revoke messaging pairing codes. |
 | `hermes skills` | Browse, install, publish, audit, and configure skills. |
+| `hermes rules` | List, inspect, and validate rule files (Markdown + YAML frontmatter) across project, profile, and installation scopes. |
 | `hermes bundles` | Group several skills under a single `/<name>` slash command. See [Skill Bundles](../user-guide/features/skills.md#skill-bundles). |
 | `hermes curator` | Background skill maintenance — status, run, pause, pin. See [Curator](../user-guide/features/curator.md). |
 | `hermes journey` (aliases `learning`, `memory-graph`) | Timeline of learned skills + memories over time. |
