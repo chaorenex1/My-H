@@ -16,6 +16,7 @@ Why Bun: the ``@oh-my-pi/pi-tui`` packages publish TypeScript sources (``exports
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import subprocess
@@ -24,6 +25,8 @@ from pathlib import Path
 
 # Marker under node_modules; its content is the digest of the files that decide the install.
 _INSTALL_MARKER = ".hermes-omp-ui"
+
+logger = logging.getLogger(__name__)
 
 
 def project_root() -> Path:
@@ -45,9 +48,8 @@ def _pm_bun(*, install: bool) -> str | None:
             installed = pm.installed_package("bun")
             return str(installed.binary) if installed is not None and installed.binary is not None else None
         runner = pm.ensure("bun", explicit=True)
-    except Exception:
-        # Offline, an unsupported target, or a refused lazy install all mean the
-        # caller gets the actionable "Bun is required" message instead of a traceback.
+    except Exception:  # deliberate boundary: Bun is optional, any PM failure degrades to "not found"
+        logger.debug("omp-ui: PM could not provide bun", exc_info=True)
         return None
     return shutil.which("bun", path=runner.env.get("PATH", ""))
 

@@ -787,6 +787,7 @@ from hermes_cli.old_updater_main import (
     _write_web_ui_build_stamp,
 )
 from hermes_cli.main_install_repair import _cleanup_quarantined_exes, _recover_update_debts_on_startup
+from hermes_cli.main_resume_args import _coalesce_session_name_args
 from hermes_cli.main_install_repair import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _UPDATE_REEXEC_ENV,
     _clear_lazy_refresh_incomplete_marker,
@@ -2345,45 +2346,6 @@ def cmd_update(args):
         _update_lock.release()
         _finalize_update_output(_update_io_state)
 
-
-
-def _coalesce_session_name_args(argv: list) -> list:
-    """Join unquoted multi-word session names after -c/--continue and -r/--resume.
-
-    ``hermes -c Pokemon Agent Dev`` → ``['-c', 'Pokemon Agent Dev']``; tokens
-    are collected until the next flag (``-*``) or known top-level subcommand.
-    """
-    _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
-        "auth", "status", "cron", "doctor", "config", "pairing", "skills", "rules", "tools", "mcp",
-        "sessions", "insights", "update", "uninstall", "profile", "dashboard", "serve", "webapp",
-        "desktop", "gui", "honcho", "claw", "plugins", "security", "acp", "webhook", "peer",
-        "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage",
-    }
-    _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
-
-    result = []
-    i = 0
-    while i < len(argv):
-        token = argv[i]
-        if token in _SESSION_FLAGS:
-            result.append(token)
-            i += 1
-            # Collect subsequent non-flag, non-subcommand tokens as one name
-            parts: list = []
-            while (
-                i < len(argv)
-                and not argv[i].startswith("-")
-                and argv[i] not in _SUBCOMMANDS
-            ):
-                parts.append(argv[i])
-                i += 1
-            if parts:
-                result.append(" ".join(parts))
-        else:
-            result.append(token)
-            i += 1
-    return result
 
 
 from hermes_cli.profile_cmd import cmd_profile
