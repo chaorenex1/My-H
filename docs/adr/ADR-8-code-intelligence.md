@@ -541,8 +541,11 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
 | Go | `tree-sitter-go==0.25.0` | `gopls` | `_test.go` |
 | Rust | `tree-sitter-rust==0.24.2` | `rust-analyzer` | `#[test]` |
 
-内置四种的抽取结果必须覆盖以下最小集合；任何一项缺失都视为语言未完整支持，而不是回退到通用
-规则：
+内置四种的抽取输出必须覆盖以下最小集合；这是 fixture/验收契约，不是 registry 加载器的运行时
+校验：`load_registry_file(require_all_capabilities=True)` 只强制内置 descriptor 的必填字段与
+`capabilities` 键齐全，`kind_map`/`container_rules`/`visibility_rules`/`signature_rules`/
+`module_naming`/`import_resolution`/`test_detection` 都是可选字段，缺失不会拒绝文件，也不会让
+索引失败或回退到通用规则：
 
 | 语言 | 符号 kind | 导入 | 类型关系 | 测试 |
 |---|---|---|---|---|
