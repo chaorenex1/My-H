@@ -9,6 +9,7 @@ TTSR 行保持 `无 producer`（§0.1）：客户端不画假通知、不用 `no
 **关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7；
 `docs/appendix-omp-ui-realtime-rpc.md` A.11、A.15；ADR-2（D9 把 TTSR 判为“无 producer”、D3/D11 的
 事件口径）；ADR-3（`append_display_row` 与行/事件边界）；ADR-5（D9 明确 TTSR 不在 Recap/压缩范围内）；
+ADR-11（`judge` 路线、typed judgments 与 `question` 规则的判定后端）；
 `rules/` corpus、`agent/rule_utils.py`、`tools/rules_tool.py`。
 
 **范围**：只讨论 omp-ui ↔ Hermes canonical local gateway。消息平台、Desktop、Ink sidecar、ACP、
@@ -389,7 +390,7 @@ event ttsr.triggered {
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
 | P1 | D1–D7：local viewer、regex 工具规则、`ttsr.triggered`、组件、隐藏 reminder、`once` 持久化 | 随附 26 条规则里 21 条 regex 规则可命中；通知与 reminder 同时出现；resume 不重画通知；其它客户端无变化 |
-| P2 | `astCondition`（需要 ast-grep 后端）、`question` judge（复用 `auxiliary.goal_judge` 或新 judge 角色）、prose/thinking 被动 follow-up、`after-gap` | P2 的命中与 omp 的对应模板一致；未支持的规则仍有 warn |
+| P2 | `astCondition`（需要 ast-grep 后端）、`question` judge（由 `docs/adr/ADR-11-judgment.md` 的 `judge` 路线与 `judgment` 原生后端提供；不迁移 `auxiliary.goal_judge`）、prose/thinking 被动 follow-up、`after-gap` | P2 的命中与 omp 的对应模板一致；未支持的规则仍有 warn |
 | P3 | `interruptMode: always/prose-only/tool-only` 的流式中断 + `contextMode: discard/keep` + retry | 另立 ADR；必须同时解决 assistant 尾部回滚、stop reason 抑制、prompt cache 代价与 resume 语义，不能在本 ADR 里夹带 |
 
 P3 的 stream rewind 会改变会话尾部（回滚 partial assistant、重新请求），与 Hermes 现有的“用户中断”
