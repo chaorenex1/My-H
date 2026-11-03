@@ -102,14 +102,20 @@ _PROFILE_IMPLICIT = frozenset({'session.create', 'session.list', 'session.info',
                                'approval.respond', 'clarify.respond'})
 
 
-def display_projection(history, profile_home, image_urls=True):
+def display_projection(history, profile_home, image_urls=True, *, include_tool_content: str = 'none',
+                       include_compaction: bool = False):
     """Main's TUI display rows for a snapshot's stored rows: the sidecar's own
     ``_history_to_messages`` (compaction handoffs stripped, ``/steer`` unwrapped, tool rows
     labelled from the paired assistant ``tool_calls``), never a re-implementation. ``image_urls=False``:
-    image parts read ``[image]``."""
+    image parts read ``[image]``.
+
+    ADR-10 P5: the projection is always the custom shape; there is no viewer flag to opt in.
+    """
     from tui_gateway import server
     rows = [{**row, '_row_id': row['row_id']} if 'row_id' in row else row for row in history]
-    return server._history_to_messages(rows, profile_home=profile_home, image_urls=image_urls)
+    return server._history_to_messages(rows, profile_home=profile_home, image_urls=image_urls,
+                                       include_tool_content=include_tool_content,
+                                       include_compaction=include_compaction)
 
 
 def model_only(row):
@@ -578,6 +584,7 @@ class AuthorityConnection:
     async def describe(self, ref, params):
         await self.ping(ref, params)
         from gateway.panel_inventory import capabilities as panel_capabilities
+        from gateway.panel_inventory import transcript_capabilities
         from gateway.session_policy import CREATE_FIELDS, SURFACES
         from gateway.session_skin import resolved_skin
         return {'instance_id': self.authority.instance_id, 'profile_id': self.authority.profile_id,
@@ -589,6 +596,7 @@ class AuthorityConnection:
                 # Panel readiness: the client marks unsupported/pending panels before its first
                 # call instead of discovering ``-32601`` at runtime.
                 'panels': panel_capabilities(),
+                'transcript_blocks': transcript_capabilities(),
                 # Main's ``gateway.ready.skin``: the canonical client's own ready carries it.
                 'skin': await asyncio.to_thread(resolved_skin)}
 
@@ -751,7 +759,9 @@ class AuthorityConnection:
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
-                [row for row in history if not model_only(row)], self.authority.profile_id)
+                [row for row in history if not model_only(row)], self.authority.profile_id,
+                include_tool_content=params.get('include_tool_content') or 'none',
+                include_compaction=params.get('include_compaction') is True)
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
                 **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
                 'running': snapshot.handle.execution_state == 'running',

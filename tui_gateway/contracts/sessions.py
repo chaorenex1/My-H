@@ -5,11 +5,13 @@ listing/browsing stored rows, spawn-tree snapshots, event replay and the statele
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
-from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
-                     UndoRollbackHint, Usage)
+from .common import (CanonicalClientIdentity, OpenModel, PendingApproval, ProfileParams, SessionLiveInfo,
+                     SessionParams, ToolLabel, TranscriptMessage, TranscriptRole, UndoRollbackHint, Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
 
@@ -134,6 +136,12 @@ class SessionCreateParams(ProfileParams):
     hidden: bool = False
     room_plumbing: bool = False
     follow_profile_config: bool = False
+    # ADR-10 D8.5: the creating client's self-declared identity (``{name: "omp-ui"}``); attribution
+    # only, never a policy input.
+    client: CanonicalClientIdentity | None = None
+    # ADR-10 D9: session-level model flag. Create-only; persisted with the session and never
+    # changed by resume. False keeps every legacy payload byte-identical.
+    custom_messages: bool = False
     # #65410: stable caller-chosen key so a retried create (response lost in
     # transit) returns the SAME session instead of a duplicate child.
     idempotency_key: str | None = None
@@ -493,16 +501,48 @@ class SessionHistoryParams(SessionParams):
     since: int | None = None  # rows after this durable row id
     cursor: int | None = None  # alias of ``since`` (``since`` wins when both are set)
     limit: int | None = None  # page size, clamped to 1..500 by the handler
+    # DEPRECATED-NO-OP (ADR-10 P5): the projection is always the custom shape; old clients that
+    # still send the viewer flag are accepted and ignored.
+    project_custom_messages: bool = False
+    # ADR-10 D4/ADR-2 D6: tool result ``content`` depth. Default ``none`` keeps today's payload.
+    include_tool_content: Literal['none', 'text', 'full'] = 'none'
+    # ADR-10 D4: the page's selector rows (``row_id``/``role``/80-char ``summary``). Default off.
+    include_outline: bool = False
 
 
 class HistoryEntry(Result):
     """One paged transcript entry (a projected message carrying a durable ``row_id``)."""
 
     entry_id: int
-    role: str
+    role: TranscriptRole
     text: str | None = None
     timestamp: float | None = None
-    display_kind: str | None = None
+    # ADR-10 P5: synthetic user/assistant rows (auto-continue, failed turn, steer only).
+    synthetic_kind: str | None = None
+    live_steered: bool | None = None
+    custom_type: str | None = None
+    display: bool | None = None
+    display_only: bool | None = None
+    details: JsonValue | None = None
+    attribution: str | None = None
+    legacy_role: str | None = None
+    # ADR-10 D4/D5: tool rows (display-safe ``content`` only under ``include_tool_content``).
+    content: JsonValue | None = None
+    args: dict[str, JsonValue] | None = None
+    labels: list[ToolLabel] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
+    context: str | None = None
+    is_error: bool | None = None
+    reasoning: str | None = None
+
+
+class HistoryOutlineEntry(Result):
+    """One ``session.history.outline`` row (ADR-10 D4/ADR-2 D6): the page's selector summary."""
+
+    row_id: int
+    role: TranscriptRole
+    summary: str
 
 
 class SessionHistoryResult(Result):
@@ -512,6 +552,7 @@ class SessionHistoryResult(Result):
     leaf_id: int | None = None  # largest row id in the full transcript
     next_cursor: int | None = None  # last returned entry id while rows follow
     total_messages: int = 0  # full transcript length before paging
+    outline: list[HistoryOutlineEntry] | None = None  # only when ``include_outline``
 
 
 method("session.history", params=SessionHistoryParams, result=SessionHistoryResult,

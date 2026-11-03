@@ -28,22 +28,21 @@ describe('toTranscriptMessages', () => {
     expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toContain('Search Files')
   })
 
-  it('skips hidden display_kind rows entirely', () => {
+  it('skips rows without display text', () => {
     const rows = [
       { role: 'user', text: 'visible prompt' },
-      { role: 'user', text: '[CONTEXT COMPACTION — REFERENCE ONLY]', display_kind: 'hidden' },
+      { role: 'custom', custom_type: 'internal-notification', text: '' },
       { role: 'assistant', text: 'visible reply' }
     ]
 
     const result = toTranscriptMessages(rows)
     expect(result.map(msg => msg.text)).toEqual(['visible prompt', 'visible reply'])
-    expect(result.every(m => !m.text?.includes('COMPACTION'))).toBe(true)
   })
 
   it('projects model_switch as an event with replaced text', () => {
     const rows = [
       { role: 'user', text: 'hello' },
-      { role: 'user', text: '[System: model changed to gpt-5]', display_kind: 'model_switch' },
+      { role: 'custom', custom_type: 'model-switch', text: '[System: model changed to gpt-5]' },
       { role: 'assistant', text: 'hi' }
     ]
 
@@ -63,7 +62,17 @@ describe('toTranscriptMessages', () => {
       '[end adviser]'
     ].join('\n')
 
-    const [message] = toTranscriptMessages([{ role: 'user', text, display_kind: 'adviser' }])
+    const [message] = toTranscriptMessages([{
+      role: 'custom',
+      custom_type: 'advisor',
+      text,
+      details: {
+        notes: [
+          { note: 'The patch drops the retry path.', severity: 'concern', advisor: 'reviewer' },
+          { note: 'Name the fallback.', severity: 'nit' }
+        ]
+      }
+    }])
 
     expect(message.role).toBe('system')
     expect(message.text).not.toContain('[adviser')
@@ -81,7 +90,17 @@ describe('toTranscriptMessages', () => {
       '[end adviser]'
     ].join('\n')
 
-    const [message] = toTranscriptMessages([{ role: 'user', text, display_kind: 'adviser' }])
+    const [message] = toTranscriptMessages([{
+      role: 'custom',
+      custom_type: 'advisor',
+      text,
+      details: {
+        notes: [
+          { note: 'The patch drops the retry path.', severity: 'concern', advisor: 'reviewer' },
+          { note: 'The migration never ran.', severity: 'blocker', advisor: 'reviewer' }
+        ]
+      }
+    }])
 
     expect(message.adviser).toMatchObject({ severity: 'blocker' })
     expect(message.adviser?.items.map(item => item.severity)).toEqual(['concern', 'blocker'])
@@ -92,10 +111,10 @@ describe('toTranscriptMessages', () => {
       { role: 'user', text: 'do work' },
       { role: 'assistant', text: 'done' },
       {
-        role: 'user',
+        role: 'custom',
+        custom_type: 'async-delegation-complete',
         text: '[IMPORTANT: delegation done]',
-        display_kind: 'async_delegation_complete',
-        display_metadata: { task_count: 3 }
+        details: { task_count: 3 }
       },
       { role: 'assistant', text: 'merged' }
     ]
@@ -114,7 +133,7 @@ describe('toTranscriptMessages', () => {
     const title = 'Subagent Task Failed: Review changes'
 
     const [message] = toTranscriptMessages([
-      { role: 'user', text, display_kind: 'async_delegation_complete', display_metadata: { display_text: title } }
+      { role: 'custom', custom_type: 'async-delegation-complete', text, details: { display_text: title } }
     ])
 
     expect(message).toMatchObject({ kind: 'event', role: 'system', text: title })
@@ -122,7 +141,7 @@ describe('toTranscriptMessages', () => {
   })
 
   it('projects async_delegation_complete without metadata as generic text', () => {
-    const rows = [{ role: 'user', text: 'event', display_kind: 'async_delegation_complete' }]
+    const rows = [{ role: 'custom', custom_type: 'async-delegation-complete', text: 'event', details: {} }]
 
     const result = toTranscriptMessages(rows)
     expect(result[0]?.kind).toBe('event')

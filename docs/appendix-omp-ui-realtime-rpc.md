@@ -52,7 +52,7 @@
 | 错误/提示 | `extension_error.error`、`rpc_frame_error.error` | `error.message` | `error`→`message`；`original_type` 等缺项见 A.3.2 |
 | 提示 | `notice {level,message}` | `notification.show {text,level,kind}` | `message`→`text`；`warning`→`warn` |
 | 回合 | `agent_start.resumedToolCallIds`、`agent_end.isTerminal/yielded/awaitingAsyncWork` | `turn.start.resumed_tool_call_ids`、`turn.end` | 重命名；缺失语义由 A.4.1 补项或客户端派生 |
-| 消息开始 | `message_start.message`（快照） | `message.start`（无快照） | 客户端以 `message_id` 构造空 `AgentMessage` 壳 |
+| 消息开始 | `message_start.message`（快照） | `message.start`（无快照） | assistant 流式回合由客户端以 `message_id` 构造空 `AgentMessage` 壳；`role:"custom"` 且 `display:true` 的快照（如 IRC 注入）按原样保留，不套壳 |
 | 文本增量 | `text_delta {contentIndex,delta,partial}` | `message.delta {text,content_index}` | `delta`→`text`、`contentIndex`→`content_index`；`partial` 用 complete 的 `partial` |
 | 块边界 | `text_start/text_end/image_end` | `message.block_start/block_end` | `kind`/`content_index` 直传，客户端组装 `content` |
 | 思考 | `thinking_start/delta/end` | `reasoning.delta` / `reasoning.available` | `delta`→`text`；end→available |
@@ -89,6 +89,11 @@ producer 未落地时保持空值）。
   2. `available_commands_update` 按实际实现改为 `commands.changed` 信号 + 客户端重取目录（A.8）；
   3. `command_output` 已有 `command.output`，改判 F；
   4. 明确 `AgentMessage` 快照由客户端合成，不由 Hermes 返回同义结构（A.4.2），与 A.0.1 第 3 条一致。
+- **校准（2026-11-03）**：`role:"custom"` 是 omp 的 `AgentMessage` 角色，不是 provider wire role。
+  `message_start`/`message_end` 可携带 `CustomMessage` 快照（IRC 注入等）；`irc_message` 的
+  `message` 也是 `CustomMessage`。`display` 只控制 UI，不能作为是否进入模型上下文的判据；
+  `custom_message` 进入上下文并按 `attribution`/`customType` 投影为 `developer` 或 `user`
+  （业务附录 B.5.5 是口径源）。
 
 ## A.1 两端已有的协议定义
 
@@ -255,8 +260,14 @@ event("turn.end", TurnEndPayload)
 
 | omp | 类型 | Hermes | 处理 |
 |---|---|---|---|
-| `message` | `AgentMessage` | — | **客户端合成**（A.0.1 第 3 条）：用 `message_id` 建空 `AgentMessage` 壳，由 delta / `message.block_end` 填充；Hermes 不返回同义快照 |
+| `message` | `AgentMessage` | — | **客户端合成**（A.0.1 第 3 条）：用 `message_id` 建空 `AgentMessage` 壳，由 delta / `message.block_end` 填充；Hermes 不返回同义快照。仅对 assistant 流式回合成立 |
 | `messageId` | string | `message_id`（已落地） | 别名；注意 `turn_id` 是**回合**身份，不能替代消息身份 |
+
+> `message_start`/`message_end` 也能携带非 assistant 的 `AgentMessage`（`role:"custom"` 且
+> `display:true`，例如 IRC 注入）。此时 omp 的 `message` 快照是权威内容，客户端不得套用上面的空
+> assistant 壳；`role:"custom"` 不是 wire role，是否进入模型上下文取决于 entry/attribution
+> （A.11、B.5.5），不看 `display`。`display:false` 的 hidden custom 不发这两个事件，但仍持久化并
+> 进入模型上下文，只能通过 `session.history` 等路径到达客户端。
 
 字段映射（`message_update`，omp 的 `assistantMessageEvent` 是判别联合）：
 
@@ -494,7 +505,7 @@ live 会话，故 live 事件组整体是 P/N 混合。
 |---|---|---|---|
 | `btw_delta {recordId,delta}` | 无 | N | **新增** `btw.delta {record_id,delta}` |
 | `btw_record {record}` | `btw.complete {task_id,text,question?}` | P | 只有终态；`BtwHistoryRecord` 的 `id/leafId/followUps/status/createdAt/updatedAt/error/images` **新增**；建议 **新增** `btw.record {record}` 并在每次生命周期变化时广播 |
-| `irc_message {message}` | 无（`message.adviser {id,text,severity,label,display_kind}` 是另一语义） | N | **新增** `custom.message {message: AgentMessage}`，或明确不支持 |
+| `irc_message {message}` | 无（`message.adviser {id,text,severity,label,display_kind}` 是另一语义） | N | **新增** `custom.message {message: CustomMessage}`，或明确不支持。`message` 是 `role:"custom"` 的 `CustomMessage`：`irc:incoming` 可进入模型上下文（默认 `developer`，`attribution:"agent"`；parent steer 另走 `user`），`irc:relay` 只发 UI、不持久化；契约必须带 `custom_type`/`attribution`/`display`，`display` 只控制渲染 |
 | `advisor_cost_changed {}` | 无 | N | **新增** `advisor.cost_changed {cost?}`；Hermes 只有 `message.adviser` |
 | `advisor_yielded {}` | 无 | N | **新增** `advisor.yielded {}` |
 | `ttsr_triggered {rules}` | 无 | N | **新增** `ttsr.triggered {rules:{name,path,content}[]}` |
@@ -616,6 +627,6 @@ emitter 的事件判为 orphan，而伪造数据会污染 wire。落地它们需
 | `compaction.start/end`、`retry.start/end/fallback_*`、`cache_warming.start/end` | 结构化数据只存在于 `agent/compaction_events.py`（Relay/OTel + `post_compaction` plugin hook）与 `agent/turn_recovery.py` 的内部变量；需要网关可订阅的 in-process 回调（cache warming 功能本身不存在） |
 | `subagent.*` 的 `agent`/`agent_source`/`description`/`task`/`assignment`/`session_file`/`parent_tool_call_id`/`detached`/`progress`、`subagent.event` | `delegate_task` 不接收命名 agent/描述/父 tool call id；子代理原始事件只进 live-transcript 文件，无网关转发路径 |
 | `voice.levels`、`capture_id`、`voice.ended` | 录音器只有内部 int RMS（0–32767），无输出电平、无 capture id、无独立的结束/错误帧 |
-| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`ttsr.triggered`、`custom.message` | 侧问是非流式一次性返回；adviser 成本只在 JSONL 汇总；TTSR/自定义消息在 Hermes 不存在 |
+| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`ttsr.triggered`、`custom.message` | 侧问是非流式一次性返回；adviser 成本只在 JSONL 汇总；TTSR 与“带 `custom_type`/`attribution` 的 custom 消息事件”在 Hermes 不存在。注意 omp 的 custom 消息本身可能是模型上下文消息（默认 `developer`，user 归因的 skill/collab→`user`），不是纯 display 帧；新增 `custom.message` 时不得把它降级成 `display_metadata` |
 | `ui.select/confirm/input/editor/widget/editor_text/open_url` | 当前没有任何后端流程会发起这些请求；每个都需要一个真实调用者才能通过 orphan 门 |
 | `host.tool.*`、`host.uri.*` | Hermes 全部工具在服务端执行，没有“请宿主执行工具”的子协议 |

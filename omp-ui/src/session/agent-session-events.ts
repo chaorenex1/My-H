@@ -1,5 +1,5 @@
 import type { AgentEvent, ThinkingLevel } from "../vendor/agent/src/index.ts";
-import type { Effort } from "../vendor/ai/src/index.ts";
+import type { Effort, Usage } from "../vendor/ai/src/index.ts";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 /**
@@ -12,7 +12,11 @@ import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
  * is not part of this client.
  */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| Exclude<AgentEvent, { type: "agent_end" } | { type: "tool_execution_start" }>
+	| (Extract<AgentEvent, { type: "tool_execution_start" }> & {
+			/** ADR-2 D1: a tool-only step's own usage, counted into the turn tally without a message block. */
+			stepUsage?: Usage;
+	  })
 	| (Extract<AgentEvent, { type: "agent_end" }> & {
 			/** False while the authority still has work for this session (queued input, a running turn). */
 			isTerminal?: boolean;

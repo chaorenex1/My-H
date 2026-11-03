@@ -5,13 +5,13 @@
  * slash command is a Hermes command and travels to the gateway's `command.dispatch` catalog,
  * which owns its behaviour and its transcript side effects.
  */
-import { randomUUID } from "node:crypto";
 import { Markdown } from "@oh-my-pi/pi-tui";
 import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/hotkeys-markdown";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { getMarkdownTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { openPath } from "../../utils/open";
 import type { CanonicalSnapshot, CommandDispatchResult, SessionListRow } from "../rpc/gateway-contract.generated";
+import { gatewayCreateParams } from "../rpc/gateway-session";
 import type { InteractiveModeContext } from "../types";
 
 /** A dispatch payload may also carry the slash worker's mirrored side-effect warning. */
@@ -290,11 +290,10 @@ export class CommandController {
 		}
 		let sessionId: string;
 		try {
-			const created = await gateway.client.request<CanonicalSnapshot>("session.create", {
-				source: "tui",
-				request_id: randomUUID(),
-				cwd: this.ctx.sessionManager.getCwd(),
-			});
+			const created = await gateway.client.request<CanonicalSnapshot>(
+				"session.create",
+				gatewayCreateParams({ cwd: this.ctx.sessionManager.getCwd() })
+			);
 			sessionId = created.session_id;
 		} catch (error) {
 			this.ctx.showError(`Failed to start a new session: ${error instanceof Error ? error.message : String(error)}`);

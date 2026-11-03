@@ -88,6 +88,10 @@ omp 的 74 个命令按 `commands.ts` 的 `name` 逐一核对，不按 omp 的 s
   `get_session_lease` N→F、`get_logout_accounts` N→P（`credentialId` 数值 vs `credential_id` 字符串、
   `type` 枚举 vs 字符串，需客户端转换；B.14/B.18）。
 - **统计**：F 4、P 34、N 36（共 74）。
+- **校准（2026-11-03）**：B.5.4/B.5.5 明确 `role:"custom"` 是 omp 会话内的 `AgentMessage` 角色，
+  **不是** provider wire role。`type:"custom"` 是不透明、非 LLM 记录；只有 `type:"custom_message"`
+  （或 `type:"message"` 且 `message.role:"custom"`）进入模型上下文，并按 `customType`/`attribution`/
+  内容形态投影为 `developer` 或 `user`。`display` 只控制 UI，不得作为上下文是否包含的判据。
 
 ## B.1 两端已有的协议定义
 
@@ -328,16 +332,16 @@ session.resume result += {cancelled?: bool, resumed?: bool, session_file?: strin
 
 | omp | Hermes | 状态 | 处理 |
 |---|---|---|---|
-| `get_entries {since?}` | `session.history {session_id}` | P | 结果 `{count,messages:[TranscriptMessage]}` 是**渲染投影**，omp 要 `{entries:SessionEntry[],leafId}`。**新增** `entries`、`leaf_id`；`since` 游标缺失（计划 §4.7 的 E 项） |
-| `get_messages` | `session.history` | P | `messages[TranscriptMessage]` vs `AgentMessage[]`；见 B.5.4 字段表 |
-| `get_messages_page {cursor?,limit?}` | `session.history` | P | **新增** `cursor`、`limit`、`next_cursor`、`total_messages`（计划 E） |
+| `get_entries {since?}` | `session.history {session_id}` | P | ADR-10 P2 后结果含 `{count,messages:[TranscriptMessage],entries:[HistoryEntry],leaf_id,next_cursor,total_messages,outline?}`：`entries` 与 `messages` 同源同序（含 tool 行，`entry_id`=durable `row_id`），`outline` 仅在 `include_outline:true` 时返回；工具结果 `content` 由 `include_tool_content`（`none|text|full`，默认 `none`）控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影。`entries` 必须保留 entry 判别：`type:"custom"` 是不透明、非 LLM 记录，只有 `type:"custom_message"` 才是消息；不得把两者合并成 `display_kind` |
+| `get_messages` | `session.history` | P | `messages[TranscriptMessage]` vs **未转换的** `AgentMessage[]`（含 `role:"custom"`，不是 wire role）；见 B.5.4/B.5.5 |
+| `get_messages_page {cursor?,limit?}` | `session.history` | P | `cursor`/`limit`/`next_cursor`/`total_messages` 已接；`outline` 按 `include_outline` 返回（ADR-10 P2） |
 | `get_tree` | 无 | N | **新增** `session.tree {session_id}` → `{tree:JsonValue[],leaf_id:string or null}` |
 | `branch {entryId}` | `session.mutate {operation:"branch",payload:{through_message_id,title?}}` 或 `session.branch` | P | `entryId`→`through_message_id`（int 物理行 id，omp 是 entry id，需映射）；写方法要 `request_id`/`expected_revision`/`expected_generation`；结果 omp `{text,cancelled}` vs `{branched_session_id,...}`。**新增** `text`/`cancelled` |
 | `fork {entryId?}` | `session.branch_whole {name?,idempotency_key?}` | P | `entryId` 无对应（whole-history fork）；**新增** `through_message_id` |
 | `navigate_tree {entryId,summarize?,customInstructions?}` | 无 | N | **新增** `session.tree.navigate {session_id,entry_id,summarize?,custom_instructions?,request_id,expected_revision}` → `{cancelled,aborted?,editor_text?}`（Hermes 的 `session.mutate rewind` 是删行，不是移动 leaf） |
 | `abort_branch_summary` | 无 | N | **新增** `session.tree.navigate.abort {session_id}` |
 | `set_label {entryId,label?}` | 无 | N | **新增** `session.entry.label {session_id,entry_id,label?}` |
-| `get_branch_messages` | 无专用方法 | N | 可由 `session.history` 的 `role=user` + `row_id` 派生；**建议零新增**，在客户端派生。若必须服务端：`session.tree.branch_messages` |
+| `get_branch_messages` | 无专用方法 | N | 可由 `session.history` 派生；**建议零新增**，在客户端派生。但 omp 的 `getUserMessagesForBranching` 只取 `type:"message"` 且 `role:"user"`，所以不能只看 `role=user`：必须排除 `display_kind="todo_reminder"/"hidden"` 等非用户发起行；`skill_invocation` 本身是真实 user 回合（ADR-2 D8），但 omp 的分支候选不含 `custom_message` 的 skill prompt，所以为对齐也要排除。不要把 user 归因的 skill/collab `custom_message` 算进来。若必须服务端：`session.tree.branch_messages` |
 | `get_last_assistant_text` | 无专用方法 | N | 可由 `session.history` 最后一条 assistant 派生；建议零新增 |
 | `set_session_name {name}` | `session.title {title}` | **F** | `name`→`title` **别名**；结果 `title` 一致（Hermes 多 `session_key`/`pending`） |
 | `handoff {customInstructions?}` | `handoff.request {platform}` | N | 语义不同（Hermes 是移交到消息平台 home channel，不是新会话）。**新增** `session.handoff {custom_instructions?}` → `{session_id,saved_path?}` |
@@ -377,10 +381,49 @@ session.last_assistant_text     {session_id} -> {text: string|null}
 | `assistant` | `role:"assistant"` | `content`（块数组）→ `content`；`provider/model/usage/stopReason` **新增**（`reasoning` 已有独立键） |
 | `toolResult` | `role:"tool"`（Hermes 投影） | `toolCallId`→`tool_call_id`、`toolName`→`name`、`content`→`content`、`isError`→**新增** `is_error` |
 | `bashExecution` / `pythonExecution` | 无专用 role | **新增** `role` 值或 `display_kind` |
-| `custom` / `hookMessage` | `display_kind`/`display_metadata` | **新增** `custom_type`、`display` |
-| `branchSummary` / `compactionSummary` | 无专用 role | **新增** `role:"branch_summary"/"compaction_summary"`，或 `display_kind` |
-| `fileMention` | 无 | **新增** |
+| `custom` / `hookMessage` | 无同义 role（`display_kind`/`display_metadata` 只是显示投影） | **新增** `custom_type`、`attribution`；`display` 由 `display_kind` 派生（`hidden`→false），不新增同义字段。不得用 `display_kind` 反推模型角色；投影规则见 B.5.5 |
+| `branchSummary` / `compactionSummary` | 无专用 role | **新增** `role:"branch_summary"/"compaction_summary"`，或 `display_kind`；二者也不是 wire role，provider 侧转成 `user` 模板消息（B.5.5） |
+| `fileMention` | 无 | **新增**；provider 侧文本→`developer`、图片→`user`（B.5.5） |
 | — | `row_id` | omp 无（entry id 概念）；**新增** `entry_id` 到 omp 模型以便 `branch/navigate_tree` 回传 |
+
+### B.5.5 `role:"custom"` 与模型上下文的口径（校准）
+
+`role:"custom"`（以及历史 `hookMessage`）是 omp 会话内的 `AgentMessage` 角色，**不是 provider
+wire role**。provider 请求只有 `user`/`developer`/`assistant`/`toolResult` 等角色；`convertToLlm`
+在每次请求前转换。判定是否进入模型上下文分两层：① 该 entry 在 root→leaf **活动路径**上，且未被
+`reset_boundary` 隐藏、也未落在最新 compaction 已摘要替换的区间；② 再看 **entry 类型**（下表），
+不要看 `role` 或 `display`：
+
+| omp 会话形态 | 是否进入模型上下文 | 模型侧投影 |
+|---|---|---|
+| `type:"custom_message"`（`pi.sendMessage` 写入） | 是 | 默认 `developer`；`skill-prompt`/`collab-prompt` 且 `attribution:"user"` → `user` |
+| `type:"message"` 且 `message.role:"custom"`（内部调用者；v2→v3 由 `hookMessage` 迁移） | 是 | 同上 |
+| `type:"custom"`（`tool_execution_start`、`session_exit`、`user_todo_edit`、`system-prompt-digest` 等） | 否 | 无消息；只供子系统回放/诊断 |
+| `customType:"prewalk-plan"` / `"vibe-mode-context"` 的 `custom_message` | 否（重建时排除） | 仅 transcript/display |
+| `content` 不是 string 或块数组 | 否（重建时丢弃） | — |
+
+`convertToLlm` 的 `custom` 分支：
+
+| 条件 | 投影 |
+|---|---|
+| 默认（含 `attribution:"agent"` 的 advisor、IRC 等） | `developer`，`attribution` 保留；Anthropic 可提升为 `system` 参数 |
+| `skill-prompt` 且 `attribution:"user"`；`collab-prompt` 且 `attribution:"user"` | `user`（真实用户回合；collab/steering 加 envelope） |
+| 普通 custom（非上面两类）且内容数组含 image 块 | 文本块 → `developer`；图片块 → `user`（附占位文本）；user 归因的 skill prompt 走 `user`，不拆分 |
+
+其他要点：
+
+- `customType` 与 `details` **不发送给 provider**；模型只看到 `content`。`attribution` 决定
+  Anthropic 上是否可提升为 `system` 槽（`user` 归因留在 `user` 槽）。
+- 已持久化的 `custom_message` 即使 `display:false` 也只过滤 TUI 渲染
+  （`chat-transcript-builder.ts`），**仍进入模型上下文**；未持久化的 display-only 消息
+  （如 `irc:relay`）本来就不在上下文。Hermes 的 `display_kind="hidden"` 同理只是显示投影。
+- `branchSummary`/`compactionSummary` 也会转成 `user` 模板消息，不是 wire role；`fileMention`
+  按文本/图片拆成 `developer`+`user`。
+- Hermes `session.history` 的 `TranscriptMessage` 是显示投影，既没有 `attribution`/`custom_type`，
+  也没有 omp 的 content 块形状；不能据此还原 `get_messages` 的模型上下文。若必须对齐
+  `get_messages`，需新增这些字段（`display` 仍只作 UI）。
+- `custom_message` 属于 message-bearing 条目：compaction 保留它，token 计数与摘要也按转换后的
+  `developer`/`user` 消息处理；`custom` entry 不参与。
 
 ## B.6 模型、推理与快速模式
 
@@ -853,7 +896,7 @@ scripts/run_tests.sh tests/tui_gateway/contracts/
 |---|---|---|---|
 | F | `abort` / `steer_subagent` / `set_session_name` | 既有 `session.interrupt`/`subagent.steer`/`session.mutate{rename}` 不变 | 已由 A/L 两条路径服务，无需改动；命名差异留在客户端别名层 |
 | P | `get_entries` / `get_messages` / `get_messages_page` | `SessionHistoryParams += since/cursor/limit`；`SessionHistoryResult += entries/leaf_id/next_cursor/total_messages`；新增 `HistoryEntry` | `gateway/session_tui_ops.py::session_history` 与 sidecar 同名 handler：`db.get_messages_as_conversation(..., include_row_ids=True)` 投影后按 `row_id` 分页；`entry_id` 就是 durable `row_id`，`leaf_id` 取全量最大 `row_id` |
-| P | `get_session_stats` | `SessionStats += session_id/tokens/context_usage/cost_usd/user_messages/assistant_messages/tool_calls/tool_results/total_messages/routed_models`；新增 `TokenUsage`/`ContextUsage` | `gateway/session_usage.py::stats`：token/context 取 agent 的 `session_*` 计数；角色计数用 `SessionDB.message_role_counts`（active display 行），`tool_call_count`/`cost_usd` 取 `sessions` 行（actual 优先、estimate 兜底），`routed_models` 取 `session_model_usage` 的 `SUM(api_call_count)`；每个 DB 读独立降级为 `null` |
+| P | `get_session_stats` | `SessionStats += session_id/tokens/context_usage/cost_usd/user_messages/assistant_messages/tool_calls/tool_results/total_messages/routed_models`；新增 `TokenUsage`/`ContextUsage` | `gateway/session_usage.py::stats`：token/context 取 agent 的 `session_*` 计数；角色计数用 `SessionDB.message_role_counts`（active display 行；display role 不等同 omp `getSessionStats` 只数 `role:user/assistant/toolResult` 的口径，custom 消息不计入 user），`tool_call_count`/`cost_usd` 取 `sessions` 行（actual 优先、estimate 兜底），`routed_models` 取 `session_model_usage` 的 `SUM(api_call_count)`；每个 DB 读独立降级为 `null` |
 | P | `get_available_commands` | `CommandsCatalogResult += entries`；新增 `CommandCatalogEntry` | `tui_gateway/command_discovery.py::command_catalog`：由 `pairs`/`canon`/`commands`/`SUBCOMMANDS`/`skills` 投影出 name/description/aliases/source(`builtin\|quick\|plugin\|skill`)/argument_mode/hint/subcommands；authority 与 sidecar 共用 |
 | P | `get_available_models` / `get_login_providers` | `ModelOptionsResult += models`；新增 `ModelInfoEntry`/`ModelCost`/`ModelThinking` | `hermes_cli/inventory.py::project_model_infos`，由 `gateway/session_config.py::model_options` 与 sidecar `methods_complete.model.options` 调用：`agent.models_dev.get_model_info(..., allow_network=False)` 提供 name/modalities/context_window/max_output/数值 cost；`capabilities[model].reasoning` 与 `route_supported_efforts` 提供 thinking.levels |
 | P | `bash` | `ShellExecResult += output/cancelled/timed_out/truncated/total_lines/total_bytes/output_lines/output_bytes/artifact_*/working_dir/images` | `gateway/session_shell.py::_run`：total_* 取**切片前**子进程输出，output_* 取实际过线的（redacted+sliced）文本，`working_dir = policy.cwd`；`cancelled` 恒 false（没有取消句柄）、超时仍以 `command_timeout` 错误返回故 `timed_out` 恒 false、artifact_* 恒 null（无 spill）——原因见下表 |

@@ -169,6 +169,9 @@ export async function runHermesOmp(args: string[]): Promise<void> {
 	}
 	session.attachGateway(gateway);
 	await gateway.refresh();
+	// ADR-10 D8.2a: renderer choice reads the authority's tool names, so resolve them before the
+	// first transcript paint (a failure degrades to the wire name, never blocks boot).
+	await session.refreshTools();
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	const mode = new InteractiveModeConstructor(session, version);
 	await mode.init({

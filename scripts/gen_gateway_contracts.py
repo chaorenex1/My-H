@@ -235,6 +235,13 @@ def render_ts() -> str:
 
     out = [HEADER, "/* eslint-disable */\n", "// ── Types ──\n"]
     out.extend(r.emitted.values())
+    # ADR-10 D10: the eleven renderer roles, derived from the Python seat table. ``TranscriptRole``
+    # (the wire union) also carries the legacy ``system`` member; clients branch on this subset.
+    from tui_gateway.contracts.transcript_roles import TRANSCRIPT_ROLE_NAMES
+    out.append("export const TRANSCRIPT_ROLES = [\n"
+               + "".join(f"  {_lit(name)},\n" for name in TRANSCRIPT_ROLE_NAMES)
+               + "] as const\n")
+    out.append("export type TranscriptRoleName = (typeof TRANSCRIPT_ROLES)[number]\n")
     out.append(
         "export type ConnectorErrorReason = "
         + r.type_of({"enum": [member.value for member in ConnectorErrorReason]})

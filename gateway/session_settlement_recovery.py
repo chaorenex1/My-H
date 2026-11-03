@@ -106,6 +106,11 @@ def completion_payload(row, settled, response, captured, *, message_id=None):
     if isinstance((captured or {}).get('session_usage'), dict):
         from gateway.session_usage import tui_usage
         complete['usage'] = tui_usage(captured['session_usage'])
+    # ADR-2 D1/D2: per-step usage and the requested/served model ids. Absent stays null;
+    # the cumulative `usage` above is never reused as this step's value.
+    complete['step_usage'] = (captured or {}).get('step_usage')
+    complete['served_model'] = captured_result.get('served_model')
+    complete['requested_model'] = captured_result.get('requested_model')
     if isinstance(captured_result.get('persisted_turn'), dict):
         complete['persisted_turn'] = {**captured_result['persisted_turn'],
                                       'submission_id': row['request_id']}

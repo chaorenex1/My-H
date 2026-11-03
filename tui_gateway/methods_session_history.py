@@ -21,6 +21,10 @@ def _(rid, params: dict) -> dict:
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
         return _err(rid, -32602, "invalid params: limit must be a positive integer")
     limit = min(limit, 500) if limit is not None else None
+    include_tool_content = params.get("include_tool_content", "none")
+    if include_tool_content not in ("none", "text", "full"):
+        return _err(rid, -32602, "invalid params: include_tool_content must be none, text or full")
+    include_outline = params.get("include_outline") is True
     since, cursor = params.get("since"), params.get("cursor")
     after = since if since is not None else cursor
     history = list(session.get("history", []))
@@ -40,12 +44,15 @@ def _(rid, params: dict) -> dict:
                     # use. See #87059.
                     history = db.get_messages_as_conversation(
                         row_session, include_ancestors=True, include_row_ids=True)
-    messages = _history_to_messages(history, profile_home=session.get("profile_home"))
+    messages = _history_to_messages(history, profile_home=session.get("profile_home"),
+                                    include_tool_content=include_tool_content)
     from tui_gateway.history_paging import history_page
-    page, entries, next_cursor = history_page(messages, after=after, limit=limit)
+    page, entries, next_cursor, outline = history_page(messages, after=after, limit=limit,
+                                                       include_outline=include_outline)
     leaf_id = max((m["row_id"] for m in messages if isinstance(m.get("row_id"), int)), default=None)
     return _ok(rid, {"count": len(page), "messages": page, "entries": entries, "leaf_id": leaf_id,
-                     "next_cursor": next_cursor, "total_messages": len(messages)})
+                     "next_cursor": next_cursor, "total_messages": len(messages),
+                     **({"outline": outline} if outline is not None else {})})
 
 
 def register(server) -> None:

@@ -43,6 +43,8 @@ def _render_row(msg: dict[str, Any]) -> str:
         if calls:
             lines.append("[ASSISTANT called tools: " + ", ".join(c for c in calls if c) + "]")
         return "\n".join(lines)
+    if role == "developer":
+        return f"[DEVELOPER]\n{text}" if text else ""
     if role == "tool":
         if len(text) > _TOOL_RESULT_PREVIEW_CHARS:
             text = text[:_TOOL_RESULT_PREVIEW_CHARS] + " …"

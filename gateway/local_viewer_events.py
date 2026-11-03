@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from gateway import local_desktop_ui
 
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Attributes ``wire`` may overwrite on the cached agent for one local-viewer turn.
 _TURN_ATTRS = ("tool_gen_callback", "_print_fn", "thinking_callback", "reaction_callback", "reasoning_callback",
-               *local_desktop_ui.CALLBACK_ATTRS)
+               "transcript_notice_callback", "tool_result_metadata_callback", *local_desktop_ui.CALLBACK_ATTRS)
 # Private key in ``wire``'s return value: the desktop window bridge registration ``restore`` releases.
 _DESKTOP_UI_TOKEN = "__desktop_ui_token__"
 # MoA facade progress (agent/moa_loop._RELAY_EVENTS) -> the payload tui_gateway/tool_progress emits.
@@ -37,9 +38,36 @@ def wire(turn, agent) -> dict:
     publish = turn._publish_execution
     agent.tool_gen_callback = lambda name: publish("tool.generating", {"name": str(name or "")})
 
+    # ADR-10 D7: agent.print and status.update both describe the same lifecycle line. The gateway
+    # emits ONE deduped transcript.notice for it and keeps both legacy events for old clients.
+    last_notice: list = []
+    prefix = str(getattr(agent, "log_prefix", "") or "")
+
+    def notice(level: str, text: str, source: str) -> None:
+        now = time.monotonic()
+        if last_notice and last_notice[0] == (level, text) and now - last_notice[1] < 1.5:
+            return
+        last_notice[:] = [(level, text), now]
+        publish("transcript.notice", {"id": uuid.uuid4().hex, "level": level,
+                                      "text": text, "source": source})
+
     def print_fn(*args, **kwargs):
-        publish("agent.print", {"text": str(kwargs.get("sep", " ")).join(str(a) for a in args)})
+        text = str(kwargs.get("sep", " ")).join(str(a) for a in args)
+        publish("agent.print", {"text": text})
+        if getattr(agent, "_in_status_line", False):
+            return  # the status path emits this line's notice (with its real kind)
+        notice("info", text[len(prefix):] if prefix and text.startswith(prefix) else text, "agent")
     agent._print_fn = print_fn
+    agent._in_status_line = False
+
+    def transcript_notice(kind: str, message: str, *, origin: str = "") -> None:
+        level = "error" if "error" in kind.lower() else "warning" if "warn" in kind.lower() else "info"
+        notice(level, str(message), "agent")
+    agent.transcript_notice_callback = transcript_notice
+    # ADR-10 D5: the canonical turn computes the edit diff BEFORE the result row is appended, so
+    # resume and the live tool.complete event share one display-safe preview.
+    agent.tool_result_metadata_callback = lambda call_id, name, args, result: prepare_fields(
+        turn, call_id, name, args, result)
     # Kawaii spinner text ("" clears it) and hearts; neither changes what the provider is sent.
     agent.thinking_callback = lambda text: publish("thinking.delta", {"text": str(text or "")})
     agent.reaction_callback = lambda kind: publish("reaction", {"kind": str(kind or "")})
@@ -204,6 +232,32 @@ def note_tool_start(turn, call_id, tool_name=None, args=None) -> None:
         turn.__dict__.setdefault("_local_edit_snapshots", {})[key] = snapshot
 
 
+def _render_edit_diff(tool_name, args, result, snapshot) -> str | None:
+    """The rendered edit diff main's CLI printed after a write, ``None`` when there is none."""
+    rendered: list[str] = []
+    try:
+        from agent.display import render_edit_diff_with_delta
+        render_edit_diff_with_delta(tool_name, result, function_args=args if isinstance(args, dict) else {},
+                                    snapshot=snapshot, print_fn=rendered.append)
+    except Exception:  # health: allow BLE001 -- display-only preview, as main's CLI _on_tool_complete
+        logger.debug("Edit diff preview failed for %s", tool_name, exc_info=True)
+        rendered = []
+    return "\n".join(rendered) if rendered else None
+
+
+def prepare_fields(turn, call_id, tool_name, args, result) -> dict:
+    """ADR-10 D5: result metadata computed BEFORE the tool row is appended.
+
+    The executor merges its own ``is_error`` verdict in; ``complete_fields`` reuses the diff so
+    the live ``tool.complete`` event and the durable row agree and the snapshot is popped once.
+    """
+    key = str(call_id or "")
+    snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
+    diff = _render_edit_diff(tool_name, args, result, snapshot)
+    turn.__dict__.setdefault("_local_tool_diffs", {})[key] = diff
+    return {"tool_result_metadata": {"inline_diff": diff} if diff else {}}
+
+
 def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is_error=False) -> dict:
     """``duration_s``, ``inline_diff`` (the rendered edit diff main's CLI printed after a write,
     ``None`` when there is none), ``image_path`` (the local image the call produced or looked at,
@@ -214,16 +268,14 @@ def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is
     fields = {"duration_s": (time.monotonic() - started) if started is not None else None}
     if tool_name is None:
         return fields
-    snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
-    rendered: list[str] = []
-    try:
-        from agent.display import render_edit_diff_with_delta
-        render_edit_diff_with_delta(tool_name, result, function_args=args if isinstance(args, dict) else {},
-                                    snapshot=snapshot, print_fn=rendered.append)
-    except Exception:  # health: allow BLE001 -- display-only preview, as main's CLI _on_tool_complete
-        logger.debug("Edit diff preview failed for %s", tool_name, exc_info=True)
-        rendered = []
-    fields["inline_diff"] = "\n".join(rendered) if rendered else None
+    diffs = turn.__dict__.setdefault("_local_tool_diffs", {})
+    if key in diffs:
+        # prepare_fields already rendered it for the row; do not re-run the (popped) snapshot.
+        diff = diffs.pop(key)
+    else:
+        snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
+        diff = _render_edit_diff(tool_name, args, result, snapshot)
+    fields["inline_diff"] = diff
     from agent.terminal_image import tool_image_path
     fields["image_path"] = tool_image_path(tool_name, args, result, is_error=is_error)
     todo = todo_state(tool_name, result)

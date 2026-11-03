@@ -204,6 +204,10 @@ def publish_usage(turn, agent, *, record: bool = False) -> None:
             captured = execution_result.get()
             if captured is not None:
                 captured["session_usage"] = stats
+                # ADR-2 D1: message.complete's per-step usage (last response of the turn).
+                from agent.turn_usage import step_usage
+
+                captured["step_usage"] = step_usage(agent)
 
 
 _STORED_COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")

@@ -982,6 +982,13 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
     if _is_bot_mode_session(session):
         raw = _bot_mode_delivery_text(raw, successful=status == "complete")
     payload = {"text": raw, "usage": _get_usage(agent), "status": status}
+    # ADR-2 D1/D2: the last provider response's own usage plus requested/served model ids.
+    # `usage` above stays session-cumulative; absent step data is null, never the cumulative value.
+    from agent.turn_usage import step_usage
+
+    payload["step_usage"] = step_usage(agent)
+    payload["served_model"] = result.get("served_model")
+    payload["requested_model"] = result.get("requested_model")
     if receipt:
         payload["persisted_turn"] = receipt
     if last_reasoning:

@@ -39,6 +39,23 @@ export const adviserFromText = (content: string): { body: string; meta: AdviserM
   }
 }
 
+/** The adviser card metadata from the gateway's `details.notes` (ADR-10 D1). */
+export const adviserMetaFromNotes = (notes: readonly AdviserNote[]): AdviserMeta => {
+  const items = notes.map(note => {
+    const severity = note.severity ?? 'advisory'
+    const label = [severity, note.advisor].filter(Boolean).join(' · ')
+
+    return { label, severity, text: note.note ?? '' }
+  })
+  const top = items.reduce<(typeof items)[number] | undefined>(
+    (best, item) =>
+      !best || (ADVISER_SEVERITY_RANK[item.severity] ?? 0) > (ADVISER_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
+    undefined
+  )
+
+  return { items, label: top?.label ?? 'advisory', severity: top?.severity ?? 'advisory' }
+}
+
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
 export const userDisplay = (text: string) => {
@@ -70,7 +87,8 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       continue
     }
 
-    const { context, display_kind, name, role, row_id, text, timestamp } = row as TranscriptRow
+    const { context, custom_type, details, name, role, row_id, synthetic_kind, text, timestamp } =
+      row as TranscriptRow
 
     const createdAt =
       typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined
@@ -85,54 +103,41 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       continue
     }
 
-    // Display-only timeline events: render as dim ◈ markers instead of
-    // opaque user messages. Hidden compaction handoffs are skipped entirely.
-    if (display_kind === 'hidden') {
-      continue
-    }
+    // ADR-10 P5: custom blocks and the one synthetic row marker replace the retired
+    // display_kind. Timeline notices render as dim ◈ markers, not opaque user messages.
+    if (role === 'custom') {
+      const event = customEventText(custom_type, details)
+      if (event !== undefined) {
+        out.push({ kind: 'event', role: 'system', text: event })
+        pending = []
 
-    if (display_kind === 'model_switch') {
-      out.push({ kind: 'event', role: 'system', text: t('libText.messages.modelChanged') })
+        continue
+      }
+      if (custom_type === 'advisor') {
+        // Plugin guidance the model saw; never a human prompt. Details are canonical (D1);
+        // the text parse only recovers the body for an older gateway.
+        const parsed = adviserFromText(text)
+        const notes = Array.isArray(details?.notes) ? details.notes : undefined
+        const meta = notes ? adviserMetaFromNotes(notes) : parsed?.meta
+        out.push({
+          ...(meta ? { adviser: meta } : {}),
+          role: 'system',
+          text: parsed?.body ?? text,
+          ...(createdAt !== undefined && { createdAt })
+        })
+        pending = []
+
+        continue
+      }
+      // skill-prompt / todo-reminder / anything custom without a dedicated line: its text.
+      out.push({ role: 'user', text, ...(createdAt !== undefined && { createdAt }) })
       pending = []
 
       continue
     }
 
-    if (display_kind === 'auto_continue') {
+    if (synthetic_kind === 'auto_continue') {
       out.push({ kind: 'event', role: 'system', text: t('libText.messages.resumedInterruptedTurn') })
-      pending = []
-
-      continue
-    }
-
-    if (display_kind === 'personality_switch') {
-      out.push({ kind: 'event', role: 'system', text: t('libText.messages.personalityChanged') })
-      pending = []
-
-      continue
-    }
-
-    if (display_kind === 'async_delegation_complete' || display_kind === 'process_complete') {
-      const meta = (row as TranscriptRow).display_metadata
-      const count = meta && typeof meta.task_count === 'number' ? meta.task_count : undefined
-
-      const label =
-        display_kind === 'process_complete'
-          ? t('libText.messages.backgroundProcessFinished')
-          : count === undefined
-            ? t('libText.messages.backgroundAgentWorkFinished')
-            : t(
-                count === 1
-                  ? 'libText.messages.backgroundAgentsFinishedOne'
-                  : 'libText.messages.backgroundAgentsFinishedOther',
-                count
-              )
-
-      out.push({
-        kind: 'event',
-        role: 'system',
-        text: typeof meta?.display_text === 'string' ? meta.display_text : label
-      })
       pending = []
 
       continue
@@ -141,16 +146,6 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     if (role === 'assistant') {
       out.push({ role, text, ...(createdAt !== undefined && { createdAt }), ...(pending.length && { tools: pending }) })
       pending = []
-    } else if (display_kind === 'adviser') {
-      // Plugin guidance the model saw; a user-role row, but never a human prompt.
-      const parsed = adviserFromText(text)
-      out.push({
-        ...(parsed?.meta ? { adviser: parsed.meta } : {}),
-        role: 'system',
-        text: parsed?.body ?? text,
-        ...(createdAt !== undefined && { createdAt })
-      })
-      pending = []
     } else if (role === 'user' || role === 'system') {
       out.push({ role, text, ...(createdAt !== undefined && { createdAt }), ...storedRowId(role, row_id) })
       pending = []
@@ -158,6 +153,39 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
   }
 
   return out
+}
+
+/** One custom block's dim timeline line, or ``undefined`` when it renders as a message instead. */
+const customEventText = (customType: unknown, details: TranscriptRow['details']): string | undefined => {
+  const displayText = details && typeof details.display_text === 'string' ? details.display_text : undefined
+  const count = details && typeof details.task_count === 'number' ? details.task_count : undefined
+
+  if (customType === 'model-switch') {
+    return t('libText.messages.modelChanged')
+  }
+  if (customType === 'personality-switch') {
+    return t('libText.messages.personalityChanged')
+  }
+  if (customType === 'process-complete') {
+    return displayText ?? t('libText.messages.backgroundProcessFinished')
+  }
+  if (customType === 'async-delegation-complete') {
+    return (
+      displayText ??
+      (count === undefined
+        ? t('libText.messages.backgroundAgentWorkFinished')
+        : t(
+            count === 1
+              ? 'libText.messages.backgroundAgentsFinishedOne'
+              : 'libText.messages.backgroundAgentsFinishedOther',
+            count
+          ))
+    )
+  }
+  if (customType === 'internal-notification') {
+    return displayText
+  }
+  return undefined
 }
 
 export const fmtDuration = (ms: number) => {
@@ -169,13 +197,25 @@ export const fmtDuration = (ms: number) => {
   return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
+interface AdviserNote {
+  advisor?: string
+  note?: string
+  severity?: string
+}
+
 interface TranscriptRow {
   context?: string
-  display_kind?: string
-  display_metadata?: { task_count?: number; [key: string]: unknown }
+  custom_type?: string
+  details?: {
+    display_text?: string
+    notes?: AdviserNote[]
+    task_count?: number
+    [key: string]: unknown
+  }
   name?: string
   role?: string
   row_id?: number
+  synthetic_kind?: string
   text?: string
   timestamp?: number
 }

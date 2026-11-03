@@ -15,7 +15,7 @@ import { INTENT_FIELD } from "../../vendor/wire/src/index.ts";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
@@ -346,6 +346,18 @@ export class EventController {
 	}
 
 	#handleToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): void {
+		// ADR-2 D1: a tool-only response has no assistant block; count its step usage into the turn
+		// tally directly so "this turn" totals include every provider response.
+		if (event.stepUsage) {
+			this.#turnUsage.add(
+				{
+					role: "assistant",
+					usage: event.stepUsage,
+					stopReason: "toolUse"
+				} as AssistantMessage,
+				this.#turnStartedAt
+			)
+		}
 		this.#updateWorkingMessageFromIntent(event.intent);
 		const args = renderArgsWithIntent(event.args, event.intent);
 
@@ -360,7 +372,12 @@ export class EventController {
 			return;
 		}
 
-		if (event.toolName === "read" && readArgsCollapseIntoGroup(event.args)) {
+		// ADR-10 D8.2a: the wire name stays on the event; the render key only drives renderer choice
+		// and read-group behavior, while the card title keeps the real tool name.
+		const tool = this.ctx.session.getToolByName(event.toolName) as Parameters<typeof toolRenderName>[1];
+		const renderName = toolRenderName(event.toolName, tool);
+
+		if (renderName === "read" && readArgsCollapseIntoGroup(event.args)) {
 			// Consecutive reads collapse into one compact group instead of a stack of cards.
 			const assistant = this.ctx.streamingComponent ?? this.#lastAssistantComponent;
 			if (assistant) this.#readToolCallAssistant.set(event.toolCallId, assistant);
@@ -375,13 +392,13 @@ export class EventController {
 
 		this.#resetReadGroup();
 		const component = new ToolExecutionComponent(
-			event.toolName,
+			renderName,
 			args,
 			{
 				useBuiltInRenderer: this.ctx.session.hasBuiltInTool(event.toolName),
 				showImages: cfgTerminalShowImages.get(this.ctx.settings),
 			},
-			undefined,
+			tool,
 			this.ctx.ui,
 			this.ctx.sessionManager.getCwd(),
 			event.toolCallId,
@@ -408,7 +425,10 @@ export class EventController {
 			component.updateResult({ ...event.result, isError: event.isError === true }, false, event.toolCallId);
 			this.ctx.pendingTools.delete(event.toolCallId);
 		}
-		if (event.toolName === "read") this.#inlineReadToolImages(event.toolCallId, event.result);
+		const tool = this.ctx.session.getToolByName(event.toolName) as Parameters<typeof toolRenderName>[1];
+		if (toolRenderName(event.toolName, tool) === "read") {
+			this.#inlineReadToolImages(event.toolCallId, event.result);
+		}
 		this.#readToolCallAssistant.delete(event.toolCallId);
 
 		// The todo tool's completion carries the authoritative phase list (`details.phases`, built

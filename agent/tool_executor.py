@@ -44,7 +44,7 @@ from agent.inline_tool_executors import (
     emit_terminal_post_tool_call,
     tool_hook_ids,
 )
-from agent.message_metadata import stamp_data_use
+from agent.message_metadata import stamp_data_use, stamp_tool_result_metadata
 from agent.pause_gate import park as park_frozen
 from agent.session_persistence import sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
@@ -1115,6 +1115,9 @@ def _commit_tool_result(
             logging.debug("Tool result (%d chars): %s", len(_log_result), _log_result)
 
     agent._current_tool = None
+    # ADR-2 D11: any completed tool result after a reminder proves progress; both success and
+    # failure clear the latch so the next stop may remind again.
+    agent._todo_reminder_awaiting_progress = False
     _status_suffix = " (error)" if is_error else ""
     agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}")
 
@@ -1157,10 +1160,12 @@ def _commit_tool_result(
         try:
             display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
             metadata = prepare_metadata(tool_call_id, function_name, display_args, function_result)
-            if metadata:
-                tool_message["display_metadata"] = metadata
         except Exception as callback_error:
             logging.debug("Tool result metadata callback error: %s", callback_error)
+            metadata = None
+        # ADR-10 D5: the callback owns the preview (inline_diff); the executor owns the verdict.
+        # Merge, never replace: display_metadata is durable and other keys may already ride it.
+        stamp_tool_result_metadata(tool_message, metadata, is_error=is_error)
     stamp_data_use(tool_message, sorted(data_use))
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):

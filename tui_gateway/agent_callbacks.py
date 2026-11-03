@@ -197,30 +197,89 @@ def _agent_cbs(sid: str) -> dict:
 
 
 def _announce_plugin_row(sid: str, row: Any) -> None:
-    """Emit ``message.adviser`` for an injected adviser row, and for nothing else.
+    """Emit the live event for one plugin-injected row (adviser, todo reminder).
 
     ``plugin_message_callback`` also fires for a mid-turn steer delivered at a tool
     boundary; that row is the operator's words and already has a surface path, so
     it must not be redrawn as plugin advice.
     """
-    if not isinstance(row, dict) or str(row.get("display_kind") or "") != "adviser":
+    if not isinstance(row, dict):
         return
-    _emit("message.adviser", sid, _adviser_payload(row))
+    event = plugin_row_event(row)
+    if event is None:
+        return
+    name, payload = event
+    if name == "todo.reminder":
+        _emit("todo.reminder", sid, payload)
+    else:
+        _emit("message.adviser", sid, payload)
+
+
+def plugin_row_event(row: dict) -> tuple[str, dict] | None:
+    """`(event_name, payload)` for an injected custom row, or ``None``.
+
+    Both the sidecar and the canonical local viewer dispatch through this one helper so the
+    payload shapes cannot drift (ADR-10 D2/D3). ADR-10 P5: only ``custom_type`` selects the event;
+    the one legacy row still announced is the adviser steer (a model-facing user row).
+    """
+    kind = str(row.get("custom_type") or "")
+    if kind == "advisor" or row.get("display_kind") == "adviser":
+        return "message.adviser", _adviser_payload(row)
+    if kind == "todo-reminder" or row.get("display_kind") == "todo_reminder":
+        payload = _todo_reminder_payload(row)
+        return ("todo.reminder", payload) if payload is not None else None
+    return None
+
+
+def _todo_reminder_payload(row: dict) -> dict | None:
+    """ADR-10 D3: the durable reminder row as its event payload.
+
+    ``row_id`` is required: the row is persisted before the event, and a client uses it to
+    merge the live card into a snapshot that already carries the same row. The legacy metadata
+    fallback serves a Desktop/Ink session's raw reminder row.
+    """
+    from agent.custom_messages import custom_fields, todo_details
+
+    row_id = row.get("_row_id")
+    if not isinstance(row_id, int):
+        return None
+    fields = custom_fields(row)
+    details = fields.get("details")
+    if not isinstance(details, dict):
+        details = todo_details(row.get("display_metadata"))
+    if not isinstance(details, dict) or not isinstance(details.get("todos"), list):
+        return None
+    return {
+        "todos": details["todos"],
+        "attempt": int(details.get("attempt") or 0),
+        "max_attempts": int(details.get("max_attempts") or 0),
+        "row_id": row_id,
+    }
 
 
 def _adviser_payload(row: dict) -> dict:
-    """The event payload for one injected adviser row; the Desktop draws the card."""
+    """The event payload for one injected adviser row; the Desktop draws the card.
+
+    New rows carry structured ``details`` (ADR-10 D1); ``legacy_details`` only fills the live
+    adviser-steer marker row. ``row_id`` lets a client merge the live event into a snapshot that
+    already has the row.
+    """
+    from agent.custom_messages import custom_fields, legacy_details
     text = str(row.get("content") or "")
     label = "advisory"
     match = re.search(r"^- \[([^\]]+)\]", text, re.MULTILINE)
     if match:
         label = match.group(1).strip()
+    fields = custom_fields(row)
+    details = fields.get("details") or legacy_details(row, display_kind="adviser")
+    severity = details.get("severity") if isinstance(details, dict) else None
     return {
         "id": str(row.get("plugin_message_id") or ""),
         "text": text,
-        "severity": label.split(" · ")[0].strip() or "advisory",
+        "severity": str(severity or label.split(" · ")[0].strip() or "advisory"),
         "label": label,
-        "display_kind": "adviser",
+        "row_id": row.get("_row_id") if isinstance(row.get("_row_id"), int) else None,
+        "details": details,
     }
 
 

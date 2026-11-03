@@ -143,6 +143,23 @@ def _fold_moa_usage(agent, canonical_usage):
     return _moa_client, canonical_usage, _moa_ref_cost
 
 
+def step_usage(agent: Any) -> dict[str, Any] | None:
+    """ADR-2 D1: this provider response's own usage in the wire ``Usage`` shape.
+
+    ``_last_step_usage`` holds the token buckets of the last response that reported usage;
+    ``_last_step_cost_usd`` is priced separately after MoA folding. A response without usage
+    clears both, so a stale step never relabels the next one.
+    """
+    usage = getattr(agent, "_last_step_usage", None)
+    if not isinstance(usage, dict):
+        return None
+    payload = dict(usage)
+    cost = getattr(agent, "_last_step_cost_usd", None)
+    if isinstance(cost, (int, float)):
+        payload["cost_usd"] = float(cost)
+    return payload
+
+
 def record_response_usage(
     agent: Any, response: Any, *, messages: list[dict[str, Any]], api_call_count: int,
     api_duration: float, compression_attempts: int, max_compression_attempts: int,
@@ -192,6 +209,9 @@ def record_response_usage(
                 )
             except Exception as e:  # silent loss here undercounts analytics
                 logger.debug("Step ledger persistence failed (session=%s): %s", agent.session_id, e)
+        # ADR-2 D1: this step reported no usage; never let the previous step's numbers label it.
+        agent._last_step_usage = None
+        agent._last_step_cost_usd = None
         return ResponseUsageOutcome(compression_attempts=compression_attempts, rearmed=rearmed)
 
     canonical_usage = with_served_service_tier(
@@ -259,6 +279,21 @@ def record_response_usage(
 
     # Stash canonical usage for on_turn_complete(); keep the latest call's.
     agent._last_turn_usage = dict(usage_dict)
+    # ADR-2 D1: the same response in per-step ``Usage`` shape (``step_usage`` on
+    # tool.start/message.complete). Cost is filled after MoA folding below.
+    agent._last_step_usage = {
+        "model": str(getattr(agent, "model", "") or ""),
+        "input": usage_dict["input_tokens"],
+        "output": usage_dict["output_tokens"],
+        "reasoning": usage_dict["reasoning_tokens"],
+        "prompt": usage_dict["prompt_tokens"],
+        "completion": usage_dict["completion_tokens"],
+        "total": usage_dict["total_tokens"],
+        "calls": 1,
+        "cache_read": usage_dict["cache_read_tokens"],
+        "cache_write": usage_dict["cache_write_tokens"],
+    }
+    agent._last_step_cost_usd = None
     # The parent's CURRENT prompt size for headroom math (delegate summary budgets): the
     # aggregator's own prompt, never the MoA-folded total (advisor prompts are not in this context).
     agent._last_prompt_size_tokens = int(context_prompt_tokens or aggregator_usage.prompt_tokens or 0)
@@ -344,6 +379,7 @@ def record_response_usage(
         if _moa_cost is not None:
             agent.session_estimated_cost_usd += _moa_cost
             _cost_delta = (_cost_delta or 0.0) + _moa_cost
+    agent._last_step_cost_usd = _cost_delta
     agent.session_cost_status = cost_result.status
     agent.session_cost_source = cost_result.source
 

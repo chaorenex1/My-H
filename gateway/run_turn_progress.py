@@ -931,7 +931,14 @@ class GatewayTurnProgressMixin:
         if local_viewer_turn(self):
             from gateway import local_viewer_events
             local_viewer_events.note_tool_start(self, call_id, tool_name, args)
-        self._publish_execution("tool.start", _tool_lifecycle_payload(call_id, tool_name, args))
+        start_payload = _tool_lifecycle_payload(call_id, tool_name, args)
+        # ADR-2 D1: the provider response that requested this call carries its own usage.
+        from agent.turn_usage import step_usage
+
+        holder = getattr(self._ctx, "agent_holder", None)
+        if (step := step_usage(holder[0] if holder else None)) is not None:
+            start_payload["step_usage"] = step
+        self._publish_execution("tool.start", start_payload)
         self._publish_api_tool("tool.start", call_id, tool_name, args)
         if self._ctx._voice_ack_guild[0] is not None:
             self.voice_ack_callback(call_id, tool_name, args)

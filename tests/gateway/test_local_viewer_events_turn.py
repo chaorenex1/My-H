@@ -76,10 +76,67 @@ def test_turn_sinks_publish_and_restore_on_the_shared_agent():
     previous = local_viewer_events.wire(turn, agent)
     agent.tool_gen_callback('terminal')
     agent._print_fn('  ✓ [1/2]', 'done')
-    assert published == [('tool.generating', {'name': 'terminal'}),
-                         ('agent.print', {'text': '  ✓ [1/2] done'})]
+    # ADR-10 D7: the one-shot line also reaches the client as a deduped transcript notice.
+    assert published[:2] == [('tool.generating', {'name': 'terminal'}),
+                             ('agent.print', {'text': '  ✓ [1/2] done'})]
+    assert published[2][0] == 'transcript.notice'
+    assert {key: value for key, value in published[2][1].items() if key != 'id'} == {
+        'level': 'info', 'text': '  ✓ [1/2] done', 'source': 'agent'}
     local_viewer_events.restore(agent, previous)
     assert agent.tool_gen_callback is sentinel and agent._print_fn is None
+
+
+def test_tool_start_carries_the_requesting_steps_usage():
+    """ADR-2 D1: the response that requested a tool carries its own ``step_usage`` (not the
+    session-cumulative ``usage``), so the client can label that assistant segment."""
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    agent = SimpleNamespace(
+        _last_step_usage={'input': 10, 'output': 2, 'total': 12, 'cache_read': 7, 'cache_write': 1},
+        _last_step_cost_usd=0.25,
+    )
+    turn._ctx.agent_holder = [agent]
+
+    turn.combined_tool_start_callback('c1', 'read_file', {'path': 'x'})
+
+    start = next(payload for kind, payload in published if kind == 'tool.start')
+    assert start['step_usage'] == {'input': 10, 'output': 2, 'total': 12, 'cache_read': 7,
+                                   'cache_write': 1, 'cost_usd': 0.25}
+
+
+def test_tool_start_without_a_step_usage_omits_the_field():
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    turn._ctx.agent_holder = [SimpleNamespace(_last_step_usage=None)]
+
+    turn.combined_tool_start_callback('c1', 'read_file', {'path': 'x'})
+
+    start = next(payload for kind, payload in published if kind == 'tool.start')
+    assert 'step_usage' not in start
+
+
+def test_prepared_edit_diff_is_reused_by_the_completion_event(monkeypatch):
+    """ADR-10 D5: ``prepare_fields`` pops the before-state snapshot; ``complete_fields`` must reuse
+    its diff, or the live ``tool.complete`` event silently loses ``inline_diff``."""
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    calls = []
+
+    def fake_render(name, result, *, function_args, snapshot, print_fn):
+        calls.append(snapshot)
+        print_fn("+1 line")
+        return True
+
+    monkeypatch.setattr("agent.display.render_edit_diff_with_delta", fake_render)
+    turn._local_edit_snapshots = {"c1": {"before": "x"}}
+    metadata = local_viewer_events.prepare_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
+    assert metadata == {"tool_result_metadata": {"inline_diff": "+1 line"}}
+    assert turn._local_edit_snapshots == {}  # consumed exactly once
+    fields = local_viewer_events.complete_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
+    assert fields["inline_diff"] == "+1 line"
+    assert calls == [{"before": "x"}]  # the renderer never ran a second time
 
 
 def test_status_lines_the_agent_prints_reach_the_viewer():
@@ -91,7 +148,10 @@ def test_status_lines_the_agent_prints_reach_the_viewer():
     agent._print_fn = None
     local_viewer_events.wire(_turn(Platform.LOCAL, published), agent)
     agent._safe_print('🗜️ compacted')
-    assert published == [('agent.print', {'text': '🗜️ compacted'})]
+    assert published[0] == ('agent.print', {'text': '🗜️ compacted'})
+    assert published[1][0] == 'transcript.notice'
+    assert {key: value for key, value in published[1][1].items() if key != 'id'} == {
+        'level': 'info', 'text': '🗜️ compacted', 'source': 'agent'}
 
 
 @pytest.mark.parametrize('platform', [Platform.LOCAL, Platform.TELEGRAM])

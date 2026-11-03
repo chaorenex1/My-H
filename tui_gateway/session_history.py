@@ -6,7 +6,9 @@ from __future__ import annotations
 import re
 
 from .method_ctx import bind_module
+from agent.custom_messages import DISPLAY_KIND_TO_CUSTOM_TYPE
 from agent.prompt_builder import STEER_DISPLAY_KIND
+from tui_gateway.contracts.transcript_roles import TRANSCRIPT_ROLE_NAMES
 
 # Discord routing note (gateway/run_inbound.py::discord_triggering_note) persisted as user
 # ``content`` by gateways before the authored-text fix; presentation-only heal for those rows.
@@ -256,20 +258,9 @@ def _expand_skill_invocation_for_replay(text: str, task_id: str) -> str:
         return text
 
 
-# Opening of the crash-recovery note synthesized by _auto_continue_note; matched (not just built) for
-# rows persisted before display typing existed and for the messaging gateway's twin note.
+# Opening of the crash-recovery note synthesized by session_auto_continue._auto_continue_note.
+# ADR-10 P5 removed the read-time prefix sniff; the builder still shares this fixed opening.
 _AUTO_CONTINUE_NOTE_PREFIX = "[System note: Your previous turn was interrupted mid-run"
-
-
-def _legacy_display_kind(role: str, text: str) -> str | None:
-    """Display type of a synthetic row persisted untyped: new rows are typed at turn start (``persist_user_display_kind``);
-    this prefix sniff migrates rows already on disk (a turn killed mid-run never reached the stamp)."""
-    # Imported functions are not rebound onto server.py (method_ctx.bind_module): import here.
-    from agent.turn_failure_copy import untyped_failed_turn_display_kind
-
-    if failed_turn := untyped_failed_turn_display_kind(role, text):
-        return failed_turn
-    return "auto_continue" if role == "user" and text.lstrip().startswith(_AUTO_CONTINUE_NOTE_PREFIX) else None
 
 
 _HISTORY_ASSISTANT_DETAIL_KEYS = (
@@ -279,7 +270,94 @@ _HISTORY_ASSISTANT_DETAIL_KEYS = (
     "codex_reasoning_items",
     "codex_message_items",
 )
-_HISTORY_ROLES = frozenset({"user", "assistant", "tool", "system"})
+# ADR-10 D10: the wire role set is owned by the seat table; ``system`` stays as read compatibility.
+_HISTORY_ROLES = frozenset(TRANSCRIPT_ROLE_NAMES) | {"system"}
+
+
+def _marker_custom_type(m: dict) -> str | None:
+    """ADR-10 P5: the custom block a stored internal marker projects to, else ``None``.
+
+    Producers write ``role:"custom"`` rows; this map keeps older rows and the live marker rows
+    (adviser steer, delegation notices) renderable. The marker itself never reaches the wire.
+    """
+    kind = m.get("display_kind")
+    return DISPLAY_KIND_TO_CUSTOM_TYPE.get(kind) if isinstance(kind, str) else None
+
+
+# Internal markers that are NOT custom blocks: a synthetic user/assistant row a viewer must
+# recognise as "not a human turn" (the one remaining wire marker, ``synthetic_kind``).
+_SYNTHETIC_MARKERS = frozenset({"auto_continue", "failed_turn", STEER_DISPLAY_KIND})
+
+
+def _marker_details(m: dict) -> dict:
+    """D1's notification shape plus the renderer extras, read from the internal row once."""
+    kind = m.get("display_kind")
+    meta = m.get("display_metadata")
+    meta = meta if isinstance(meta, dict) else {}
+    level = meta.get("level")
+    details = {"level": level if level in {"warning", "error"} else "info",
+               "source": kind if isinstance(kind, str) else ""}
+    for key in ("display_text", "task_count", "notification_category"):
+        if meta.get(key) is not None:
+            details[key] = meta[key]
+    return details
+
+
+def _custom_message(m: dict, *, text: str) -> dict:
+    """ADR-10 P5: one custom row as the wire shape. Always ``role:"custom"``.
+
+    Legacy ``display_kind`` rows are normalised here (gateway-side, once) so clients never parse
+    text and never read a marker: adviser steer rows, older adviser/todo rows, and the
+    delegation/notice markers all arrive as ``custom_type`` + ``details``.
+    """
+    from agent.custom_messages import DISPLAY_ONLY_CUSTOM_TYPES, custom_fields, legacy_details
+
+    fields = custom_fields(m)
+    marker = m.get("display_kind") if isinstance(m.get("display_kind"), str) else None
+    custom_type = fields.get("custom_type") or DISPLAY_KIND_TO_CUSTOM_TYPE.get(marker)
+    legacy_role = fields.get("legacy_role") or m.get("role") or "user"
+    details = fields.get("details")
+    if details is None and marker:
+        # The legacy skill row's stored content is the expanded body; the wire text is the
+        # invocation (`/skill:name args`), so details must read the projected text.
+        details = legacy_details({**m, "content": text}, display_kind=marker)
+        if details is None:
+            details = _marker_details(m)
+    msg = {"text": text}
+    if isinstance(m.get("timestamp"), (int, float)) and m["timestamp"] > 0:
+        msg["timestamp"] = float(m["timestamp"])
+    if m.get("_row_id") is not None:
+        msg["row_id"] = m["_row_id"]
+    msg.update(role="custom", legacy_role=legacy_role)
+    if custom_type:
+        msg["custom_type"] = custom_type
+    msg["display"] = bool(fields.get("display", True))
+    msg["display_only"] = bool(fields.get("display_only", custom_type in DISPLAY_ONLY_CUSTOM_TYPES))
+    msg["attribution"] = fields.get("attribution") or ("user" if custom_type == "skill-prompt" else "agent")
+    if details is not None:
+        msg["details"] = details
+    return msg
+
+
+def _projects_custom(role: str, m: dict) -> bool:
+    """True for a custom row, or a stored internal marker that projects to a custom block."""
+    return role == "custom" or _marker_custom_type(m) is not None
+
+
+def _custom_row_text(role: str, text: str) -> str:
+    return (_skill_scaffold_projection(text) if role == "user" else "") or text
+
+
+def _tool_result_is_error(metadata: Any) -> bool | None:
+    """ADR-10 D5: the executor's verdict, read from the one durable copy (display metadata)."""
+    from agent.message_metadata import TOOL_RESULT_METADATA
+
+    if not isinstance(metadata, dict):
+        return None
+    tool_metadata = metadata.get(TOOL_RESULT_METADATA)
+    if not isinstance(tool_metadata, dict) or "is_error" not in tool_metadata:
+        return None
+    return bool(tool_metadata["is_error"])
 
 
 def _remember_tool_call_args(tool_calls: list, tool_call_args: dict) -> None:
@@ -294,9 +372,124 @@ def _remember_tool_call_args(tool_calls: list, tool_call_args: dict) -> None:
             tool_call_args[tc_id] = (fn["name"], args)
 
 
-def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: bool = True) -> list[dict]:
+def _compaction_summary_projection(m: dict, *, image_urls: bool) -> dict | None:
+    """ADR-10 D10: a STANDALONE compaction handoff as a ``compaction_summary`` row, else None.
+
+    A merged handoff keeps its recovered live content (today's projection); only a pure handoff
+    has no other display text, so only it becomes the summary block. This is the ADR-10 P2
+    ``partial`` shape: ADR-5 D1/D2 owns the durable ``display_metadata.compaction`` stamp
+    (tokens/method/boundary row) and the merged carrier's second entry. Until that lands the row
+    carries no counters and the client defaults ``tokensBefore`` to 0 (no badge).
+    """
+    from agent.context_compressor import ContextCompressor, is_compaction_summary_message
+
+    if not is_compaction_summary_message(m):
+        return None
+    if ContextCompressor.classify_summary_content(m.get("content")) != "standalone":
+        return None
+    text = ContextCompressor._strip_summary_prefix(
+        _coerce_message_text(m.get("content"), image_urls=image_urls))
+    if not text.strip():
+        return None
+    msg = {"role": "compaction_summary", "text": text}
+    metadata = m.get("display_metadata")
+    stamp = metadata.get("compaction") if isinstance(metadata, dict) else None
+    if isinstance(stamp, dict):
+        # ADR-5 D2: the summary row points back at the row it replaced; ADR-10 P5 moved the
+        # counters off the deleted ``display_metadata`` wire field onto ``details``.
+        msg["details"] = {"compaction": {**stamp, "boundary_row_id": m.get("_row_id")}}
+    ts = m.get("timestamp")
+    if isinstance(ts, (int, float)) and ts > 0:
+        msg["timestamp"] = float(ts)
+    if m.get("_row_id") is not None:
+        msg["row_id"] = m["_row_id"]
+    return msg
+
+
+def _display_row(m: dict, messages: list[dict], *, image_urls: bool, include_compaction: bool) -> dict | None:
+    """One stored row after the display projection.
+
+    ADR-10 D10's compaction gate runs first: a standalone handoff is appended as a
+    ``compaction_summary`` row and ``None`` means the row was already emitted.
+    """
+    if include_compaction:
+        summary = _compaction_summary_projection(m, image_urls=image_urls)
+        if summary is not None:
+            messages.append(summary)
+            return None
+    return project_compaction_message_for_display(m)
+
+
+def _tool_row_message(m: dict, tool_call_args: dict, include_tool_content: str) -> dict:
+    """ADR-10 D4/D5: one tool row with its call's name/args/labels and the requested content depth."""
+    tc_name, tc_args = tool_call_args.get(m.get("tool_call_id") or "", (None, None))
+    name = tc_name or m.get("tool_name") or "tool"
+    args = tc_args or {}
+    # `context` is an 80-char preview; ship args so a full-call renderer isn't truncated.
+    labels = _bridged_tool_labels(name, args)
+    if include_tool_content == "none":
+        # Today's compact projection: only edit cards carry the original result.
+        display_content = m.get("content") if name in {"write_file", "patch", "skill_manage"} else None
+    else:
+        from agent.tool_dispatch_helpers import display_tool_result_content
+        display_content = display_tool_result_content(
+            name, m.get("content"), images=include_tool_content == "full")
+    entry = {"role": "tool", "name": name, "context": _tool_ctx(name, args)}
+    if display_content is not None:
+        entry["content"] = display_content
+    for key in ("tool_call_id", "timestamp"):
+        if m.get(key) is not None:
+            entry[key] = m[key]
+    if m.get("_row_id") is not None:
+        entry["row_id"] = m["_row_id"]
+    if args:
+        entry["args"] = args
+    if labels:
+        entry["labels"] = labels
+    is_error = _tool_result_is_error(m.get("display_metadata"))
+    if is_error is not None:
+        entry["is_error"] = is_error
+    return entry
+
+
+def _stamp_row_identity(msg: dict, m: dict) -> dict:
+    """Copy the display timestamp and durable row id a stored row carries."""
+    ts = m.get("timestamp")
+    if isinstance(ts, (int, float)) and ts > 0:
+        msg["timestamp"] = float(ts)
+    if m.get("_row_id") is not None:
+        msg["row_id"] = m["_row_id"]
+    return msg
+
+
+def _skill_block(role: str, content_text: str, m: dict) -> dict | None:
+    """A slash-skill turn as its invocation block, else ``None`` (ADR-10 D1/P5).
+
+    The stored user row is the expanded body; the wire text is the invocation and the body rides
+    ``details.prompt`` so clients never parse text.
+    """
+    invocation = _skill_scaffold_projection(content_text) if role == "user" else ""
+    if not invocation:
+        return None
+    from agent.custom_messages import skill_details
+    return _stamp_row_identity(
+        {"role": "custom", "custom_type": "skill-prompt", "text": invocation,
+         "display": True, "display_only": False, "attribution": "user", "legacy_role": "user",
+         "details": skill_details(invocation, prompt=content_text)}, m)
+
+
+def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: bool = True,
+                         include_tool_content: str = "none",
+                         include_compaction: bool = False) -> list[dict]:
     """``image_urls=False`` is the ``inline_images=false`` projection (#116511): image parts render ``[image]``
-    so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment."""
+    so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment.
+
+    ADR-10 P5: the wire is always the custom shape — custom blocks carry ``custom_type``/``details``,
+    synthetic user/assistant rows carry ``synthetic_kind``, and ``display_kind``/``display_metadata``
+    never leave the gateway. ``include_tool_content`` (ADR-10 D4) is ``none`` (today's whitelist),
+    ``text`` or ``full``; ``include_compaction`` (ADR-10 D10) projects standalone compaction handoffs
+    as ``role:"compaction_summary"`` instead of hiding them.
+    """
     from agent.history_commentary import project_history_commentary
     from agent.message_metadata import withheld_prompt_text
 
@@ -305,7 +498,7 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
     for m in history:
         if not isinstance(m, dict):
             continue
-        m = project_compaction_message_for_display(m)
+        m = _display_row(m, messages, image_urls=image_urls, include_compaction=include_compaction)
         if m is None:
             continue
         role = m.get("role")
@@ -315,7 +508,8 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             _remember_tool_call_args(m["tool_calls"], tool_call_args)
         # display_kind="hidden": model-facing scaffolding the "[System:" sniff does not catch (a held
         # turn's commentary too: its tool rows still render, labelled from the calls read above).
-        if m.get("display_kind") == "hidden":
+        marker = m.get("display_kind") if isinstance(m.get("display_kind"), str) else None
+        if marker == "hidden":
             continue
         content_text = _user_image_display_text(m.get("content")) if role == "user" else None
         if content_text is None:
@@ -326,51 +520,46 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             content_text = _DISCORD_TRIGGERING_NOTE_RE.sub(r"\1", content_text)
             # A pre_llm_call veto stores a placeholder; the transcript shows what the user typed.
             content_text = withheld_prompt_text(m) or content_text
-        if role == "user" and m.get("display_kind") == STEER_DISPLAY_KIND:
+        if role == "user" and marker == STEER_DISPLAY_KIND:
             # Mid-turn /steer: show the user's own words, not the model-facing marker wrapper.
             from agent.conversation_compression import _extract_steer_text_from_message
             content_text = _extract_steer_text_from_message(m) or content_text
+        # ADR-10 P5: a custom row or a stored internal marker projects through the custom shape.
+        # auto_continue/failed_turn/steer keep their real role and only carry ``synthetic_kind``.
+        if _projects_custom(role, m):
+            messages.append(_custom_message(m, text=_custom_row_text(role, content_text)))
+            continue
         if role == "tool":
-            tc_name, tc_args = tool_call_args.get(m.get("tool_call_id") or "", (None, None))
-            name = tc_name or m.get("tool_name") or "tool"
-            args = tc_args or {}
-            # `context` is an 80-char preview; ship args so a full-call renderer isn't truncated.
-            labels = _bridged_tool_labels(name, args)
-            messages.append({"role": "tool", "name": name, "context": _tool_ctx(name, args),
-                             # Edit cards need the original result; other tool outputs
-                             # remain omitted from this compact display projection.
-                             **({"content": m.get("content")} if name in {"write_file", "patch", "skill_manage"} else {}),
-                             **{key: m[key] for key in ("tool_call_id", "timestamp", "display_metadata")
-                                if m.get(key) is not None},
-                             **({"args": args} if args else {}), **({"labels": labels} if labels else {})})
+            messages.append(_tool_row_message(m, tool_call_args, include_tool_content))
+            continue
+        # A user turn shows its skill invocation, never the expanded body (rewind re-sends by ordinal);
+        # the expanded prompt rides ``details.prompt`` so clients never parse text.
+        if (block := _skill_block(role, content_text, m)) is not None:
+            messages.append(block)
             continue
         # Assistant detail sidecars can carry the only visible reply or reasoning after resume/reload.
         has_assistant_detail = role == "assistant" and any(m.get(key) for key in _HISTORY_ASSISTANT_DETAIL_KEYS)
         if not content_text.strip() and not has_assistant_detail:
             continue
         msg = {"role": role, "text": content_text}
-        # Authoring time (Unix seconds) for display.timestamps; display-only.
-        # Display-only: never fed back into model context. See #41531.
-        ts = m.get("timestamp")
-        if isinstance(ts, (int, float)) and ts > 0:
-            msg["timestamp"] = float(ts)
-        # Durable row identity (_rows_to_conversation); reactions etc. address persisted messages by it.
-        if m.get("_row_id") is not None:
-            msg["row_id"] = m["_row_id"]
-        # A user turn shows its skill invocation, never the expanded body (rewind re-sends by ordinal).
-        invocation = _skill_scaffold_projection(content_text) if role == "user" else ""
-        if invocation:
-            msg.update(text=invocation, display_kind="skill_invocation")
+        # Authoring time + durable identity (display-only; never fed back into model context).
+        _stamp_row_identity(msg, m)
         if role == "assistant":
             msg.update((key, m[key]) for key in _HISTORY_ASSISTANT_DETAIL_KEYS if m.get(key) is not None)
-        # Display-only timeline metadata (model switches, delegation events).
-        display_kind = m.get("display_kind") or _legacy_display_kind(role, content_text)
-        if display_kind:
-            msg["display_kind"] = display_kind
-        if m.get("display_metadata"):
+        # Read by project_history_commentary's withheld gate; stripped from the wire below.
+        if role == "assistant" and m.get("display_metadata"):
             msg["display_metadata"] = m["display_metadata"]
+        if marker in _SYNTHETIC_MARKERS:
+            msg["synthetic_kind"] = marker
+        if marker == STEER_DISPLAY_KIND:
+            msg["live_steered"] = True
         messages.append(msg)
-    return project_history_commentary(messages, home=profile_home)
+    projected = project_history_commentary(messages, home=profile_home)
+    # ADR-10 P5: internal display bookkeeping must never reach a client.
+    for message in projected:
+        message.pop("display_kind", None)
+        message.pop("display_metadata", None)
+    return projected
 
 
 def _coerce_seed_history(value: Any) -> list[dict]:

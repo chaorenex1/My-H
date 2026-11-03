@@ -1,11 +1,23 @@
 import type { AgentMessage } from "../../vendor/agent/src/index.ts";
+import type { CustomMessage } from "../../vendor/agent/src/compaction/messages.ts";
 import type { AssistantMessage, ImageContent } from "../../vendor/ai/src/index.ts";
 import type { Component } from "@oh-my-pi/pi-tui";
+import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
+import { BranchSummaryMessageComponent, CompactionSummaryMessageComponent } from "@oh-my-pi/pi-tui/chat/compaction-summary-message";
+import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
+import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
+import type { AdvisorMessageDetails, SkillPromptDetails } from "@oh-my-pi/pi-tui/chat/messages";
+import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
 import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
+import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
+import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
+import { buildFileMentionBlock } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import type { TodoItem } from "@oh-my-pi/pi-tui/tools/todo";
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import { TranscriptNotice } from "@oh-my-pi/pi-tui/chrome/transcript-notice";
@@ -17,11 +29,13 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { InternalUrlRouter } from "../../internal-urls";
 import type { InteractiveModeContext, RenderSessionContextOptions, ShowStatusOptions } from "../../modes/types";
+import { isRecord } from "../../vendor/utils/src/index.ts";
 import {
 	cfgComposerRecallClearedDrafts,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
+	cfgTerminalShowImages,
 } from "../settings";
 
 /** What `addMessageToChat` needs beyond the message itself. */
@@ -30,6 +44,8 @@ export type AddMessageOptions = {
 	imageLinks?: readonly (string | undefined)[];
 	/** Re-attach the component a previous render built for this message instead of a fresh one. */
 	reuseSettledComponent?: boolean;
+	/** Tool calls whose live component remains the sole render owner across a rebuild (#6516). */
+	preservedLiveToolCallIds?: ReadonlySet<string>;
 };
 
 /** What a transcript rebuild needs; the message list itself comes from the session ledger. */
@@ -129,60 +145,202 @@ export class UiHelpers {
 	/** Append one message's transcript block; returns the components it added. */
 	addMessageToChat(message: AgentMessage, options?: AddMessageOptions): Component[] {
 		switch (message.role) {
+			case "hookMessage":
+			case "custom":
+				return this.#customBlock(message);
+			case "compactionSummary": {
+				const component = new CompactionSummaryMessageComponent(message);
+				component.setExpanded(this.ctx.toolOutputExpanded);
+				return [this.#child(component)];
+			}
+			case "branchSummary": {
+				const component = new BranchSummaryMessageComponent(message);
+				component.setExpanded(this.ctx.toolOutputExpanded);
+				return [this.#child(component)];
+			}
+			case "toolResult":
+				return this.#toolBlock(message, options);
 			case "user":
-			case "developer": {
-				const text = textContent(message.content);
-				if (!text) return [];
-				const cached = options?.reuseSettledComponent
-					? this.ctx.transcriptMessageComponents.get(message)
-					: undefined;
-				let component: UserMessageComponent;
-				if (cached instanceof UserMessageComponent) {
-					component = cached;
-				} else {
-					const images = imageContent(message.content);
-					component = new UserMessageComponent(text, {
-						synthetic: message.role === "developer" ? true : (message.synthetic ?? false),
-						imageLinks: options?.imageLinks ?? imageLinksForMessage(images),
-						images,
-						liveSteered: message.role === "user" && message.liveSteered === true,
-						timestamp: message.timestamp,
-					});
-					this.ctx.transcriptMessageComponents.set(message, component);
-				}
-				this.ctx.chatContainer.addChild(component);
-				return [component];
+			case "developer":
+				return this.#userBlock(message, options);
+			case "bashExecution": {
+				const component = new BashExecutionComponent(
+					message.command,
+					this.ctx.ui,
+					message.excludeFromContext ?? false
+				);
+				component.appendOutput(message.output);
+				component.setComplete(message.exitCode, message.cancelled);
+				return [this.#child(component)];
 			}
-			case "assistant": {
-				const cached = options?.reuseSettledComponent
-					? this.ctx.transcriptMessageComponents.get(message)
-					: undefined;
-				const component =
-					cached instanceof AssistantMessageComponent
-						? cached
-						: new AssistantMessageComponent(
-								message,
-								this.ctx.hideThinkingBlock,
-								() => this.ctx.ui.requestRender(),
-								[],
-								this.ctx.ui.imageBudget,
-								this.ctx.proseOnlyThinking,
-								EMPTY_LINK_TARGETS,
-								this.ctx.expandThinkingBlocks,
-							);
-				if (cached !== component) {
-					component.setExpanded(this.ctx.toolOutputExpanded);
-					component.setToolResultImagesVisible(!this.ctx.hideToolActivity);
-					this.ctx.transcriptMessageComponents.set(message, component);
-				}
-				this.ctx.chatContainer.addChild(component);
-				return [component];
+			case "pythonExecution": {
+				const component = new EvalExecutionComponent(
+					message.code,
+					this.ctx.ui,
+					message.excludeFromContext ?? false
+				);
+				component.appendOutput(message.output);
+				component.setComplete(message.exitCode, message.cancelled);
+				return [this.#child(component)];
 			}
+			case "fileMention": {
+				const block = buildFileMentionBlock(message.files, 1);
+				return block.children.length === 0 ? [] : [this.#child(block)];
+			}
+			case "assistant":
+				return this.#assistantBlock(message, options);
 			default:
-				// Tool results ride the tool cards the event controller owns; a row whose call
-				// is not in this window (a resumed transcript) has no block to settle.
-				return [];
+				// ADR-10 D10: every AgentMessage role is handled above; a new one fails typecheck.
+				return message satisfies never;
 		}
+	}
+
+	#child<T extends Component>(component: T): T {
+		this.ctx.chatContainer.addChild(component);
+		return component;
+	}
+
+	/** ADR-10 D8.2: custom/hook blocks select their omp renderer from `customType` + `details`. */
+	#customBlock(message: CustomMessage<unknown> | Extract<AgentMessage, { role: "hookMessage" }>): Component[] {
+		if (!message.display) return [];
+		const custom = message as CustomMessage<unknown>;
+		const generic = (): Component[] => {
+			const component = new CustomMessageComponent(custom);
+			component.setExpanded(this.ctx.toolOutputExpanded);
+			return [this.#child(component)];
+		};
+		switch (custom.customType) {
+			case "advisor": {
+				const details = custom.details as AdvisorMessageDetails | undefined;
+				if (!details || !Array.isArray(details.notes)) return generic();
+				return [
+					this.#child(
+						createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme)
+					)
+				];
+			}
+			case "skill-prompt": {
+				if (!custom.details) return generic();
+				const skill = new SkillMessageComponent(custom as CustomMessage<SkillPromptDetails>);
+				skill.setExpanded(this.ctx.toolOutputExpanded);
+				return [this.#child(skill)];
+			}
+			case "todo-reminder": {
+				const details = custom.details as
+					| { todos: TodoItem[]; attempt: number; maxAttempts: number }
+					| undefined;
+				if (!details || !Array.isArray(details.todos)) return generic();
+				const reminder = new TodoReminderComponent(details.todos, details.attempt, details.maxAttempts);
+				reminder.setToolActivityVisible(!this.ctx.hideToolActivity);
+				return [this.#child(reminder)];
+			}
+			case "gateway-notice":
+			case "model-switch":
+			case "personality-switch":
+			case "process-complete":
+			case "async-delegation-complete":
+			case "internal-notification":
+				return [this.#child(this.#noticeBlock(custom))];
+			default:
+				return generic();
+		}
+	}
+
+	#noticeBlock(custom: CustomMessage<unknown>): Component {
+		const details = custom.details as { level?: string; source?: string } | undefined;
+		const text = textContent(custom.content);
+		return details?.level === "error"
+			? TranscriptNotice.line("error", text)
+			: details?.level === "warning"
+				? TranscriptNotice.line("warning", text)
+				: new StatusNotice(text, {
+						toast: false,
+						styleFn: (value: string) => theme.fg("dim", value)
+					});
+	}
+
+	#toolBlock(
+		message: Extract<AgentMessage, { role: "toolResult" }>,
+		options?: AddMessageOptions
+	): Component[] {
+		// A background/read-group component still live in `pendingTools` owns this row; replaying
+		// it here would paint a second card (#6516).
+		if (options?.preservedLiveToolCallIds?.has(message.toolCallId)) return [];
+		const details = isRecord(message.details) ? message.details : undefined;
+		const args = isRecord(details?.args) ? details.args : {};
+		// ADR-10 D8.2a: the wire name stays on the message; the render key only picks the renderer.
+		const tool = this.ctx.session.getToolByName(message.toolName) as Parameters<typeof toolRenderName>[1];
+		const component = new ToolExecutionComponent(
+			toolRenderName(message.toolName, tool),
+			args,
+			{
+				useBuiltInRenderer: this.ctx.session.hasBuiltInTool(message.toolName),
+				showImages: cfgTerminalShowImages.get(this.ctx.settings)
+			},
+			tool,
+			this.ctx.ui,
+			this.ctx.sessionManager.getCwd(),
+			message.toolCallId
+		);
+		component.setArgsComplete(message.toolCallId);
+		component.setExecutionStarted(message.toolCallId);
+		component.setExpanded(this.ctx.toolOutputExpanded);
+		component.updateResult(
+			{ content: message.content, ...(details ? { details } : {}), isError: message.isError },
+			false,
+			message.toolCallId
+		);
+		return [this.#child(component)];
+	}
+
+	#userBlock(
+		message: Extract<AgentMessage, { role: "user" | "developer" }>,
+		options?: AddMessageOptions
+	): Component[] {
+		const text = textContent(message.content);
+		if (!text) return [];
+		const cached = options?.reuseSettledComponent
+			? this.ctx.transcriptMessageComponents.get(message)
+			: undefined;
+		if (cached instanceof UserMessageComponent) return [this.#child(cached)];
+		const images = imageContent(message.content);
+		const component = new UserMessageComponent(text, {
+			synthetic: message.role === "developer" ? true : (message.synthetic ?? false),
+			imageLinks: options?.imageLinks ?? imageLinksForMessage(images),
+			images,
+			liveSteered: message.role === "user" && message.liveSteered === true,
+			timestamp: message.timestamp
+		});
+		this.ctx.transcriptMessageComponents.set(message, component);
+		return [this.#child(component)];
+	}
+
+	#assistantBlock(
+		message: Extract<AgentMessage, { role: "assistant" }>,
+		options?: AddMessageOptions
+	): Component[] {
+		const cached = options?.reuseSettledComponent
+			? this.ctx.transcriptMessageComponents.get(message)
+			: undefined;
+		const component =
+			cached instanceof AssistantMessageComponent
+				? cached
+				: new AssistantMessageComponent(
+						message,
+						this.ctx.hideThinkingBlock,
+						() => this.ctx.ui.requestRender(),
+						[],
+						this.ctx.ui.imageBudget,
+						this.ctx.proseOnlyThinking,
+						EMPTY_LINK_TARGETS,
+						this.ctx.expandThinkingBlocks
+					);
+		if (cached !== component) {
+			component.setExpanded(this.ctx.toolOutputExpanded);
+			component.setToolResultImagesVisible(!this.ctx.hideToolActivity);
+			this.ctx.transcriptMessageComponents.set(message, component);
+		}
+		return [this.#child(component)];
 	}
 
 	/**
@@ -204,6 +362,7 @@ export class UiHelpers {
 			if (message.role === "assistant") {
 				const [component] = this.addMessageToChat(message, {
 					reuseSettledComponent: options.reuseSettledComponents,
+					preservedLiveToolCallIds: options.preservedLiveToolCallIds,
 				});
 				if (component instanceof AssistantMessageComponent) this.#markAssistantTurn(component, message);
 				const usage = message.usage;
@@ -224,7 +383,10 @@ export class UiHelpers {
 			}
 			// Only a genuine operator turn anchors the elapsed-time delta.
 			if (message.role === "user" && message.attribution !== "agent") turnStartedAt = message.timestamp;
-			this.addMessageToChat(message, { reuseSettledComponent: options.reuseSettledComponents });
+			this.addMessageToChat(message, {
+				reuseSettledComponent: options.reuseSettledComponents,
+				preservedLiveToolCallIds: options.preservedLiveToolCallIds,
+			});
 		}
 	}
 

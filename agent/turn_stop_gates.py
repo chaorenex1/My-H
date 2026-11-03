@@ -1,9 +1,10 @@
 """Text-response stop gates for the conversation turn loop.
 
-When the model stops with a text answer, four gates may instead append the answer as an
+When the model stops with a text answer, these gates may instead append the answer as an
 interim row plus a user-role nudge and continue the turn: late language-server verdicts on this
 turn's edits (a durable row, see ``_late_lsp_verdicts``), verify-on-stop (#65919),
-the ``pre_verify`` plugin hook after code edits, and the kanban worker terminal-tool guard.
+the ``pre_verify`` plugin hook after code edits, the kanban worker terminal-tool guard, and
+the todo reminder for an unfinished plan (ADR-2 D11).
 Each keeps the candidate answer as a budget-exhaustion fallback
 (``pending_verification_response``) and clears ``final_response`` so the finalizer can tell
 this gate from error exits (#61631). Nothing here imports ``agent.conversation_loop`` at
@@ -195,7 +196,7 @@ def apply_stop_gates(
     conversation_history: Any, pending_verification_response: Any,
     pending_verification_response_previewed: Any,
 ) -> StopGateVerdict:
-    """Run verify-on-stop → pre_verify hook → kanban stop guard, in that order. Nudges
+    """Run verify-on-stop → pre_verify hook → kanban → todo reminder, in that order. Nudges
     are user-role rows appended only after the assistant answer row, so role alternation
     holds. Hook lookups are imported lazily from their origin modules (tests patch them
     there)."""
@@ -329,6 +330,17 @@ def apply_stop_gates(
             "(kanban_complete/kanban_request_review/kanban_block) — nudging to finish"
         )
         return verdict
+
+    # ADR-2 D11 / ADR-10 D3: the last gate. An unfinished todo plan on an interactive surface
+    # appends one durable reminder row (already-persisted rows keep role alternation intact).
+    from agent.todo_reminder import stop_gate_reminder
+
+    _todo_verdict = stop_gate_reminder(
+        agent, final_msg, final_response=final_response, messages=messages,
+        conversation_history=conversation_history,
+    )
+    if _todo_verdict is not None:
+        return _todo_verdict
     return StopGateVerdict(
         continue_turn=False, final_response=final_response,
         pending_verification_response=pending_verification_response,

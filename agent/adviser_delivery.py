@@ -125,16 +125,32 @@ def append_card(agent: Any, text: str, *, severity: Optional[str] = None,
         messages = getattr(agent, "messages", None)
     if not isinstance(messages, list):
         return False
+    from agent.custom_messages import adviser_notes
     from agent.plugin_events import notify_plugin_message
     from agent.prompt_builder import advisory_user_row
+    from gateway.session_policy import active_policy
 
-    row = advisory_user_row(text)
-    payload = dict(metadata or {})
-    if severity:
-        payload.setdefault("severity", severity)
-    if payload:
-        row["display_metadata"] = payload
-    row["plugin_message_id"] = row.get("plugin_message_id") or uuid.uuid4().hex
+    # ADR-10 P5: the session flag decides the durable shape. omp-ui sessions (custom_messages)
+    # get the custom row; Desktop/Ink sessions keep the raw user row their hydrators read.
+    if getattr(active_policy(), "custom_messages", False):
+        details = adviser_notes(text, severity=severity)
+        if severity:
+            details["severity"] = severity
+        row = {"role": "custom", "content": str(text), "custom_type": "advisor",
+               "display": True, "display_only": False, "details": details,
+               "attribution": "agent", "legacy_role": "user",
+               "plugin_message_id": uuid.uuid4().hex}
+        payload = dict(metadata or {})
+        if payload:
+            row["display_metadata"] = payload
+    else:
+        row = advisory_user_row(text)
+        payload = dict(metadata or {})
+        if severity:
+            payload.setdefault("severity", severity)
+        if payload:
+            row["display_metadata"] = payload
+        row["plugin_message_id"] = row.get("plugin_message_id") or uuid.uuid4().hex
     messages.append(row)
     try:
         agent._flush_messages_to_session_db(messages, None)

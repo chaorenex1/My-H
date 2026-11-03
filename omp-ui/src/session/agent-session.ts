@@ -35,6 +35,31 @@ import type { SessionManager } from "./session-manager";
 
 export * from "./agent-session-types";
 
+/** One `tools.list` row's tool entry: the authority sends names, tolerate an object spelling. */
+function toolNameOf(tool: unknown): string | undefined {
+	if (typeof tool === "string") return tool;
+	if (typeof tool === "object" && tool !== null && "name" in tool && typeof tool.name === "string") {
+		return tool.name;
+	}
+	return undefined;
+}
+
+/**
+ * ADR-10 D8.2a: the renderer projection of one authority tool. `name` is the render key
+ * (`read_file` → `read`) used for renderer selection and read-group behavior; `label` is the
+ * authority's wire name shown in the card title.
+ */
+export interface GatewayToolProjection {
+	name: string;
+	label: string;
+}
+
+/** Hermes wire names that render with an omp built-in card under a different render key. */
+const TOOL_RENDER_NAMES: Readonly<Record<string, string>> = {
+	read_file: "read",
+	todo_list: "todo"
+};
+
 /** Token/cost snapshot the status line and `/session` render. */
 interface UsageSnapshot {
 	tokens: number;
@@ -95,6 +120,14 @@ export class AgentSession {
 	}
 
 	/**
+	 * Await the authority's tool list. The first transcript render picks its tool renderers from
+	 * it (ADR-10 D8.2a), so boot and session switches await this before painting cards.
+	 */
+	refreshTools(): Promise<void> {
+		return this.#refreshTools();
+	}
+
+	/**
 	 * Switch the viewed session: pair a new gateway connection resumed on `sessionId`, retire the
 	 * current one, and re-seed the transcript from the new snapshot.
 	 */
@@ -120,6 +153,8 @@ export class AgentSession {
 		const previous = current;
 		this.#bindGateway(next);
 		previous.close("session switched");
+		// The new authority may expose a different toolset; resolve it before the shell repaints.
+		await this.refreshTools();
 		try {
 			installGatewayModelCatalog(this.modelRegistry as never, await next.modelOptions());
 		} catch {
@@ -151,6 +186,10 @@ export class AgentSession {
 				this.#applyGatewayModel();
 			})
 			.catch(() => {});
+		// A switched session may expose a different toolset: refetch for the new authority. Until it
+		// lands, an unknown tool renders the generic card rather than a stale session's renderer.
+		this.#tools = new Set();
+		this.#toolRefresh = undefined;
 		void this.#refreshTools();
 	}
 
@@ -183,19 +222,22 @@ export class AgentSession {
 		};
 	}
 
-	/** Lazily fetch the authority's tool names (`tools.list`) for the `/tools` report. */
+	/** Lazily fetch the authority's tool names (`tools.list`) for the `/tools` report and renderer choice. */
 	#refreshTools(): Promise<void> {
 		this.#toolRefresh ??= (async () => {
 			const gateway = this.#gateway;
 			if (!gateway) return;
 			try {
 				const result = (await gateway.client.request("tools.list", {})) as unknown as {
-					tools?: Array<{ name?: unknown }> | null;
+					toolsets?: Array<{ tools?: unknown[] }> | null;
 				};
-				const names = (result.tools ?? [])
-					.map(tool => (typeof tool.name === "string" ? tool.name : undefined))
+				// The authority lists tools per toolset (`resolved_tools`), not as a flat `tools` array.
+				const names = (result.toolsets ?? [])
+					.flatMap(toolset => (Array.isArray(toolset?.tools) ? toolset.tools : []))
+					.map(toolNameOf)
 					.filter((name): name is string => name !== undefined);
-				this.#tools = new Set(names);
+				// A switch may have replaced this gateway while the request was in flight.
+				if (this.#gateway === gateway) this.#tools = new Set(names);
 			} catch {
 				// The report degrades to the tool names carried by the transcript.
 			}
@@ -248,7 +290,15 @@ export class AgentSession {
 				this.#emitRunState("idle");
 				break;
 			case "message_end":
-				if (event.message.role === "assistant") this.sessionManager.appendMessage(event.message);
+				// Assistant turns and injected custom cards belong to the replayable ledger; tool
+				// results are rendered from the gateway snapshot's own tool rows.
+				if (
+					event.message.role === "assistant" ||
+					event.message.role === "custom" ||
+					event.message.role === "hookMessage"
+				) {
+					this.sessionManager.appendMessage(event.message);
+				}
 				break;
 			case "model_changed":
 				this.#applyGatewayModel();
@@ -588,8 +638,13 @@ export class AgentSession {
 		return [...this.#tools];
 	}
 
-	getToolByName(name: string): unknown {
-		return this.#tools.has(name) ? { name } : undefined;
+	/**
+	 * ADR-10 D8.2a: the renderer projection for one wire tool, or `undefined` when the authority
+	 * does not list it (the caller falls back to the wire name and the generic card — never guesses).
+	 */
+	getToolByName(name: string): GatewayToolProjection | undefined {
+		if (!this.#tools.has(name)) return undefined;
+		return { name: TOOL_RENDER_NAMES[name] ?? name, label: name };
 	}
 
 	hasBuiltInTool(name: string): boolean {

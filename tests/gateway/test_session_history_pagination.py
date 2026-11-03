@@ -1,7 +1,7 @@
 """``session.history`` paging: ``since`` / ``cursor`` / ``limit`` over the display projection.
 
 The full read keeps ``messages`` (the projected slice) and adds one ``HistoryEntry`` per projected
-message carrying a durable ``row_id`` (tool rows ride the message slice), plus ``leaf_id``,
+message carrying a durable ``row_id`` (tool rows included: ADR-10 D4), plus ``leaf_id``,
 ``next_cursor`` and ``total_messages``. ``cursor`` aliases ``since``; ``since`` wins when both are set.
 """
 import pytest
@@ -16,7 +16,7 @@ def _target(authority, ref):
 
 
 def _seed(db, sid):
-    """One turn with a tool exchange: five rows, four carrying a durable display id."""
+    """One turn with a tool exchange: five rows, each carrying a durable display id."""
     return (db.append_message(sid, 'user', 'first question'),
             db.append_message(sid, 'assistant', 'first answer'),
             db.append_message(sid, 'tool', 'tool output', tool_name='read', tool_call_id='call-1'),
@@ -39,13 +39,20 @@ async def test_session_history_entries_cover_every_row_with_a_durable_id(tmp_pat
     try:
         ids = _seed(db, _target(authority, ref))
         result = await _history(owner, ref.session_id)
-        assert [entry['entry_id'] for entry in result['entries']] == [ids[0], ids[1], ids[3], ids[4]]
-        assert [entry['role'] for entry in result['entries']] == ['user', 'assistant', 'assistant', 'user']
+        assert [entry['entry_id'] for entry in result['entries']] == list(ids)
+        assert [entry['role'] for entry in result['entries']] == [
+            'user', 'assistant', 'tool', 'assistant', 'user']
         assert [entry['text'] for entry in result['entries']] == [
-            'first question', 'first answer', 'after the tool', 'last question']
+            'first question', 'first answer', None, 'after the tool', 'last question']
+        tool_entry = result['entries'][2]
+        assert tool_entry['name'] == 'read'
+        assert tool_entry['tool_call_id'] == 'call-1'
+        assert tool_entry['context'] == ''  # no args: the preview is empty, the key is still present
+        assert 'is_error' not in tool_entry  # no stored verdict: absent, never a guessed False
         assert all(isinstance(entry['timestamp'], float) and entry['timestamp'] > 0
                    for entry in result['entries'])
-        assert all(entry['display_kind'] is None for entry in result['entries'])
+        assert all('display_kind' not in entry and 'synthetic_kind' not in entry
+                   for entry in result['entries'])
         assert result['leaf_id'] == ids[4]
         assert result['total_messages'] == result['count'] == len(result['messages']) == 5
         assert result['next_cursor'] is None
@@ -63,17 +70,18 @@ async def test_session_history_pages_by_row_id_and_reports_the_next_cursor(tmp_p
         ids = _seed(db, _target(authority, ref))
         first = await _history(owner, ref.session_id, limit=2)
         assert [entry['entry_id'] for entry in first['entries']] == [ids[0], ids[1]]
-        # The page's messages end before the next entry, so the turn's tool row travels with it.
-        assert [message['role'] for message in first['messages']] == ['user', 'assistant', 'tool']
+        # Entries are rows now, so a page's messages stop at the next entry: the tool result
+        # (itself an entry) opens the next page instead of riding along with the turn.
+        assert [message['role'] for message in first['messages']] == ['user', 'assistant']
         assert first['next_cursor'] == ids[1] and first['leaf_id'] == ids[4]
-        assert first['total_messages'] == 5 and first['count'] == 3
+        assert first['total_messages'] == 5 and first['count'] == 2
 
         second = await _history(owner, ref.session_id, since=first['next_cursor'])
-        assert [entry['entry_id'] for entry in second['entries']] == [ids[3], ids[4]]
-        assert [message['role'] for message in second['messages']] == ['assistant', 'user']
+        assert [entry['entry_id'] for entry in second['entries']] == [ids[2], ids[3], ids[4]]
+        assert [message['role'] for message in second['messages']] == ['tool', 'assistant', 'user']
         assert 'last question' in [message.get('text') for message in second['messages']]
         assert second['next_cursor'] is None
-        assert second['count'] == len(second['messages']) == 2
+        assert second['count'] == len(second['messages']) == 3
     finally:
         await owner.close()
         store.close_all_db_handles()
@@ -91,7 +99,7 @@ async def test_session_history_cursor_aliases_since_and_since_wins(tmp_path, mon
         assert alias['next_cursor'] == ids[1]
 
         both = await _history(owner, ref.session_id, since=ids[1], cursor=ids[0])
-        assert [entry['entry_id'] for entry in both['entries']] == [ids[3], ids[4]]
+        assert [entry['entry_id'] for entry in both['entries']] == [ids[2], ids[3], ids[4]]
     finally:
         await owner.close()
         store.close_all_db_handles()
@@ -109,7 +117,30 @@ async def test_session_history_refuses_a_non_positive_limit(tmp_path, monkeypatc
                                           'params': {'session_id': ref.session_id, 'limit': limit}})
             assert reply['error']['data'] == {'reason': 'invalid_params', 'field': 'limit'}, reply
         clamped = await _history(owner, ref.session_id, limit=501)
-        assert len(clamped['entries']) == 4 and clamped['next_cursor'] is None
+        assert len(clamped['entries']) == 5 and clamped['next_cursor'] is None
+    finally:
+        await owner.close()
+        store.close_all_db_handles()
+
+
+@pytest.mark.asyncio
+async def test_session_history_opt_ins_add_tool_content_and_outline(tmp_path, monkeypatch):
+    async def handle(event):
+        return 'ok'
+    store, db, authority, owner, ref = _owner(tmp_path, monkeypatch, handle)
+    try:
+        ids = _seed(db, _target(authority, ref))
+        result = await _history(owner, ref.session_id, include_tool_content='full',
+                                include_outline=True)
+        tool = result['entries'][2]
+        assert tool['content'] == 'tool output'
+        assert [row['row_id'] for row in result['outline']] == list(ids)
+        assert [row['summary'] for row in result['outline']][:2] == ['first question', 'first answer']
+        assert result['outline'][2]['summary'] == 'read'
+        # Without the opt-in neither key appears.
+        plain = await _history(owner, ref.session_id)
+        assert 'outline' not in plain
+        assert 'content' not in plain['entries'][2]
     finally:
         await owner.close()
         store.close_all_db_handles()

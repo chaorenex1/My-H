@@ -9,6 +9,14 @@ from pydantic import Field
 from .base import JsonValue, Params, Payload, Result, WireEnum
 
 
+class CanonicalClientIdentity(Params):
+    """A client naming itself: ``name`` matches ``[a-z0-9][a-z0-9._-]{0,63}``, ``version`` is 1-64
+    printable ASCII without spaces. Attribution only (owners advertising ``session-client-v1``)."""
+
+    name: str
+    version: str | None = None
+
+
 class OpenModel(Result):
     """A result/payload row whose known fields are typed but which the producer may extend
     (the closed set is owned elsewhere: hermes_state rows, provider inventories)."""
@@ -165,24 +173,53 @@ class ToolLabel(Payload):
     preview: str = ""
 
 
-class TranscriptMessage(OpenModel):
-    """One transcript row as the gateway PROJECTS it for renderers (``session_history._project_history``):
-    ``text``, display-only ``timestamp`` / ``display_kind`` / ``display_metadata``, the durable ``row_id``
-    rewind targets, and for tool rows raw ``content``, ``tool_call_id``, ``name``, ``context`` and ``args``.
-    Assistant detail sidecars (``reasoning``, …) ride as extra keys."""
+class TranscriptRole(WireEnum):
+    """One transcript row's renderer role. The eleven members are the client's exhaustive set
+    (``tui_gateway/contracts/transcript_roles.py::TRANSCRIPT_ROLES``); ``system`` is a read-only
+    legacy member so today's projected payloads keep validating. Adapters drop ``system``."""
 
-    role: str
+    user = "user"
+    developer = "developer"
+    assistant = "assistant"
+    tool = "tool"
+    custom = "custom"
+    hook_message = "hook_message"
+    bash_execution = "bash_execution"
+    python_execution = "python_execution"
+    file_mention = "file_mention"
+    branch_summary = "branch_summary"
+    compaction_summary = "compaction_summary"
+    system = "system"
+
+
+class TranscriptMessage(OpenModel):
+    """One transcript row as the gateway PROJECTS it for renderers (``session_history._history_to_messages``):
+    ``text``, the durable ``row_id`` rewind targets, and for tool rows raw ``content``, ``tool_call_id``,
+    ``name``, ``context`` and ``args``. Custom blocks carry ``custom_type`` + ``details``; a synthetic
+    user/assistant row (auto-continue, failed turn, steer) carries ``synthetic_kind`` and never a
+    custom block. Assistant detail sidecars (``reasoning``, …) ride as extra keys."""
+
+    role: TranscriptRole
     text: str | None = None
     content: JsonValue | None = None
     tool_call_id: str | None = None
     timestamp: float | None = None
     row_id: int | None = None
-    display_kind: str | None = None
-    display_metadata: JsonValue | None = None
+    # ADR-10 P5: the one legacy marker left on the wire, for synthetic user/assistant rows only
+    # (``auto_continue`` / ``failed_turn`` / ``steer``). Never a custom block id.
+    synthetic_kind: str | None = None
+    live_steered: bool | None = None
+    custom_type: str | None = None
+    display: bool | None = None
+    display_only: bool | None = None
+    details: JsonValue | None = None
+    attribution: str | None = None
+    legacy_role: str | None = None
     name: str | None = None
     context: str | None = None
     args: dict[str, JsonValue] | None = None
     labels: list[ToolLabel] | None = None
+    is_error: bool | None = None
     reasoning: str | None = None
 
 
@@ -306,7 +343,7 @@ __all__ = [
     "TERMINAL_SUBAGENT_STATUSES", "AccountOwner", "ConnectorOwner", "EmptyPayload", "EmptyResult", "McpServerStatus",
     "MessageReaction", "OkResult", "OpenModel", "PendingApproval", "PlanUsage", "PlanUsageGauge",
     "ProfileParams", "ProjectRef", "SessionLiveInfo", "SessionOwner", "SessionParams", "StatusResult", "StoredSessionRow",
-    "SubagentStatus", "ToolLabel", "ToolLabelKind", "TranscriptMessage", "Usage",
+    "SubagentStatus", "ToolLabel", "ToolLabelKind", "TranscriptMessage", "TranscriptRole", "Usage",
 ]
 
 

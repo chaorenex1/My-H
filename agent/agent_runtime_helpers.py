@@ -214,7 +214,7 @@ def _prepend_corruption_marker(tool_msg: dict, marker: str) -> None:
 
 def _find_tool_result(messages: list, start: int, tool_call: dict) -> Optional[dict]:
     """The tool result answering ``tool_call`` in the run starting at ``start``, if any."""
-    for candidate in messages[start:]:
+    for candidate in (c for c in messages[start:] if not (isinstance(c, dict) and c.get("role") == "custom")):  # ADR-10: injected rows are transparent
         if not isinstance(candidate, dict) or candidate.get("role") != "tool":
             return None
         if tool_result_id_variants(candidate.get("tool_call_id")) & tool_call_id_variants(tool_call):
@@ -636,7 +636,7 @@ def _prune_unanswered_tool_calls(messages: list[dict]) -> tuple[list[dict], int]
             pruned.append(msg)
             continue
         answered: set = set()
-        for follower in messages[i + 1:]:
+        for follower in (f for f in messages[i + 1:] if not (isinstance(f, dict) and f.get("role") == "custom")):  # ADR-10: custom rows are transparent
             if not (isinstance(follower, dict) and follower.get("role") == "tool"):
                 break
             tid = (follower.get("tool_call_id") or "").strip()

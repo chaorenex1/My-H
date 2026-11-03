@@ -398,6 +398,17 @@ class PanelCapability(Result):
     reason: str | None = None
 
 
+class TranscriptBlockCapability(Result):
+    """ADR-10 D6: one transcript block's producer readiness (``gateway/panel_inventory.py``)."""
+
+    supported: bool
+    status: Literal["ready", "partial", "pending", "unsupported"]
+    events: list[str] = []
+    fields: list[str] = []
+    needs: str | None = None
+    reason: str | None = None
+
+
 class RuntimeDescribeResult(Result):
     instance_id: str
     profile_id: str
@@ -406,6 +417,8 @@ class RuntimeDescribeResult(Result):
     session_create: SessionCreateDescriptor
     #: Panel id → readiness, so a client marks unsupported panels before its first call.
     panels: dict[str, PanelCapability]
+    #: Transcript block id → producer readiness (ADR-10 D6); the client's only seat authority.
+    transcript_blocks: dict[str, TranscriptBlockCapability] = {}
     #: The owning profile's resolved skin (``resolve_skin()``, main's ``gateway.ready.skin``).
     skin: SkinPayload | None = None
 

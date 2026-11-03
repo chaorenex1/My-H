@@ -15,6 +15,8 @@ closed, so a drifted emitter fails the suite (``registry.check_payload`` raises 
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from .base import JsonValue, Payload, WireEnum
@@ -243,17 +245,35 @@ event("message.block_end", MessageBlockEndPayload,
 
 
 class MessageAdviserPayload(Payload):
-    """``agent_callbacks.plugin_message_callback``: one injected adviser row."""
+    """``agent_callbacks.plugin_message_callback``: one injected adviser row. ``row_id`` is the
+    durable row the live event refers to (a snapshot that already has it merges, never appends);
+    ``details`` is ADR-10 D1's advisor shape, so a client never parses the note text."""
 
     id: str
     text: str
     severity: str
     label: str
-    display_kind: str
+    row_id: int | None = None
+    details: JsonValue | None = None
 
 
 event("message.adviser", MessageAdviserPayload,
       doc="Plugin adviser advice injected into the live transcript; render as an adviser card.")
+
+
+class TranscriptNoticePayload(Payload):
+    """ADR-10 D7: one already-happened lifecycle line, deduped by the gateway across
+    ``agent.print`` / ``status.update``. ``row_id`` is set when a durable custom row exists."""
+
+    id: str
+    level: Literal["info", "warning", "error"]
+    text: str
+    source: str
+    row_id: int | None = None
+
+
+event("transcript.notice", TranscriptNoticePayload,
+      doc="A deduped one-shot transcript notice; omp-ui ignores agent.print/status.update for these lines.")
 
 
 class TurnStatus(WireEnum):
@@ -346,6 +366,13 @@ class MessageCompletePayload(Payload):
 
     text: str | JsonValue = ""
     usage: Usage | None = None
+    #: ADR-2 D1: the turn's LAST provider response, in ``Usage`` shape. ``usage`` stays the
+    #: session-cumulative view; a response without usage leaves this null (never a copy of it).
+    step_usage: Usage | None = None
+    #: ADR-2 D2: the model id the request asked for and the one that actually served it
+    #: (proxy-reported deployment / Hermes' fallback route). Absent is null.
+    served_model: str | None = None
+    requested_model: str | None = None
     status: TurnStatus | None = None
     #: The assistant message this completion closes (the turn's ``message_id`` from message.start).
     message_id: str | None = None
@@ -534,6 +561,9 @@ class ToolStartPayload(Payload):
     args_text: str | None = None
     preview: str | None = None
     labels: list[ToolLabel] | None = None
+    #: ADR-2 D1: the provider response that requested this call, in ``Usage`` shape. JSON-only
+    #: (no ``model``/cumulative context fields) and absent for responses that reported no usage.
+    step_usage: Usage | None = None
 
 
 event("tool.start", ToolStartPayload, doc="A tool call began (stable id + full args).")
@@ -607,6 +637,21 @@ class TodoUpdatedPayload(Payload):
 
 
 event("todo.updated", TodoUpdatedPayload, doc="Full todo snapshot after a todo tool ran.")
+
+
+class TodoReminderPayload(Payload):
+    """ADR-10 D3: one stop-gate reminder row already appended to the transcript.
+    ``row_id`` is the durable row so a snapshot that already has it merges instead of appending
+    a second card; ``todos`` uses omp's ``TodoItem`` status vocabulary."""
+
+    todos: list[JsonValue]
+    attempt: int
+    max_attempts: int
+    row_id: int
+
+
+event("todo.reminder", TodoReminderPayload,
+      doc="The agent stopped with unfinished todos; render the durable reminder row as a card.")
 
 
 class QueueUpdatedPayload(Payload):

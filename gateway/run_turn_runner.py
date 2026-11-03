@@ -535,6 +535,22 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # A platform send can't be retracted; a local viewer withdraws the keyed notice.
         agent.notice_clear_callback = self._local_notice_clear_callback_sync if local_viewer_turn(self) else None
         agent.event_callback = ctx._event_callback_sync
+        # ADR-10 D2/D3: the canonical local viewer gets injected rows as live events too; the
+        # row is already durable, so its ``row_id`` lets the client merge rather than append twice.
+        if local_viewer_turn(self):
+            from tui_gateway.agent_callbacks import plugin_row_event
+
+            def _canonical_plugin_event(row):
+                if not isinstance(row, dict):
+                    return
+                event = plugin_row_event(row)
+                if event is not None:
+                    name, payload = event
+                    self._publish_execution(name, payload)
+
+            agent.plugin_message_callback = _canonical_plugin_event
+        else:
+            agent.plugin_message_callback = None
         agent.reasoning_config, agent.service_tier = reasoning_config, runner._service_tier
         _load_daybreak = getattr(runner, "_load_daybreak", None)  # absent on minimal test runners
         agent.daybreak = callable(_load_daybreak) and _load_daybreak(ctx.source) is True

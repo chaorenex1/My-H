@@ -27,6 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from tui_gateway.contracts.transcript_roles import TRANSCRIPT_ROLES
+
 AUTHORITY = "A"
 SIDECAR = "L"
 MISSING = "M"
@@ -250,6 +252,89 @@ PANELS: tuple[Panel, ...] = (
 )
 
 PANEL_IDS = tuple(panel.id for panel in PANELS)
+
+
+@dataclass(frozen=True)
+class TranscriptBlock:
+    """ADR-10 D6: one transcript block's producer readiness. ``id`` is the plan §2.3.2 stable
+    snake_case block id, NOT a wire ``custom_type``."""
+
+    id: str
+    supported: bool
+    status: str
+    events: tuple[str, ...] = ()
+    fields: tuple[str, ...] = ()
+    needs: str | None = None
+    reason: str | None = None
+
+
+def _role_block(spec) -> TranscriptBlock:
+    produced = spec.status != "seated"
+    status = {"produced": READY, "partial": PARTIAL, "seated": UNSUPPORTED}[spec.status]
+    return TranscriptBlock(spec.role.value, produced, status,
+                           fields=tuple(spec.fields), needs=spec.needs, reason=spec.reason)
+
+
+# Role entries are derived from the single seat table; non-role blocks are advertised here.
+# ``supported:false`` means the gateway sends no row/event, and ``needs`` says what is missing.
+TRANSCRIPT_BLOCKS: tuple[TranscriptBlock, ...] = (
+    *(_role_block(spec) for spec in TRANSCRIPT_ROLES),
+    TranscriptBlock("adviser", True, READY, ("message.adviser",),
+                    fields=("custom_type", "details", "row_id")),
+    # A skill row is durable-only: the invocation is rebuilt from session.history/session.resume.
+    TranscriptBlock("skill_invocation", True, READY,
+                    fields=("custom_type", "details", "row_id")),
+    TranscriptBlock("tool_execution", True, READY, ("tool.start", "tool.progress", "tool.complete"),
+                    fields=("name", "args", "labels", "content", "is_error", "row_id")),
+    TranscriptBlock("notice", True, READY, ("transcript.notice",),
+                    fields=("id", "level", "text", "source", "row_id")),
+    TranscriptBlock("todo_reminder", True, READY, ("todo.reminder",),
+                    fields=("todos", "attempt", "max_attempts", "row_id")),
+    TranscriptBlock("recap", False, UNSUPPORTED, fields=("text", "generated_at", "skipped"),
+                    needs="the ADR-5 P3 idle recap producer (`recap.generate`)",
+                    reason="ADR-5 owns idle recap; review.summary is a background review"),
+    TranscriptBlock("ttsr_notification", False, UNSUPPORTED, ("ttsr.triggered",),
+                    fields=("rules",),
+                    needs="the ADR-6 P1 TTSR rule-trigger event (`ttsr.triggered`)",
+                    reason="ADR-6 owns the local-viewer TTSR producer"),
+    TranscriptBlock("late_diagnostics", False, UNSUPPORTED, ("diagnostics.late",),
+                    fields=("files", "removed_paths"),
+                    needs="the ADR-9 late verdict carrier (`diagnostics.late` / a "
+                          "`late_diagnostics` custom block)",
+                    reason="ADR-9 owns the late-diagnostics block; inline lsp_diagnostics stay "
+                           "in the tool card"),
+    TranscriptBlock("stripped_tool_calls", False, UNSUPPORTED,
+                    needs="a server-side marker for calls elided by context projection",
+                    reason="Hermes omits hidden/compacted rows instead of returning a placeholder"),
+    TranscriptBlock("collab_prompt", False, UNSUPPORTED, needs="a collab visitor prompt event",
+                    reason="Hermes groups.* are hosted rooms, not omp collab"),
+    TranscriptBlock("reply_write", False, UNSUPPORTED, needs="a reply-scope write result",
+                    reason="Hermes write_file has no omp out:// reply-write scope"),
+    TranscriptBlock("background_tan", False, UNSUPPORTED,
+                    ("tangent.dispatched", "tangent.complete", "message.start"),
+                    fields=("task_id", "row_id", "work_preview", "status", "duration_ms", "jobId"),
+                    needs="the ADR-3 P1 `/tan` producer (`prompt.tangent` + tangent_dispatch row)",
+                    reason="ADR-3 owns it; background.complete is the /bg result, not a tangent block"),
+    TranscriptBlock("cache_miss_marker", True, READY, fields=("step_usage",)),
+    TranscriptBlock("served_model_marker", True, READY,
+                    fields=("served_model", "requested_model")),
+    TranscriptBlock("reaction", True, READY, events=("reaction",), fields=("kind",)),
+)
+
+
+def transcript_capabilities() -> dict[str, dict]:
+    """``runtime.describe.transcript_blocks``: block id → producer readiness."""
+    return {
+        block.id: {
+            "supported": block.supported,
+            "status": block.status,
+            "events": list(block.events),
+            "fields": list(block.fields),
+            "needs": block.needs,
+            "reason": block.reason,
+        }
+        for block in TRANSCRIPT_BLOCKS
+    }
 
 
 def capabilities() -> dict[str, dict]:

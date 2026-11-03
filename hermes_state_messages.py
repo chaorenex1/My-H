@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from agent.context_compressor import (
     _DB_PERSISTED_MARKER as _DB_PERSISTED_MARKER_KEY, MODEL_ONLY_DISPLAY_METADATA_KEY, _is_checkpoint_item,
     _newest_checkpoint_carrier, split_user_originated_turn)
+from agent.custom_messages import lift_stored_fields, storage_metadata
 from agent.memory_context import sanitize_context
 from agent.message_metadata import (
     CANONICAL_ROW, DATA_USE, DB_ROW_SNAPSHOT, lift_data_use, MESSAGE_UID, TOOL_CALL_UID, TOOL_CALL_UIDS,
@@ -282,7 +283,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         if msg.get(DATA_USE) and isinstance(display_metadata, (dict, type(None))):
             # Writers that copy a fixed field list (/branch) carry the key, not display_metadata.
             display_metadata = {**(display_metadata or {}), DATA_USE: list(msg[DATA_USE])}
-        display_metadata = self._encode_display_metadata(display_metadata)
+        display_metadata = self._encode_display_metadata(  # ADR-10: custom fields ride this durable envelope
+            storage_metadata({**msg, "display_metadata": display_metadata}))
         identity_row = {
             "role": role, "content": encoded_content, "timestamp": message_timestamp,
             "tool_call_id": msg.get("tool_call_id"), "tool_calls": encoded_tool_calls,
@@ -1617,6 +1619,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
             if row["display_metadata"] and (decoded := self._decode_display_metadata(row["display_metadata"])) is not None:
                 msg["display_metadata"] = decoded
                 lift_data_use(msg)
+                lift_stored_fields(msg)
             if include_summary_markers and row["_compressed_summary"]:
                 msg["_compressed_summary"] = True
             msg.update(

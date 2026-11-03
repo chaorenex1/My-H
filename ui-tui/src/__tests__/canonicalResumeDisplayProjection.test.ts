@@ -31,7 +31,7 @@ it('renders display_messages and keeps the stored rows for rewind targeting', ()
     { role: 'user', text: 'run the tool', row_id: 2 },
     { role: 'tool', name: 'read_file', context: 'notes.txt', tool_call_id: 'c1', args: { path: 'notes.txt' } },
     { role: 'assistant', text: 'read it', row_id: 7 },
-    { role: 'user', text: 'focus on the numbers', display_kind: 'steer', row_id: 5 },
+    { role: 'user', text: 'focus on the numbers', synthetic_kind: 'steer', live_steered: true, row_id: 5 },
     { role: 'assistant', text: 'done', row_id: 6 }
   ]
 

@@ -7,10 +7,13 @@
 import { describe, expect, test } from "bun:test"
 
 import type { AgentSessionEvent } from "../../session/agent-session-events"
+import type { TranscriptMessage } from "./gateway-contract.generated"
 import { GatewayClient } from "./gateway-client"
 import {
 	GatewayOmpSession,
 	type GatewaySessionSnapshot,
+	gatewayCreateParams,
+	gatewayResumeParams,
 	gatewayTodoPhases,
 	toOmpUsage
 } from "./gateway-session"
@@ -338,5 +341,466 @@ describe("snapshot", () => {
 		})
 		expect(snapshot.messages).toEqual([{ role: "user", text: "display" }])
 		expect(snapshot.todos).toHaveLength(1)
+	})
+})
+
+describe("custom row projection", () => {
+	test("an advisor row reads its details and never parses the note text", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "[adviser — advisory only]\n- [concern · reviewer] re-read the failing test\n[end adviser]",
+			custom_type: "advisor",
+			display: true,
+			details: { notes: [{ note: "re-read the failing test", severity: "concern", advisor: "reviewer" }] },
+			attribution: "agent",
+			timestamp: 1
+		} as never)
+		expect(message?.role).toBe("custom")
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.customType).toBe("advisor")
+		expect(message.details).toEqual({
+			notes: [{ note: "re-read the failing test", severity: "concern", advisor: "reviewer" }]
+		})
+	})
+
+	test("a row without details renders the generic custom block, not parsed text", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "- [nit] guessed from text",
+			custom_type: "advisor",
+			timestamp: 1
+		} as never)
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.details).toBeUndefined()
+	})
+
+	test("a skill-prompt row keeps the gateway's name, path, args and prompt", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "/skill:review src/main.ts",
+			custom_type: "skill-prompt",
+			details: { name: "review", path: "/skills/review.md", args: "src/main.ts", prompt: "body", lineCount: 3 },
+			attribution: "user",
+			timestamp: 1
+		} as never)
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.customType).toBe("skill-prompt")
+		expect(message.details).toMatchObject({
+			name: "review",
+			path: "/skills/review.md",
+			args: "src/main.ts",
+			prompt: "body"
+		})
+	})
+
+	test("display:false still projects; the renderer decides visibility", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "internal marker",
+			custom_type: "internal-notification",
+			display: false,
+			details: { level: "info", source: "gateway" },
+			timestamp: 1
+		} as never)
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.display).toBe(false)
+	})
+
+	test("steer rows remain user messages with the live-steer flag", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "user",
+			text: "change direction",
+			synthetic_kind: "steer",
+			live_steered: true,
+			timestamp: 1
+		} as never)
+		expect(message).toMatchObject({
+			role: "user",
+			content: "change direction",
+			liveSteered: true
+		})
+	})
+
+	test("rows without a custom shape never invent a custom block", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "user",
+			text: "switched to m-2",
+			synthetic_kind: "auto_continue",
+			timestamp: 1
+		} as never)
+		expect(message).toMatchObject({ role: "user", content: "switched to m-2" })
+	})
+
+	test("assistant reasoning sidecars become thinking blocks", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "assistant",
+			text: "answer",
+			reasoning: "why",
+			timestamp: 1
+		} as never)
+		if (message?.role !== "assistant") throw new Error("expected assistant")
+		expect(message.content).toEqual([
+			{ type: "thinking", thinking: "why" },
+			{ type: "text", text: "answer" }
+		])
+	})
+
+	test("tool rows keep args, labels and structured content", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "tool",
+			name: "read_file",
+			tool_call_id: "t1",
+			text: "body",
+			content: [{ type: "text", text: "body" }],
+			args: { path: "a.ts" },
+			labels: [{ kind: "tool", app: "files", action: "read", emoji: "", text: "Read", name: "read_file" }],
+			is_error: false,
+			timestamp: 1
+		} as never)
+		if (message?.role !== "toolResult") throw new Error("expected toolResult")
+		expect(message.toolName).toBe("read_file")
+		expect(message.content).toEqual([{ type: "text", text: "body" }])
+		expect(message.isError).toBe(false)
+		expect(message.details).toMatchObject({
+			args: { path: "a.ts" },
+			labels: [{ name: "read_file" }]
+		})
+	})
+
+	test("tool rows carry display-safe content and the durable error verdict", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "tool",
+			name: "browser_exec",
+			tool_call_id: "t2",
+			content: [
+				{ type: "text", text: "shot" },
+				{ type: "image", data: "AAAA", mimeType: "image/png" }
+			],
+			is_error: true,
+			row_id: 9,
+			timestamp: 1
+		} as never)
+		if (message?.role !== "toolResult") throw new Error("expected toolResult")
+		expect(message.toolName).toBe("browser_exec")
+		expect(message.content).toEqual([
+			{ type: "text", text: "shot" },
+			{ type: "image", data: "AAAA", mimeType: "image/png" }
+		])
+		expect(message.isError).toBe(true)
+		expect(message.details).toMatchObject({ row_id: 9 })
+	})
+
+	test("a custom timeline row keeps its gateway custom type", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "switched to m-2",
+			custom_type: "model-switch",
+			display_only: true,
+			details: { level: "info", source: "model_switch" },
+			timestamp: 1
+		} as never)
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.customType).toBe("model-switch")
+		expect(message.details).toEqual({ level: "info", source: "model_switch" })
+	})
+})
+
+describe("history and session params", () => {
+	test("history opts into full tool content and the selector outline", async () => {
+		const { session, sent, client } = harness()
+		const pending = session.history(50)
+		const request = sent.at(-1)!
+		expect(request).toMatchObject({
+			method: "session.history",
+			params: {
+				session_id: "sid-1",
+				limit: 50,
+				include_tool_content: "full",
+				include_outline: true
+			}
+		})
+		client.handleFrame(
+			JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { count: 0, messages: [], entries: [] } })
+		)
+		await pending
+	})
+
+	test("create and resume send the omp-ui opt-ins", () => {
+		expect(gatewayCreateParams({ cwd: "/w", title: "T" })).toMatchObject({
+			source: "tui",
+			client: { name: "omp-ui" },
+			custom_messages: true,
+			cwd: "/w",
+			title: "T"
+		})
+		expect(gatewayResumeParams("sid")).toEqual({
+			session_id: "sid",
+			display_projection: true,
+			include_tool_content: "full"
+		})
+	})
+})
+
+describe("gateway block events", () => {
+	test("message.adviser emits one custom message pair from its details", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "message.adviser",
+			payload: {
+				id: "a1",
+				text: "[adviser — advisory only]\n- [nit] tighten the loop\n[end adviser]",
+				severity: "nit",
+				label: "nit",
+					row_id: 41,
+				details: { notes: [{ note: "tighten the loop", severity: "nit" }] }
+			}
+		})
+		const start = events.find((event) => event.type === "message_start")
+		const end = events.find((event) => event.type === "message_end")
+		expect(start?.message.role).toBe("custom")
+		expect(end?.message.role).toBe("custom")
+		if (start?.message.role !== "custom") throw new Error("expected custom")
+		expect(start.message.customType).toBe("advisor")
+		expect(start.message.details).toMatchObject({ notes: [{ note: "tighten the loop", severity: "nit" }] })
+	})
+
+	test("an adviser row already in the snapshot is not appended twice", () => {
+		const snapshotRow = {
+			role: "custom",
+			text: "advice",
+			custom_type: "advisor",
+			display: true,
+			details: { notes: [{ note: "advice" }] },
+			row_id: 41,
+			timestamp: 1
+		}
+		const { session, events } = harness({ messages: [snapshotRow as never] })
+		session.handleNotification({
+			type: "message.adviser",
+			payload: { id: "a1", text: "advice", row_id: 41, details: { notes: [{ note: "advice" }] } }
+		})
+		expect(events.filter((event) => event.type === "message_end")).toHaveLength(0)
+		expect(session.initialMessages()).toHaveLength(1)
+	})
+
+	test("notification.show becomes a notice; agent.print is ignored", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "notification.show",
+			payload: { text: "low disk", level: "warning", kind: "agent" }
+		})
+		session.handleNotification({ type: "agent.print", payload: { text: "compacted" } })
+		expect(events.filter((event) => event.type === "notice")).toEqual([
+			{ type: "notice", level: "warning", message: "low disk", source: "agent" }
+		])
+	})
+
+	test("transcript.notice is deduped by id and ignores the legacy channels", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "agent.print", payload: { text: "compacting context" } })
+		session.handleNotification({
+			type: "status.update",
+			payload: { kind: "lifecycle", text: "compacting context" }
+		})
+		const payload = { id: "n1", level: "info", text: "compacting context", source: "agent" }
+		session.handleNotification({ type: "transcript.notice", payload })
+		session.handleNotification({ type: "transcript.notice", payload })
+		expect(events.filter((event) => event.type === "notice")).toEqual([
+			{ type: "notice", level: "info", message: "compacting context", source: "agent" }
+		])
+	})
+
+	test("a transcript.notice whose row is already rendered is not repeated", () => {
+		const snapshotRow = {
+			role: "custom",
+			text: "switched",
+			custom_type: "model-switch",
+			display: true,
+			details: { level: "info", source: "model-switch" },
+			row_id: 9,
+			timestamp: 1
+		}
+		const { session, events } = harness({ messages: [snapshotRow as never] })
+		session.handleNotification({
+			type: "transcript.notice",
+			payload: { id: "n2", level: "info", text: "switched", source: "agent", row_id: 9 }
+		})
+		expect(events.filter((event) => event.type === "notice")).toHaveLength(0)
+	})
+
+	test("a failed resume without a message names its phase", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "session.resume_progress",
+			payload: { phase: "hydrate", status: "failed" }
+		})
+		expect(events.find((event) => event.type === "notice")).toMatchObject({
+			level: "error",
+			message: "Session resume failed (hydrate)"
+		})
+	})
+
+	test("todo.reminder merges the live card by its durable row id", () => {
+		const { session, events } = harness()
+		const payload = {
+			todos: [{ content: "ship", status: "pending" }],
+			attempt: 1,
+			max_attempts: 3,
+			row_id: 12
+		}
+		session.handleNotification({ type: "todo.reminder", payload })
+		session.handleNotification({ type: "todo.reminder", payload })
+		const ends = events.filter((event) => event.type === "message_end")
+		expect(ends).toHaveLength(1)
+		const end = ends[0]!
+		if (end.message.role !== "custom") throw new Error("expected custom")
+		expect(end.message.customType).toBe("todo-reminder")
+		expect(end.message.details).toMatchObject({
+			todos: [{ content: "ship", status: "pending" }],
+			attempt: 1,
+			maxAttempts: 3
+		})
+	})
+
+	test("step_usage feeds the assistant message, not the cumulative usage", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "message.start", payload: { message_id: "m1" } })
+		session.handleNotification({ type: "message.delta", payload: { text: "hi", content_index: 0 } })
+		session.handleNotification({
+			type: "message.complete",
+			payload: {
+				message_id: "m1",
+				text: "hi",
+				status: "complete",
+				usage: { input: 900, output: 300, total: 1200, cost_usd: 9 },
+				step_usage: { input: 10, output: 2, cache_read: 7, cache_write: 1, total: 21, cost_usd: 0.5 },
+				served_model: "m-served",
+				requested_model: "m-1"
+			}
+		})
+		const end = events.find((event) => event.type === "message_end")
+		if (end?.message.role !== "assistant") throw new Error("expected assistant")
+		expect(end.message.usage).toMatchObject({
+			input: 10,
+			output: 2,
+			cacheRead: 7,
+			cacheWrite: 1,
+			totalTokens: 21,
+			cost: { total: 0.5 }
+		})
+		expect(end.message.upstreamModel).toBe("m-served")
+	})
+
+	test("a completion without step_usage does not borrow the cumulative usage", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "message.start", payload: { message_id: "m1" } })
+		session.handleNotification({
+			type: "message.complete",
+			payload: {
+				message_id: "m1",
+				text: "hi",
+				status: "complete",
+				usage: { input: 900, output: 300, total: 1200 }
+			}
+		})
+		const end = events.find((event) => event.type === "message_end")
+		if (end?.message.role !== "assistant") throw new Error("expected assistant")
+		expect(end.message.usage).toMatchObject({ input: 0, output: 0, totalTokens: 0 })
+		expect(end.message.upstreamModel).toBeUndefined()
+	})
+
+	test("tool.start.step_usage labels the assistant segment it closes", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "message.start", payload: { message_id: "m1" } })
+		session.handleNotification({ type: "message.delta", payload: { text: "checking", content_index: 0 } })
+		session.handleNotification({
+			type: "tool.start",
+			payload: {
+				tool_id: "c1",
+				name: "read_file",
+				args: {},
+				step_usage: { input: 20, output: 4, cache_read: 16, cache_write: 2, total: 26 }
+			}
+		})
+		const end = events.find((event) => event.type === "message_end")
+		if (end?.message.role !== "assistant") throw new Error("expected assistant")
+		expect(end.message.stopReason).toBe("toolUse")
+		expect(end.message.usage).toMatchObject({
+			input: 20,
+			output: 4,
+			cacheRead: 16,
+			cacheWrite: 2,
+			totalTokens: 26
+		})
+	})
+
+	test("a tool-only step carries step_usage on tool_execution_start", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "tool.start",
+			payload: {
+				tool_id: "c1",
+				name: "read_file",
+				args: {},
+				step_usage: { input: 20, output: 4, cache_read: 16, cache_write: 2, total: 26 }
+			}
+		})
+		const start = events.find((event) => event.type === "tool_execution_start")
+		if (start?.type !== "tool_execution_start") throw new Error("expected tool start")
+		expect(start.stepUsage).toMatchObject({ input: 20, output: 4, totalTokens: 26 })
+		expect(events.some((event) => event.type === "message_end")).toBe(false)
+	})
+
+	test("the capability table is the only seat authority for optional blocks", () => {
+		const { session, events } = harness()
+		// Not advertised yet: legacy behavior keeps the live channels working.
+		expect(session.transcriptBlock("notice")).toBeUndefined()
+		expect(session.transcriptBlock("recap")).toBeUndefined()
+		session.adoptTranscriptBlocks({
+			adviser: { supported: true, status: "ready" },
+			notice: { supported: false, status: "unsupported", needs: "a notice producer" },
+			todo_reminder: { supported: true, status: "ready" }
+		})
+		expect(session.transcriptBlock("adviser")?.supported).toBe(true)
+		expect(session.transcriptBlock("notice")).toMatchObject({ status: "unsupported", needs: "a notice producer" })
+
+		session.handleNotification({ type: "transcript.notice", payload: { id: "n1", text: "hidden", level: "info" } })
+		expect(events.some((event) => event.type === "notice")).toBe(false)
+
+		// A remount replaces the table: the block is unadvertised again, never faked.
+		session.adoptTranscriptBlocks(undefined)
+		expect(session.transcriptBlock("notice")).toBeUndefined()
+	})
+
+	test("a snapshot role row renders even when its subtype block is unsupported", () => {
+		const { session } = harness()
+		const row = {
+			role: "custom",
+			custom_type: "advisor",
+			text: "advice",
+			display: true,
+			timestamp: 1
+		} as unknown as TranscriptMessage
+		session.adoptTranscriptBlocks({ adviser: { supported: false, status: "unsupported", needs: "x" } })
+		session.adoptSnapshot(SNAPSHOT({ messages: [row] }))
+		expect(session.initialMessages()).toHaveLength(1)
+	})
+
+	test("live non-role blocks stay unmounted while their capability is unsupported", () => {
+		const { session, events } = harness()
+		session.adoptTranscriptBlocks({
+			adviser: { supported: false, status: "unsupported", needs: "x" },
+			todo_reminder: { supported: false, status: "unsupported", needs: "y" }
+		})
+		session.handleNotification({
+			type: "message.adviser",
+			payload: { text: "advice", details: { notes: [{ note: "advice" }] }, row_id: 3 }
+		})
+		session.handleNotification({
+			type: "todo.reminder",
+			payload: { todos: [{ content: "ship", status: "pending" }], attempt: 1, max_attempts: 3, row_id: 4 }
+		})
+		expect(session.messages).toEqual([])
+		expect(events).toEqual([])
 	})
 })

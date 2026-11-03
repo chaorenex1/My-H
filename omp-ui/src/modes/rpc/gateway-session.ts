@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto"
 
 import type { AgentMessage } from "../../vendor/agent/src/index.ts"
+import type { CustomMessage } from "../../vendor/agent/src/compaction/messages.ts"
 import type { ThinkingLevel } from "../../vendor/agent/src/thinking.ts"
 import type {
 	AssistantMessage,
@@ -37,13 +38,16 @@ import type {
 	CanonicalSessionInfo,
 	CanonicalSnapshot,
 	ModelOptionsResult,
+	RuntimeDescribeResult,
 	SessionHistoryResult,
 	SessionListRow,
 	SessionLiveInfo,
 	SessionStats,
 	SessionUsageResult,
 	TodoState,
-	TranscriptMessage
+	TranscriptBlockCapability,
+	TranscriptMessage,
+	TranscriptRole
 } from "./gateway-contract.generated"
 import {
 	GatewayClientError,
@@ -133,7 +137,149 @@ const zeroUsage = (): Usage => ({
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
 })
 
-/** Hermes gateway `Usage` (snake_case, optional) → the vendored `Usage` the shell renders. */
+/** Display text/content of a tool row, preserving images when the projection included them. */
+function toolRowContent(row: TranscriptMessage, text: string): (TextContent | ImageContent)[] {
+	const content = row.content
+	if (Array.isArray(content)) {
+		const blocks = content.filter(
+			(part): part is TextContent | ImageContent =>
+				asRecord(part)?.type === "text" || asRecord(part)?.type === "image"
+		)
+		if (blocks.length > 0) return blocks
+	}
+	return text ? [textContent(text)] : []
+}
+
+/**
+ * ADR-10 D8.1/P5: one gateway custom row as a display-only message. The client reads
+ * `custom_type`/`details` and never parses adviser/skill/todo text; a row without details
+ * renders as the generic custom block. The legacy marker pair no longer exists on the wire.
+ */
+function customRowToMessage(row: TranscriptMessage): CustomMessage | undefined {
+	const customType = asString(row.custom_type)
+	if (!customType) return undefined
+	const text = asString(row.text) ?? ""
+	const details = asRecord(row.details)
+	let shaped = details
+	if (customType === "advisor" && details && !Array.isArray(details.notes)) shaped = { notes: [] }
+	if (customType === "todo-reminder" && details) {
+		const source = details
+		shaped = {
+			...(Array.isArray(source.todos) ? { todos: source.todos } : {}),
+			attempt: asNumber(source.attempt) ?? 0,
+			maxAttempts: asNumber(source.max_attempts) ?? asNumber(source.maxAttempts) ?? 0
+		}
+	}
+	return {
+		role: "custom",
+		customType,
+		content: text,
+		display: row.display !== false,
+		...(shaped ? { details: shaped } : {}),
+		attribution: asString(row.attribution) === "user" ? "user" : "agent",
+		timestamp: asNumber(row.timestamp) ?? now()
+	}
+}
+
+
+/** ADR-10 D8.1: one wire row → the shell's message, per role. Seated roles have no entry. */
+type RowProjector = (row: TranscriptMessage, text: string, timestamp: number) => AgentMessage;
+
+function userRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	if (row.live_steered === true) {
+		return { role: "user", content: text, liveSteered: true, attribution: "user", timestamp };
+	}
+	return { role: "user", content: text, timestamp };
+}
+
+function developerRow(_row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	return { role: "user", content: text, attribution: "agent", timestamp };
+}
+
+function assistantRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	const content: AssistantMessage["content"] = [];
+	const reasoning = asString(row.reasoning) ?? asString(row["reasoning_content"]);
+	if (reasoning) content.push({ type: "thinking", thinking: reasoning } as ThinkingContent);
+	if (text) content.push(textContent(text));
+	return {
+		role: "assistant",
+		content,
+		api: "openai-completions",
+		provider: "gateway",
+		model: asString(row["model"]) ?? "",
+		usage: zeroUsage(),
+		stopReason: "stop",
+		timestamp
+	};
+}
+
+function toolRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	const details: Record<string, unknown> = {};
+	if (asRecord(row.args)) details.args = row.args;
+	if (asString(row.context)) details.context = row.context;
+	if (row.labels) details.labels = row.labels;
+	if (asNumber(row.row_id) !== undefined) details.row_id = row.row_id;
+	return {
+		role: "toolResult",
+		toolCallId: asString(row.tool_call_id) ?? "",
+		// ADR-10 D8.2a: the wire name stays; the render key is chosen at the renderer boundary.
+		toolName: asString(row.name) ?? "",
+		content: toolRowContent(row, text),
+		...(Object.keys(details).length > 0 ? { details } : {}),
+		isError: row.is_error === true,
+		timestamp
+	};
+}
+
+function hookRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	return {
+		role: "hookMessage",
+		customType: asString(row.custom_type) ?? "hook",
+		content: text,
+		display: row.display !== false,
+		...(asRecord(row.details) ? { details: row.details } : {}),
+		timestamp
+	};
+}
+
+function compactionRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	// ADR-10 P5: counters ride `details.compaction`; a pre-stamp row defaults to 0.
+	const stamp = asRecord(asRecord(row.details)?.compaction);
+	return {
+		role: "compactionSummary",
+		summary: text,
+		tokensBefore: asNumber(stamp?.tokens_before) ?? asNumber(row["tokens_before"]) ?? 0,
+		timestamp
+	};
+}
+
+function branchRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
+	return {
+		role: "branchSummary",
+		summary: text,
+		fromId: asString(row["from_id"]) ?? "",
+		timestamp
+	};
+}
+
+// ADR-10 D10: a complete Record makes a new TranscriptRole a typecheck error. Seated roles
+// (custom/system/bash/python/file) have no projector and reach no renderer branch.
+const ROW_PROJECTORS: Record<TranscriptRole, RowProjector | undefined> = {
+	user: userRow,
+	developer: developerRow,
+	assistant: assistantRow,
+	tool: toolRow,
+	custom: undefined,
+	hook_message: hookRow,
+	bash_execution: undefined,
+	python_execution: undefined,
+	file_mention: undefined,
+	branch_summary: branchRow,
+	compaction_summary: compactionRow,
+	system: undefined
+};
+
+
 export function toOmpUsage(usage: SessionUsageResult | SessionLiveInfo["usage"] | null | undefined): Usage | undefined {
 	if (!usage) return undefined
 	const value = usage as Record<string, unknown>
@@ -355,9 +501,16 @@ export class GatewayOmpSession {
 	#roles: GatewayRolesClient | undefined
 	#draft: AssistantDraft | undefined
 	#messages: AgentMessage[] = []
+	/** ADR-10 D8.3: durable row id -> the one message a snapshot/live event may update in place. */
+	#rowMessages = new Map<number, AgentMessage>()
+	/** ADR-10 D6: `runtime.describe.transcript_blocks`; the gateway's producer readiness. */
+	#transcriptBlocks = new Map<string, TranscriptBlockCapability>()
 	#running = false
 	#compacting = false
 	#lastAdmissionId: string | undefined
+	#lastNoticeKey: string | undefined
+	#lastNoticeAt = 0
+	#noticeIds = new Set<string>()
 	#queue = { steering: [] as string[], followUp: [] as string[], liveSteered: 0 }
 	#usage: SessionUsageResult | undefined
 	#stats: SessionStats | undefined
@@ -371,7 +524,7 @@ export class GatewayOmpSession {
 		this.client = options.connection.client
 		this.profileId = options.connection.grant.profile_id
 		this.#state = snapshot
-		this.#messages = snapshot.messages.map(GatewayOmpSession.rowToAgentMessage).filter((m): m is AgentMessage => m !== undefined)
+		this.#rebuildMessages(snapshot.messages)
 		this.#todos = snapshot.todos
 		this.#running = snapshot.running
 		this.#onError = options.onError
@@ -393,35 +546,21 @@ export class GatewayOmpSession {
 		return roleCycleRoutes(roles)
 	}
 
-	/** Project a persisted transcript row onto the shell's `AgentMessage` vocabulary. */
+	/**
+	 * Project a persisted transcript row onto the shell's `AgentMessage` vocabulary (ADR-10 D8.1).
+	 *
+	 * Wire rows carry `role` + `custom_type`/`details`; the client never parses adviser, skill or
+	 * todo text and never reads an internal marker. ADR-10 P5 removed `display_kind`/`display_metadata`.
+	 */
 	static rowToAgentMessage(row: TranscriptMessage): AgentMessage | undefined {
-		const role = row.role
-		const timestamp = asNumber(row.timestamp) ?? now()
-		const text = asString(row.text) ?? ""
-		if (role === "user") return { role: "user", content: text, timestamp }
-		if (role === "assistant") {
-			return {
-				role: "assistant",
-				content: text ? [textContent(text)] : [],
-				api: "openai-completions",
-				provider: "gateway",
-				model: asString(row["model"]) ?? "",
-				usage: zeroUsage(),
-				stopReason: "stop",
-				timestamp
-			}
+		const timestamp = asNumber(row.timestamp) ?? now();
+		const text = asString(row.text) ?? "";
+
+		if (row.role === "custom" || asString(row.custom_type)) {
+			const custom = customRowToMessage(row);
+			if (custom) return custom;
 		}
-		if (role === "tool" || role === "toolResult") {
-			return {
-				role: "toolResult",
-				toolCallId: asString(row.tool_call_id) ?? "",
-				toolName: asString(row.name) ?? "",
-				content: text ? [textContent(text)] : [],
-				isError: row["is_error"] === true,
-				timestamp
-			}
-		}
-		return undefined
+		return ROW_PROJECTORS[row.role]?.(row, text, timestamp);
 	}
 
 	get sessionId(): string {
@@ -475,6 +614,28 @@ export class GatewayOmpSession {
 		return this.#messages
 	}
 
+	/**
+	 * ADR-10 P4: adopt `runtime.describe.transcript_blocks`. This table is the only runtime seat
+	 * authority; a gateway that omits a block leaves it unadvertised rather than pending.
+	 */
+	adoptTranscriptBlocks(blocks: Record<string, TranscriptBlockCapability> | undefined): void {
+		this.#transcriptBlocks.clear()
+		for (const [id, capability] of Object.entries(blocks ?? {})) {
+			if (capability && typeof capability.supported === "boolean") this.#transcriptBlocks.set(id, capability)
+		}
+	}
+
+	/** A block's producer readiness, or `undefined` when the gateway did not advertise the block. */
+	transcriptBlock(id: string): TranscriptBlockCapability | undefined {
+		return this.#transcriptBlocks.get(id)
+	}
+
+	/** Only an advertised `supported:true` mounts; an old gateway that advertises nothing keeps rendering. */
+	#blockEnabled(id: string): boolean {
+		const capability = this.#transcriptBlocks.get(id)
+		return capability === undefined || capability.supported === true
+	}
+
 	/** Subscribe to the projected session events; returns the unsubscribe. */
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void {
 		this.#listeners.add(listener)
@@ -491,10 +652,24 @@ export class GatewayOmpSession {
 		}
 	}
 
+	/** ADR-10 D8.3: rebuild both the render list and the durable-row map from one snapshot. */
+	#rebuildMessages(rows: TranscriptMessage[]): void {
+		const messages: AgentMessage[] = []
+		this.#rowMessages.clear()
+		for (const row of rows) {
+			const message = GatewayOmpSession.rowToAgentMessage(row)
+			if (!message) continue
+			messages.push(message)
+			const rowId = asNumber(row.row_id)
+			if (rowId !== undefined) this.#rowMessages.set(rowId, message)
+		}
+		this.#messages = messages
+	}
+
 	/** Replace the session state with a fresh canonical snapshot (resume/refresh). */
 	adoptSnapshot(snapshot: GatewaySessionSnapshot): void {
 		this.#state = snapshot
-		this.#messages = snapshot.messages.map(GatewayOmpSession.rowToAgentMessage).filter((m): m is AgentMessage => m !== undefined)
+		this.#rebuildMessages(snapshot.messages)
 		this.#todos = snapshot.todos
 		this.#running = snapshot.running
 	}
@@ -653,7 +828,13 @@ export class GatewayOmpSession {
 
 	/** Read the durable transcript (the gateway's projection, newest window). */
 	async history(limit = 200): Promise<SessionHistoryResult> {
-		return this.client.request("session.history", { session_id: this.#state.sessionId, limit })
+		return this.client.request("session.history", {
+			session_id: this.#state.sessionId,
+			limit,
+			// ADR-10 D4/D8.5: one read carries display-safe tool content and the selector outline.
+			include_tool_content: "full",
+			include_outline: true
+		})
 	}
 
 	/** Refresh info, stats and usage; called at boot and after settle. */
@@ -819,7 +1000,18 @@ export class GatewayOmpSession {
 			this.#usage = payload as unknown as SessionUsageResult
 		},
 		"status.update": payload => this.#onStatusUpdate(payload),
+		// ADR-10 D7: transcript.notice is the one-shot line channel; the two legacy events stay
+		// for old clients and are ignored here.
 		"agent.print": () => {},
+		"command.output": payload => this.#onTextNotice(payload, "info", asString(payload.name) ?? "command"),
+		"notification.show": payload => this.#onNotificationShow(payload),
+		"message.adviser": payload => this.#onAdviserMessage(payload),
+		// Seat: contract-only until the gateway stop gate emits it (ADR-2 D11).
+		"todo.reminder": payload => this.#onTodoReminder(payload),
+		"transcript.notice": payload => this.#onTranscriptNotice(payload),
+		"session.reclaimed": payload => this.#onTextNotice(payload, "warning", "session"),
+		"session.resume_progress": payload => this.#onResumeProgress(payload),
+		"approval.cancelled": payload => this.#onApprovalCancelled(payload),
 		"notice": payload => this.#onNotice(payload),
 		"error": payload => this.#onErrorNotice(payload)
 	}
@@ -918,13 +1110,16 @@ export class GatewayOmpSession {
 		// Hermes streams one assistant message across tool rounds: text before the tool and the answer
 		// after it would share one block, leaving the tool cards below the answer. Close the pre-tool
 		// segment here; the next delta opens the post-tool block under the cards.
-		this.#closeSegmentForTool()
+		const stepUsage = toOmpUsage(payload.step_usage as never)
+		const closed = this.#closeSegmentForTool(stepUsage)
 		this.#emit({
 			type: "tool_execution_start",
 			toolCallId: asString(payload.tool_id) ?? "",
 			toolName: asString(payload.name) ?? "",
 			args: payload.args ?? {},
-			intent: asString(payload.context)
+			intent: asString(payload.context),
+			// A tool-only step has no assistant block to close; the shell counts this usage directly.
+			...(closed || !stepUsage ? {} : { stepUsage })
 		})
 	}
 
@@ -979,12 +1174,7 @@ export class GatewayOmpSession {
 		const error = asRecord(payload.error)
 		if ((status === "error" || error) && payload.error !== null && payload.error !== undefined) {
 			// A failed turn otherwise leaves only a partial (or empty) assistant block; name it.
-			this.#emit({
-				type: "notice",
-				level: "error",
-				message: asString(error?.message) ?? "Turn failed",
-				source: "gateway"
-			})
+			this.#emitNotice("error", asString(error?.message) ?? "Turn failed", "gateway")
 		}
 		this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
 		// Stats/usage lag the terminal frame: refetch right after so the status line's cost/context
@@ -1002,23 +1192,135 @@ export class GatewayOmpSession {
 		this.#emit({ type: "agent_end", messages: [...this.#messages], isTerminal: true, yielded: true })
 	}
 
+	/** Emit a notice unless the same level+text already landed in the last 1.5s. `_emit_status_kind`
+	 *  prints through `agent.print` and then `status.update`, so both arrive for one lifecycle line. */
+	#emitNotice(level: "info" | "warning" | "error", message: string, source: string): void {
+		const key = `${level}\u0000${message}`
+		const at = now()
+		if (key === this.#lastNoticeKey && at - this.#lastNoticeAt < 1500) return
+		this.#lastNoticeKey = key
+		this.#lastNoticeAt = at
+		this.#emit({ type: "notice", level, message, source })
+	}
+
 	#onStatusUpdate(payload: Record<string, unknown>): void {
-		// `status.update` is the TUI-facing projection of the same line `agent.print` carries;
-		// rendering both would duplicate every lifecycle notice.
 		const kind = (asString(payload.kind) ?? "").toLowerCase()
 		if (kind.includes("compact")) this.#compacting = !kind.includes("done") && !kind.includes("end")
-		const text = asString(payload.text) ?? asString(payload.message)
-		if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
 	}
 
 	#onNotice(payload: Record<string, unknown>): void {
 		const text = asString(payload.message)
-		if (text) this.#emit({ type: "notice", level: "info", message: text, source: "gateway" })
+		if (text) this.#emitNotice("info", text, "gateway")
 	}
 
 	#onErrorNotice(payload: Record<string, unknown>): void {
-		const text = asString(payload.message) ?? "Gateway error"
-		this.#emit({ type: "notice", level: "error", message: text, source: "gateway" })
+		this.#emitNotice("error", asString(payload.message) ?? "Gateway error", "gateway")
+	}
+
+	#onTextNotice(
+		payload: Record<string, unknown>,
+		level: "info" | "warning" | "error",
+		source: string
+	): void {
+		const text = asString(payload.text) ?? asString(payload.message) ?? asString(payload.reason)
+		if (text) this.#emitNotice(level, text, source)
+	}
+
+	#onNotificationShow(payload: Record<string, unknown>): void {
+		const text = asString(payload.text)
+		if (!text) return
+		const detail = asString(payload.detail)
+		const level =
+			payload.level === "error"
+				? "error"
+				: payload.level === "warning" || payload.level === "warn"
+					? "warning"
+					: "info"
+		this.#emitNotice(level, detail && detail !== text ? `${text}\n${detail}` : text, asString(payload.kind) ?? "gateway")
+	}
+
+	#emitCustomMessage(message: CustomMessage, rowId?: number): void {
+		// ADR-10 D8.3: a snapshot that already carries this durable row owns the block; the live
+		// event only confirms it, never appends a second card.
+		if (rowId !== undefined) {
+			if (this.#rowMessages.has(rowId)) return
+			this.#rowMessages.set(rowId, message)
+		}
+		this.#messages.push(message)
+		this.#emit({ type: "message_start", message })
+		this.#emit({ type: "message_end", message })
+	}
+
+	#onAdviserMessage(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("adviser")) return
+		const text = asString(payload.text)
+		if (!text) return
+		const message = customRowToMessage({
+			role: "custom",
+			text,
+			custom_type: "advisor",
+			display: true,
+			display_only: false,
+			details: asRecord(payload.details) ?? { notes: [] },
+			attribution: "agent",
+			row_id: asNumber(payload.row_id),
+			timestamp: now()
+		} as TranscriptMessage)
+		if (message) this.#emitCustomMessage(message, asNumber(payload.row_id))
+	}
+
+	#onTodoReminder(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("todo_reminder")) return
+		const message = customRowToMessage({
+			role: "custom",
+			text: asString(payload.text) ?? "",
+			custom_type: "todo-reminder",
+			display: true,
+			display_only: false,
+			details: {
+				todos: payload.todos,
+				attempt: asNumber(payload.attempt) ?? 0,
+				max_attempts: asNumber(payload.max_attempts) ?? 0
+			},
+			attribution: "agent",
+			row_id: asNumber(payload.row_id),
+			timestamp: now()
+		} as TranscriptMessage)
+		if (message) this.#emitCustomMessage(message, asNumber(payload.row_id))
+	}
+
+	/** ADR-10 D7/D8.3: one deduped one-shot notice; a row already in the snapshot is not repeated. */
+	#onTranscriptNotice(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("notice")) return
+		const id = asString(payload.id)
+		if (id) {
+			if (this.#noticeIds.has(id)) return
+			this.#noticeIds.add(id)
+		}
+		const rowId = asNumber(payload.row_id)
+		if (rowId !== undefined && this.#rowMessages.has(rowId)) return
+		const level = payload.level === "error" ? "error" : payload.level === "warning" ? "warning" : "info"
+		const text = asString(payload.text)
+		if (text) this.#emitNotice(level, text, asString(payload.source) ?? "gateway")
+	}
+
+	#onResumeProgress(payload: Record<string, unknown>): void {
+		const failed = payload.status === "failed"
+		const text =
+			asString(payload.message) ??
+			(failed ? `Session resume failed (${asString(payload.phase) ?? "unknown"})` : undefined)
+		if (!text) return
+		this.#emitNotice(failed ? "error" : "info", text, "session")
+	}
+
+	#onApprovalCancelled(payload: Record<string, unknown>): void {
+		const reason = asString(payload.reason) ?? "cancelled"
+		const count = asNumber(payload.cancelled_count) ?? 0
+		this.#emitNotice(
+			"warning",
+			`Approval ${reason}${count > 0 ? ` (${count} pending)` : ""}`,
+			"approval"
+		)
 	}
 
 	/** Answer a server→client request; the caller's handler gets first refusal. */
@@ -1078,7 +1380,10 @@ export class GatewayOmpSession {
 	}
 
 	#complete(payload: Record<string, unknown>): void {
-		const usage = toOmpUsage(payload.usage as never)
+		// ADR-2 D1: the assistant message carries THIS step's usage, never the session-cumulative
+		// `payload.usage` (missing step usage stays zero, so markers never fire on a cumulative value).
+		const stepUsage = toOmpUsage(payload.step_usage as never)
+		const servedModel = asString(payload.served_model)
 		const status = stopReasonFor(asString(payload.status), asString(payload.stop_reason))
 		const finalText = typeof payload.text === "string" ? payload.text : undefined
 		if (!this.#draft) {
@@ -1088,7 +1393,7 @@ export class GatewayOmpSession {
 			const suffix =
 				finalText === undefined ? undefined : shown && finalText.startsWith(shown) ? finalText.slice(shown.length) : finalText
 			if (!suffix) {
-				this.#mergeLastAssistant(usage, status)
+				this.#mergeLastAssistant(stepUsage, status, servedModel)
 				return
 			}
 			const draft = this.#openDraft(asString(payload.message_id) ?? `${this.#state.sessionId}:${now()}`)
@@ -1110,7 +1415,8 @@ export class GatewayOmpSession {
 				}
 			}
 		}
-		if (usage) draft.message.usage = usage
+		if (stepUsage) draft.message.usage = stepUsage
+		if (servedModel) draft.message.upstreamModel = servedModel
 		draft.message.stopReason = status
 		const error = asString(payload.error)
 		if (error) draft.message.errorMessage = error
@@ -1128,26 +1434,30 @@ export class GatewayOmpSession {
 		this.#messages.push(message)
 	}
 
-	/** Close the in-flight assistant segment when a tool starts, so later text opens a new block. */
-	#closeSegmentForTool(): void {
+	/** Close the in-flight assistant segment when a tool starts, so later text opens a new block.
+	 *  Returns true when a visible segment was finalized (its usage is already on that message). */
+	#closeSegmentForTool(stepUsage?: Usage): boolean {
 		const draft = this.#draft
-		if (!draft) return
+		if (!draft) return false
 		this.#draft = undefined
 		const hasContent = draft.text.size > 0 || draft.thinking.size > 0
-		if (!hasContent) return
+		if (!hasContent) return false
+		if (stepUsage) draft.message.usage = stepUsage
 		draft.message.stopReason = "toolUse"
 		const message = materialize(draft)
 		this.#emit({ type: "message_update", message, assistantMessageEvent: { type: "done", reason: "toolUse", message } })
 		this.#emit({ type: "message_end", message })
 		this.#messages.push(message)
+		return true
 	}
 
 	/** Fold a late complete's usage/status into the last assistant block (no duplicate render). */
-	#mergeLastAssistant(usage: Usage | undefined, status: StopReason): void {
+	#mergeLastAssistant(usage: Usage | undefined, status: StopReason, upstreamModel?: string): void {
 		for (let index = this.#messages.length - 1; index >= 0; index -= 1) {
 			const message = this.#messages[index]
 			if (message?.role !== "assistant") continue
 			if (usage) message.usage = usage
+			if (upstreamModel) message.upstreamModel = upstreamModel
 			message.stopReason = status
 			return
 		}
@@ -1199,6 +1509,34 @@ export interface ConnectGatewayOmpSessionOptions extends Omit<GatewaySessionOpti
 }
 
 /**
+ * ADR-10 D8.5: the `session.create` params omp-ui sends. `custom_messages` is create-only session
+ * state; Desktop/Ink omit it and keep the legacy projection. `client` is the self-declared
+ * identity object (attribution only).
+ */
+export function gatewayCreateParams(options: { cwd?: string; title?: string } = {}): Record<string, unknown> {
+	return {
+		source: "tui",
+		client: { name: "omp-ui" },
+		custom_messages: true,
+		request_id: randomUUID(),
+		...(options.cwd ? { cwd: options.cwd } : {}),
+		...(options.title ? { title: options.title } : {})
+	}
+}
+
+/**
+ * ADR-10 D8.5: the `session.resume` params omp-ui sends. The display projection carries custom
+ * rows and display-safe tool content, so one snapshot is enough (no second `session.history`).
+ */
+export function gatewayResumeParams(sessionId: string): Record<string, unknown> {
+	return {
+		session_id: sessionId,
+		display_projection: true,
+		include_tool_content: "full"
+	}
+}
+
+/**
  * Pair with the gateway, create or resume one session, and attach the event stream.
  *
  * Frames that arrive while the instance is being built (the backend writes `gateway.ready` right
@@ -1230,21 +1568,19 @@ export async function connectGatewayOmpSession(options: ConnectGatewayOmpSession
 	try {
 		await options.beforeSession?.(connection.client)
 		value = options.resumeSessionId
-			? await connection.client.request("session.resume", {
-					session_id: options.resumeSessionId,
-					display_projection: true
-				})
-			: await connection.client.request("session.create", {
-					source: "tui",
-					request_id: randomUUID(),
-					...(options.cwd ? { cwd: options.cwd } : {}),
-					...(options.title ? { title: options.title } : {})
-				})
+			? await connection.client.request("session.resume", gatewayResumeParams(options.resumeSessionId))
+			: await connection.client.request("session.create", gatewayCreateParams(options))
 	} catch (error) {
 		connection.close("session create/resume failed")
 		throw error instanceof GatewayClientError || error instanceof Error ? error : new Error(String(error))
 	}
 	instance = new GatewayOmpSession({ ...options, connection }, GatewayOmpSession.snapshotFrom(value))
+	// ADR-10 D8.4: one non-blocking capability read after create/resume. A failure leaves the
+	// role render set intact and advertises nothing — never a fake `supported:true`.
+	void connection.client
+		.request<RuntimeDescribeResult>("runtime.describe", {})
+		.then((described) => instance?.adoptTranscriptBlocks(described.transcript_blocks))
+		.catch(() => {})
 	for (const notification of early.splice(0)) instance.handleNotification(notification)
 	return instance
 }

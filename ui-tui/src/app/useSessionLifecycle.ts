@@ -81,19 +81,36 @@ export const writeActiveSessionFile = (sessionId: null | string, file = process.
   }
 }
 
+const INFLIGHT_CUSTOM_TYPES: Record<string, string> = {
+  async_delegation_complete: 'async-delegation-complete',
+  internal_notification: 'internal-notification',
+  model_switch: 'model-switch',
+  personality_switch: 'personality-switch',
+  process_complete: 'process-complete'
+}
+
+/** ADR-10 P5: the live in-flight turn is a `session_auto_continue` contract, not a projected row;
+ *  translate its marker into the custom/synthetic shape the transcript renderer reads. */
 export const liveSessionInflightMessages = (inflight?: null | InflightTurn): Msg[] => {
   const user = String(inflight?.user ?? '').trim()
 
-  return user
-    ? toTranscriptMessages([
-        {
-          role: 'user',
-          text: user,
-          ...(inflight?.display_kind ? { display_kind: inflight.display_kind } : {}),
-          ...(inflight?.display_metadata ? { display_metadata: inflight.display_metadata } : {})
-        }
-      ])
-    : []
+  if (!user) {
+    return []
+  }
+
+  const kind = inflight?.display_kind
+  const customType = kind ? INFLIGHT_CUSTOM_TYPES[kind] : undefined
+  const metadata = inflight?.display_metadata
+  if (customType) {
+    return toTranscriptMessages([{ role: 'custom', custom_type: customType, text: user, details: metadata ?? {} }])
+  }
+  if (kind === 'hidden') {
+    return []
+  }
+  if (kind === 'auto_continue' || kind === 'steer') {
+    return toTranscriptMessages([{ role: 'user', text: user, synthetic_kind: kind, live_steered: kind === 'steer' }])
+  }
+  return toTranscriptMessages([{ role: 'user', text: user }])
 }
 
 export const hydrateLiveSessionInflight = (inflight?: null | InflightTurn) => {

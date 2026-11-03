@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import RootModel
 
 from .base import JsonValue, Params, Result
-from .common import ProfileParams, TranscriptMessage
+from .common import CanonicalClientIdentity, ProfileParams, TranscriptMessage
 from .connectors_operation import ConnectionRequestPayload
 from .sessions import OpenRequestEntry, TodoState
 from .canonical import (AdmissionStatus, CanonicalClientLabel, CanonicalSessionRef, PromptResponseResult,
@@ -17,14 +17,6 @@ from .registry import canonical_method
 
 class CanonicalSessionParams(ProfileParams):
     session_id: str
-
-
-class CanonicalClientIdentity(Params):
-    """A client naming itself: ``name`` matches ``[a-z0-9][a-z0-9._-]{0,63}``, ``version`` is 1-64
-    printable ASCII without spaces. Attribution only (owners advertising ``session-client-v1``)."""
-
-    name: str
-    version: str | None = None
 
 
 class CanonicalCreateParams(ProfileParams):
@@ -64,6 +56,9 @@ class CanonicalCreateParams(ProfileParams):
     client_env: dict[str, str] | None = None
     # The creating client's self-declared label, echoed as ``session.info.client``; no policy reads it.
     client: CanonicalClientIdentity | None = None
+    # ADR-10 D9: the create-only session flag that makes producers write ``role:"custom"`` rows.
+    # Resume never changes ``custom_messages``.
+    custom_messages: bool = False
 
 
 class CanonicalResumeParams(ProfileParams):
@@ -83,6 +78,14 @@ class CanonicalResumeParams(ProfileParams):
     # A renderer (the Ink TUI) asks for main's display projection of the same rows
     # (``tui_gateway.session_history._history_to_messages``) as ``display_messages``.
     display_projection: bool = False
+    # DEPRECATED-NO-OP (ADR-10 P5): ``display_messages`` is always the custom projection now;
+    # old callers that still send this per-viewer flag are accepted and ignored.
+    project_custom_messages: bool = False
+    # ADR-10 D4: tool result ``content`` depth in ``display_messages``. Default ``none`` keeps
+    # today's payload byte-identical.
+    include_tool_content: Literal['none', 'text', 'full'] = 'none'
+    # ADR-10 D10: project compaction handoffs as ``role:"compaction_summary"``. Default off.
+    include_compaction: bool = False
 
 
 class CanonicalSessionHandle(Result):

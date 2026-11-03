@@ -1,7 +1,8 @@
 # ADR-2：Transcript 区块目录的数据来源与网关增量
 
-**状态**：已决定（2026-11-01）。实现未开始。分阶段：`session.history` 参数随 §9 **P3**，`message.*`
-字段与 `message.adviser` 随 **P4**，客户端映射随 **P5**。落地前 `docs/omp-ui-panels-gateway-plan.md`
+**状态**：已决定（2026-11-01）。**落地由 ADR-10 的阶段接管**：D1/D2 的 `step_usage` 与
+`served_model`/`requested_model`、D11 的 `todo.reminder` stop gate 随 **ADR-10 P3 已落地**；
+其余契约/投影按 ADR-10 的 P1–P5 顺序执行。落地前 `docs/omp-ui-panels-gateway-plan.md`
 §2.3.2.1 的 `partial` / `待接` 保持原样：不伪造数据，不改渲染分支（§0.1）。
 
 **关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7、§9；ADR-1（Pause）。
@@ -19,6 +20,14 @@
 安装范围限定为 gateway 路径；D5 的 rewind 入口判断限定在本仓库；D6 补 canonical
 `session.history` handler、参数名与 `outline.summary` 定义；D9 标注被后续 ADR 取代的条目；
 D10 写明 `is_error` 必须 merge 进 callback 返回的 `display_metadata`；客户端与网关行号按本日代码更新。
+
+**校准（2026-11-03，`role:"custom"` 与模型上下文）**：D9 的“自定义/hook 消息”只表示 Hermes 没有
+等价的 **transcript 区块**，不等于这些行不进入模型上下文。omp 的 `type:"custom_message"`（重建为
+`role:"custom"`）默认投影为 `developer`；`skill-prompt`/`collab-prompt` 且 `attribution:"user"`
+投影为 `user`；普通 custom 含图片时文本→`developer`、图片→`user`（user 归因 skill prompt 整体走
+`user`）；`type:"custom"` 才是完全不透明、非 LLM 的记录；已持久化的 `custom_message` 即使
+`display:false` 也只影响 TUI 渲染，仍进入上下文。D8 的 skill invocation 与 D11 的 reminder 行
+按同一口径标注“显示投影 ≠ 上下文包含”。
 
 ## 问题
 
@@ -38,6 +47,11 @@ D10 写明 `is_error` 必须 merge 进 callback 返回的 `display_metadata`；�
   - Todo 提醒 → `todo.reminder` + 持久化的 reminder 行（D11）。
 
 所以本 ADR 只决定网关增量；其余一律落在客户端映射层。
+
+本 ADR 的“区块”是 **display transcript**：`display_kind`/`display_metadata` 只是显示投影，既不是
+provider wire role，也不能判断一行是否进入模型上下文（同一行可以是模型消息但 `display:false`，
+也可以是纯显示卡片而没有模型消息）。omp 的 `custom_message` 同时是模型上下文消息，必须与显示
+区块分开讨论（D9）。
 
 ## 决策
 
@@ -177,7 +191,9 @@ session.history {session_id, since?: int, cursor?: int, limit?: int,
   `name + " " + context`；无文本的 entry 用 `display_kind`，都没有则为空串）。与 `entries` 同序、
   同 `row_id`，不跨页补全。
 
-display-only，不进入模型上下文，不影响 prompt cache。
+`include_tool_content`/`outline` 的附加字段是 display-only，不进入模型上下文，不影响 prompt cache。
+注意不能外推到整个 `session.history`：`entries` 中 `type:"custom_message"` 仍是模型上下文消息
+（D9），`display` 只是渲染开关。
 
 ### D7. Reaction：网关不改
 
@@ -207,13 +223,32 @@ display-only，不进入模型上下文，不影响 prompt cache。
 - 工具名别名：`read_file`→`read`、`todo_list`→`todo`；
 - `/skill-*` 已由 `command-controller.ts:151` 处理 `type:"skill"` 并提交回合；剩余工作是把
   `command.dispatch` 的 `display` 与快照 `display_kind="skill_invocation"` 画成 invocation 块，
-  而不是一次性状态行；
+  而不是一次性状态行。`display`/`display_kind` 只决定渲染：底层 skill prompt 是 user 归因的
+  `custom_message`，在模型侧是 **user 回合**（业务附录 B.5.5），不要因为画成 invocation 块就把它当作
+  非上下文内容；
 - `error_surface`、`approval.cancelled` 映射到错误帧 / 取消提示。
 
-### D9. 无 producer：保持空
+### D9. 无 producer：保持空（仅指 transcript 区块）
 
 独立 late-diagnostics 块、被剥离工具调用、collab prompt、reply write、自定义/hook 消息。Hermes
 没有等价数据（或已随 §0.3 裁剪），不造块、不改布局。
+
+“无 producer”只约束 **display transcript**，不是模型上下文声明。模型侧还要先满足活动路径条件：
+只有当前 root→leaf 路径上、未被 `reset_boundary` 隐藏、也未落在最新 compaction 已摘要替换区间的
+条目才可能进入上下文；未选中分支的 `custom_message` 不算。
+
+- omp 的 `type:"custom_message"`（以及 `type:"message"` 且 `message.role:"custom"`）是
+  **模型上下文消息**，重建为 `role:"custom"` 后在每次请求前转换：默认 → `developer`；
+  `skill-prompt`/`collab-prompt` 且 `attribution:"user"` → `user`；普通 custom 含图片时文本 →
+  `developer`、图片 → `user`（user 归因的 skill prompt 不拆分，整体走 `user`）；
+  `prewalk-plan`/`vibe-mode-context` 在重建时排除。
+- 只有 `type:"custom"`（`tool_execution_start`、`session_exit`、`user_todo_edit`、
+  `system-prompt-digest` 等）是完全不透明、非 LLM 的记录；它才符合“没有等价数据”的描述。
+- 已持久化的 `custom_message` 即使 `display:false` 也只过滤 TUI 渲染，仍进入模型上下文；
+  `display_kind="hidden"` 同理只是显示投影。**不得**用 `display`/`display_kind` 判断上下文包含，
+  也不得为了对齐把模型消息塞进 `display_metadata`。
+- `customType` 与 `details` 不发送给 provider；模型只看到 `content`。`branchSummary`/
+  `compactionSummary` 同样是内部角色，最终转成 `user` 模板消息。
 
 **已取代/移出**：Recap 与压缩摘要块由 ADR-5 取代（`include_compaction`）；TTSR 由 ADR-6 取代；
 Background TAN 由 ADR-3 取代。Todo 提醒已由 D11 决定实现，不在此列。
@@ -295,6 +330,8 @@ Background TAN 由 ADR-3 取代。Todo 提醒已由 D11 决定实现，不在此
   若要移植 mid-run nudge，再单独用 `agent/tool_guardrails.py::MUTATING_TOOL_NAMES` 计数；本 ADR 不做。
 - 快照：`display_kind`/`display_metadata` 由 `_history_to_messages` 原样转发；客户端按
   `display_metadata.todo_reminder` 还原。**不要**用 `display_kind="hidden"`，否则 resume 丢失。
+  `display_kind="todo_reminder"` 只是渲染投影；该行本身是真实的 `role:"user"` 消息，按设计进入
+  模型上下文，不能用 `display_kind` 把它过滤出上下文（omp 的 hidden reminder 同理）。
 - 重置：todos 为空或没有 active 项时，`attempts = 0`、`awaiting_progress = False`；预算跨 prompt 保留。
 
 **不采用**：gateway `session_auto_continue` 式回合后重提；TodoStore revision 当进展；仅以 mutating
@@ -445,7 +482,9 @@ session.history (E)
    `<untrusted_tool_result` 包装与 `[hermes note:`；写入时被 `_neutralize_delimiters` 中和的字面量
    保持 `untrusted-tool-result` 形态（不要求还原）；非高风险工具逐字节一致；`full` 的图片超限回落
    占位、不报错；`include_outline=true` 时 `outline` 与 `entries` 同序同 `row_id`。
-7. `/skill-*` 仍产生回合；invocation 块由客户端从 `display` + `display_kind` 渲染。
+7. `/skill-*` 仍产生回合；invocation 块由客户端从 `display` + `display_kind` 渲染。渲染不影响
+   模型上下文：user 归因的 skill prompt 仍作为 user 回合进入 provider 请求，`display:false` 的
+   hidden reminder 也仍然进入。
 8. rewind：选择 `entry_id` → `session.mutate rewind` 截断 → 重新提交成功；过期
    `expected_generation` 被拒；失败后客户端重读 `session.history`。
 9. 在 PM 环境（`source ./activate` / `.venv`）内 `python scripts/gen_gateway_contracts.py --check`、
@@ -465,3 +504,4 @@ session.history (E)
 | Transcript 选择器“本机 `getTree`/`navigateTree`，入口是 `RewindSelectorComponent`” | 本仓库内无任何 rewind 入口；需新增入口 + `session.history` + `session.mutate rewind` |
 | `include_tools` 扩展 | 改为 `include_tool_content` 三态；`include_tools` 是 no-op |
 | Todo 提醒“无 producer” | D11 决定做：agent 侧 stop gate + `todo.reminder` + 持久化 reminder 行；managed/remote 事件为 `null` |
+| 自定义/hook 消息“无 producer” | 仅指 Hermes 没有等价 **transcript 区块**：omp 的 `custom_message`（`role:"custom"`）是模型上下文消息（默认→`developer`，user 归因的 skill/collab→`user`，图片拆分）；`type:"custom"` 才是非 LLM 记录。`display:false` 仍进入上下文；不得用 `display_kind` 反推模型角色 |

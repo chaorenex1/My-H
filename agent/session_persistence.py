@@ -250,6 +250,10 @@ def _db_flush_row(agent, msg: dict, is_current_turn_user: bool) -> dict[str, Any
         "_compressed_summary": bool(msg.get(COMPRESSED_SUMMARY_METADATA_KEY)),
         "timestamp": timestamp, "api_content": api_content,
         "display_kind": _summary_display_kind(msg), "display_metadata": msg.get("display_metadata"),
+        # ADR-10 D1: custom rows have no columns; the writer carries these into the storage
+        # envelope (`agent.custom_messages.storage_metadata`) so resume can rebuild the block.
+        **{key: msg.get(key) for key in ("custom_type", "display", "display_only", "details",
+                                         "attribution", "legacy_role") if msg.get(key) is not None},
         # Load-bearing for restart drain-window recovery dedup.
         "platform_message_id": msg.get("platform_message_id") or msg.get("message_id"),
         "observed": bool(msg.get("observed")),
