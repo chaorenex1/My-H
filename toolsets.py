@@ -35,6 +35,8 @@ _HERMES_CORE_TOOLS = [
     "computer_use",
     # Code graph: read-only queries + evidence-constrained updates (ADR-8).
     "code_intel", "code_graph_update",
+    # Semantic find over the workspace (ADR-11 D14); service-gated by judgment.tools.enabled.
+    "judgglob", "judggrep",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -103,6 +105,12 @@ TOOLSETS = {
         "Code graph queries and evidence-backed updates (symbols, calls, types, "
         "dependencies, tests, changes, context)",
         ["code_intel", "code_graph_update"],
+    ),
+    "judgment": _ts(
+        "Semantic, read-only find over the workspace: rank paths by a description "
+        "(judgglob) and locate the file ranges implementing a behavior (judggrep). "
+        "Requires a native judgment route unless judgment.tools.enabled is 'on'.",
+        ["judgglob", "judggrep"],
     ),
     "terminal": _ts("Terminal/command execution and process management tools", ["terminal", "process_manage"]),
     "skills": _ts(

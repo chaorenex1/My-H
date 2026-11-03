@@ -1221,11 +1221,19 @@ def _finalize_tool_batch(agent, messages: list, effective_task_id: str, num_tool
         return
     batch = messages[-num_tools:]
     contents_before = [message.get("content") for message in batch]
+    result_ids = {
+        str(message.get("tool_call_id")) for message in batch
+        if isinstance(message, dict) and message.get("role") == "tool"
+    }
     enforce_turn_budget(batch, env=get_active_env(effective_task_id), config=budget)
     plugin_live_notes.keep_after_turn_budget(agent, batch)
     sync_rewritten_tool_rows(agent, batch, contents_before)
     record_tool_batch(agent, batch, contents_before)
     agent._apply_pending_steer_to_tool_results(messages, num_tools)
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        # ADR-6 D5: the hidden reminder is the batch's last row, after any /steer marker.
+        coordinator.after_tool_batch(agent, messages, num_tools, result_ids=result_ids)
 
 
 def _tool_progress_enabled(agent) -> bool:

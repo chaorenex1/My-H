@@ -508,7 +508,7 @@ live 会话，故 live 事件组整体是 P/N 混合。
 | `irc_message {message}` | 无（`message.adviser {id,text,severity,label,display_kind}` 是另一语义） | N | **新增** `custom.message {message: CustomMessage}`，或明确不支持。`message` 是 `role:"custom"` 的 `CustomMessage`：`irc:incoming` 可进入模型上下文（默认 `developer`，`attribution:"agent"`；parent steer 另走 `user`），`irc:relay` 只发 UI、不持久化；契约必须带 `custom_type`/`attribution`/`display`，`display` 只控制渲染 |
 | `advisor_cost_changed {}` | 无 | N | **新增** `advisor.cost_changed {cost?}`；Hermes 只有 `message.adviser` |
 | `advisor_yielded {}` | 无 | N | **新增** `advisor.yielded {}` |
-| `ttsr_triggered {rules}` | 无 | N | **新增** `ttsr.triggered {rules:{name,path,content}[]}` |
+| `ttsr_triggered {rules}` | 无 | N | **新增** `ttsr.triggered {rules:{name,description?,content?}[]}`（ADR-6 D3） |
 
 ## A.12 服务端请求：扩展 UI
 
@@ -627,6 +627,6 @@ emitter 的事件判为 orphan，而伪造数据会污染 wire。落地它们需
 | `compaction.start/end`、`retry.start/end/fallback_*`、`cache_warming.start/end` | 结构化数据只存在于 `agent/compaction_events.py`（Relay/OTel + `post_compaction` plugin hook）与 `agent/turn_recovery.py` 的内部变量；需要网关可订阅的 in-process 回调（cache warming 功能本身不存在） |
 | `subagent.*` 的 `agent`/`agent_source`/`description`/`task`/`assignment`/`session_file`/`parent_tool_call_id`/`detached`/`progress`、`subagent.event` | `delegate_task` 不接收命名 agent/描述/父 tool call id；子代理原始事件只进 live-transcript 文件，无网关转发路径 |
 | `voice.levels`、`capture_id`、`voice.ended` | 录音器只有内部 int RMS（0–32767），无输出电平、无 capture id、无独立的结束/错误帧 |
-| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`ttsr.triggered`、`custom.message` | 侧问是非流式一次性返回；adviser 成本只在 JSONL 汇总；TTSR 与“带 `custom_type`/`attribution` 的 custom 消息事件”在 Hermes 不存在。注意 omp 的 custom 消息本身可能是模型上下文消息（默认 `developer`，user 归因的 skill/collab→`user`），不是纯 display 帧；新增 `custom.message` 时不得把它降级成 `display_metadata` |
+| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`custom.message` | 侧问是非流式一次性返回；adviser 成本只在 JSONL 汇总；“带 `custom_type`/`attribution` 的 custom 消息事件”在 Hermes 不存在。注意 omp 的 custom 消息本身可能是模型上下文消息（默认 `developer`，user 归因的 skill/collab→`user`），不是纯 display 帧；新增 `custom.message` 时不得把它降级成 `display_metadata`。`ttsr.triggered` 已由 ADR-6 P1 生产（见 A.11），不再属于缺口 |
 | `ui.select/confirm/input/editor/widget/editor_text/open_url` | 当前没有任何后端流程会发起这些请求；每个都需要一个真实调用者才能通过 orphan 门 |
 | `host.tool.*`、`host.uri.*` | Hermes 全部工具在服务端执行，没有“请宿主执行工具”的子协议 |

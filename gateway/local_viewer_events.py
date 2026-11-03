@@ -213,6 +213,12 @@ def publish_control_if_changed(turn) -> None:
     turn._schedule(republish(), "session.control.update after a tool")
 
 
+def publish_ttsr_triggered(turn, rules) -> bool:
+    """ADR-6 D3: the one live frame a matched rule produces. Payloads carry only what the
+    ``TtsrNotificationComponent`` renders (name/description/content), never local rule paths."""
+    return turn._publish_execution("ttsr.triggered", {"rules": list(rules)})
+
+
 def note_tool_start(turn, call_id, tool_name=None, args=None) -> None:
     """Monotonic start time of one call (``tool.complete.duration_s``) and, for a write-capable
     tool, the before-state of its local files: the agent fires the start callback BEFORE the tool

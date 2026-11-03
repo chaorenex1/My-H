@@ -300,6 +300,7 @@ from hermes_cli.subcommands.insights import build_insights_parser
 from hermes_cli.subcommands.usage import build_usage_parser
 from hermes_cli.subcommands.monitoring import build_monitoring_parser
 from hermes_cli.subcommands.rules import build_rules_parser
+from hermes_cli.subcommands.judgment import build_judgment_parser, cmd_judgment
 from hermes_cli.subcommands.skills import build_skills_parser
 from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
@@ -3220,6 +3221,7 @@ def _build_cli_parser():
     build_pairing_parser(subparsers, cmd_pairing=cmd_pairing)
     build_skills_parser(subparsers, cmd_skills=cmd_skills)
     build_rules_parser(subparsers, cmd_rules=cmd_rules)
+    build_judgment_parser(subparsers, cmd_judgment=cmd_judgment)
     build_bundles_parser(subparsers)
     build_plugins_parser(subparsers, cmd_plugins=cmd_plugins)
 

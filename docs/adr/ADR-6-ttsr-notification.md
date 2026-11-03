@@ -1,10 +1,8 @@
 # ADR-6：TTSR 通知的忠实移植（omp-ui ↔ Hermes）
 
-**状态**：已决定（2026-11-02）。实现未开始。分阶段：**P1** 本地 viewer 的被动工具规则匹配 +
-`ttsr.triggered` 事件 + `TtsrNotificationComponent` + 隐藏 reminder；**P2** AST / judge 规则；**P3**
-流式中断（stream rewind）路径另立 ADR。落地前 `docs/omp-ui-panels-gateway-plan.md` §2.3.2.1 的
-TTSR 行保持 `无 producer`（§0.1）：客户端不画假通知、不用 `notification.show`/`status.update`/
-`agent.print` 冒充。
+**状态**：已决定（2026-11-02）；**P1 已实现（2026-11-04）**，P2 的 `question` judge 由
+ADR-11 P3 同批落地，AST / prose / `after-gap` 未开始；**P3** 流式中断（stream rewind）路径另立 ADR。
+P1 落地后 `docs/omp-ui-panels-gateway-plan.md` §2.3.2.1 的 TTSR 行已改为 `已接（local）`（§0.1）。
 
 **关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7；
 `docs/appendix-omp-ui-realtime-rpc.md` A.11、A.15；ADR-2（D9 把 TTSR 判为“无 producer”、D3/D11 的
@@ -213,11 +211,12 @@ P1 的触发面：
 
 对不满足的规则：
 
-- `interruptMode` 为 `always` / `prose-only` / `tool-only`：**不激活**；只有 `astCondition` 或只有
-  `question`：P1 同样不激活。两类不兼容规则在会话开始/规则重载时**汇总成一条**可见提示：走
-  `status.update{kind:"ttsr_unsupported", text:"…"}`（壳已消费，`gateway-session.ts:966-971` →
-  `#onStatusUpdate` → notice），**不走** `notification.show`——壳的 `#notificationHandlers` 没有
-  `notification.show`，会按未知类型静默丢弃（`gateway-session.ts:770-791`）。提示按 name 列出，不是
+- `interruptMode` 为 `always` / `prose-only` / `tool-only`：**不激活**；只有 `astCondition`：同样不激活。
+  `question` 规则不参与工具参数匹配，由 ADR-11 P3 在 assistant 输出完成后判定。不兼容规则在会话开始/
+  规则重载时**汇总成一条**可见提示：发
+  `status.update{kind:"ttsr_unsupported", text:"…"}`，并同时发一条 `transcript.notice`（level
+  `warning`、source `ttsr`）——in-tree shell 的 `#onStatusUpdate` 只处理 compact，不消费未知 kind 的
+  text，`transcript.notice` 才是它实际渲染的通道。**不走** `notification.show`。提示按 name 列出，不是
   `ttsr.triggered`；P2/P3 再逐类实现；
 - 非法 `condition`：`rule_utils.check_rules` 已经能报错；运行时再编译失败则跳过该规则并 debug 日志，
   不发通知、不注入；
@@ -341,10 +340,10 @@ event ttsr.triggered {
     （`agent/message_metadata.py:46-54`），模型仍看到 reminder；
   - 用 `user` 而不是 `developer`/`system`：Hermes 的 transport 只重写首条 system 的 role
     （`agent/transports/chat_completions.py:367-372`），中途插 system/developer 在严格 provider 上会 400。
-- 插入点：`_finalize_tool_batch` 的最后，`_apply_pending_steer_to_tool_results` 之后（`:1231`），
-  保证它是本批次最后一条、且不会与 steer 合并。若本批次有工具没有结果（被中断/跳过），只为有结果且
-  未被判定为错误的工具交付 reminder；错误判定沿用 `agent.display._detect_tool_failure`（`agent/display.py:1031`；
-  `gateway/run_turn_progress.py:63-64,840-842` 的同一来源），不另写启发式。
+- 插入点：`_finalize_tool_batch` 的最后，`_apply_pending_steer_to_tool_results` 之后，保证它是本批次
+  最后一条、且不会与 steer 合并。交付条件按 D2/验收 6：**只要该 call 实际执行并产生了结果行就交付，
+  包括工具自身返回 error**；只有该 call 没有结果行（被跳过/取消/未执行）或 assistant 整体
+  aborted/error 时不交付。不另写工具失败启发式。
 - 不修改 tool result 内容；不新增 `custom`/`hookMessage` 行；不把 reminder 写进 assistant 文本。
 
 ### D6. 客户端：一个 shell 事件 + 现成组件，不新增行、不落库
@@ -424,8 +423,8 @@ AgentSessionEvent += {type: "ttsr_triggered", rules: NotificationRule[]}
 | 网关 | `gateway/run_turn_progress.py` | `combined_tool_start_callback` 调 `coordinator.match_tool_start`，命中则 `_publish_execution("ttsr.triggered", payload)`；`_finalize_tool_batch` 调 `coordinator.after_tool_batch` |
 | 身份 | `tui_gateway/contracts/canonical_sessions.py`、`gateway/session_policy.py` | `CanonicalCreateParams.client: Literal["omp-ui"]`；`CREATE_FIELDS` 接受；`LocalSessionPolicy.client` 从冻结 request 读 |
 | 客户端 | `omp-ui/src/modes/rpc/gateway-session.ts` | `session.create` 带 `client:"omp-ui"`；resume 不重发 |
-| 网关 | `gateway/run_turn_runner.py` | `_wire_turn_agent_callbacks` 在 `local_viewer_turn(self)` **且** `active_policy().client == "omp-ui"` **且** `ttsr.enabled` 时挂 `agent.ttsr_coordinator`；turn 结束清掉 |
-| 行 | `agent/tool_executor.py::_finalize_tool_batch` | 在 steer 之后调用 `agent.ttsr_coordinator.after_tool_batch(messages)`；无 coordinator 时零变化 |
+| 网关 | `gateway/run_turn_runner.py` | `_run_sync_scoped` 在 `local_viewer_turn(self)` **且** `active_policy().client == "omp-ui"` **且** `ttsr.enabled` 时挂 `agent.ttsr_coordinator`（`install_turn_coordinator`）；`finally` 里 `restore_coordinator` 清掉 |
+| 行 | `agent/tool_executor.py::_finalize_tool_batch` | 在 steer 之后调用 `agent.ttsr_coordinator.after_tool_batch(messages, result_ids=...)`（steer 前收集的结果行 id，避免切片偏移）；无 coordinator 时零变化 |
 | 契约 | `tui_gateway/contracts/events.py` | `TtsrRulePayload` / `TtsrTriggeredPayload` + `event(...)` |
 | 状态 | `hermes_state_common.py` / `hermes_state_ttsr.py`（新） | `session_ttsr_injections` 建表、`mark_injected`、`injected_names`、会话删除级联 |
 | 配置 | `hermes_cli/config_defaults.py` | `ttsr.enabled/builtin_rules/disabled_rules` |
@@ -459,8 +458,8 @@ AgentSessionEvent += {type: "ttsr_triggered", rules: NotificationRule[]}
 7. **scope/glob**：`tool:edit(*.ts)` 不匹配 `.md`；`(**/*.ts)` 匹配嵌套路径；`{ts,tsx}` 展开；
    没有可解析文件路径的工具不跑条件；无 `scope` 的规则按 omp 默认（text+tool）在工具参数上参与；
    `globs`/`paths` 与 scope 同时生效。
-8. **拒绝语义**：`interruptMode: always` 的规则与只有 `astCondition`/`question` 的规则在会话开始时
-   **汇总成一条** `status.update{kind:"ttsr_unsupported"}` 提示（不是 `notification.show`，壳会丢弃它），
+8. **拒绝语义**：`interruptMode: always` 的规则与只有 `astCondition` 的规则在会话开始时**汇总成一条**
+   `status.update{kind:"ttsr_unsupported"}` + `transcript.notice` 提示（不是 `notification.show`），
    不产生 `ttsr.triggered`、不注入、不中断（P2/P3 前不伪装）。
 9. **开关**：`ttsr.enabled=false` 时无事件/无注入；`disabled_rules` 按 name 排除；
    `builtin_rules=false` 时 source 位于 `install_root()` 下的 shipped corpus 不加载；project/profile

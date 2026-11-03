@@ -51439,6 +51439,63 @@
         "title": "TranscriptRole",
         "type": "string"
       },
+      "TtsrRulePayload": {
+        "additionalProperties": false,
+        "description": "One matched rule, exactly the fields ``TtsrNotificationComponent`` renders.\n\n``description``/``content`` may be empty strings; the component falls back from one to the\nother. Local paths and matching metadata never cross the wire (ADR-6 D3).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Content"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TtsrRulePayload",
+        "type": "object"
+      },
+      "TtsrTriggeredPayload": {
+        "additionalProperties": false,
+        "description": "``gateway.local_viewer_events.publish_ttsr_triggered`` (ADR-6 D3).",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/TtsrRulePayload"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "TtsrTriggeredPayload",
+        "type": "object"
+      },
       "TurnEndPayload": {
         "additionalProperties": false,
         "description": "``prompt_turn.run_body``'s ``finally`` \u2014 the closing half of ``turn.start``, emitted on every\nexit path (completion, error, interrupt). ``message``/``tool_results`` stay absent until the\nturn result exposes the omp ``AgentMessage`` shape; ``status`` is Hermes-native\n(``complete`` / ``error`` / ``interrupted``).",
@@ -57082,6 +57139,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/TranscriptNoticePayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ttsr.triggered",
+      "summary": "A TTSR rule matched this local viewer's turn; render the notification component.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/TtsrTriggeredPayload"
           }
         }
       ]

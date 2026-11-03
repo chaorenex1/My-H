@@ -1,12 +1,14 @@
 # ADR-11：omp Judgment 子系统的移植（typed judgments ↔ Hermes `judge` 路线）
 
-**状态**：已决定（2026-11-03）。实现未开始。分阶段：**P1** `agent/judgment/` 类型契约、文本判定、
+**状态**：已决定（2026-11-03）；**P1–P4 已实现（2026-11-04）**，P5 未开始。分阶段：**P1** `agent/judgment/` 类型契约、文本判定、
 本地 llama.cpp 文本后端（复用 `hermes_cli/local_runtime`）、TypeSafe / OpenRouter Decisions 原生判定、
-配置、账本、`$HERMES_HOME/judgment/` 缓存/审计库、候选拒绝冷却、`hermes judgment`；**P2**
-`judgglob` / `judggrep` 语义 find 工具与 `$HERMES_HOME/judgment/eval/` 判定文件；**P3** OpenAI
-Decisions、Workers AI Clef、`max_questions` 分片、TTSR `question` 规则（依赖 ADR-6 P1）；**P4** 图像
-判定与 `box`；**P5** 判定日志面板（dashboard `/judgment`）。落地前 TTSR 的 `question` 规则继续不参与
-匹配（ADR-6 D2），客户端不画假通知。
+配置、账本、`$HERMES_HOME/judgment/` 缓存/审计库、候选拒绝冷却、`hermes judgment`；**P2** OpenAI
+Decisions、Workers AI Clef、`max_questions` 分片、`judgglob` / `judggrep` 语义 find 工具与
+`$HERMES_HOME/judgment/eval/` 判定文件；**P3** TTSR `question` 规则（依赖 ADR-6 P1）；**P4** 图像
+判定与 `box`；**P5** 判定日志面板（dashboard `/judgment`）。P3 已落地：`question` 规则在 assistant
+消息完成后判定（`noul` + 0.7 阈值），复用 ADR-6 的 `ttsr.triggered` 与隐藏 reminder，客户端不画假通知。
+P4 已落地：`JudgmentImage`/`BoxQuestion`/`BoxAnswer`、四类 wire 的图像编码、Jev 尺寸 fitting 与
+box 反映射、图像感知的缓存身份、`judgment.images` 默认开启、文本 vision 显式 opt-in、CLI `--image`。
 
 **关联**：ADR-4（D11.5 登记了 eval 单元的 `__judge__`/`__judge_batch__`/`__completion__` 接缝）、
 ADR-6（TTSR 通知、D2 的 `question` 字段、P2 的 judge 规则）；`agent/rule_utils.py`、
@@ -24,7 +26,8 @@ ADR-6（TTSR 通知、D2 的 `question` 字段、P2 的 judge 规则）；`agent
 
 **范围**：新增旁路判定原语、配置、CLI、账本/审计库、本地 llama.cpp 文本后端、`judgglob`/`judggrep`
 语义 find 工具、`$HERMES_HOME/judgment/eval/` 判定文件、图像/box 判定、以及 dashboard 的判定日志面板。
-不新增 transcript 行、不改 omp-ui/Desktop/Ink 的实时事件与客户端渲染；不改主 provider 路由；不迁移
+不新增 transcript 行；唯一新增的实时帧是 P5 的 `judgment.batch_progress`（ADR-4 batch 落地后喂现有
+omp-ui HUD），不改 Desktop/Ink 渲染；不改主 provider 路由；不迁移
 `/goal` 的 `goal_judge`、`monitor`、auto-prewalk、auto-thinking、git staging；不实现 ADR-4 D11.5 的
 eval 内核桥/prelude（本 ADR 的引擎供其 `__judge__`/`__judge_batch__` 调用，判定文件落在
 `$HERMES_HOME/judgment/eval/`）；不实现 TTSR 的匹配/注入/通知运行时（P3 只提供判定 API 和
@@ -147,7 +150,7 @@ usage 单独一张表。后续请求只把未命中的问题发给 provider。�
 | auto-prewalk（`docs/prewalk.md:113`） | `docs/omp-ui-panels-gateway-plan.md:24` 列为非目标，§10 待决策 | **不移植** |
 | title drift / unexpected-stop classifier | `agent/title_generator.py`、`agent/turn_stop_gates.py`/`turn_failure_copy.py` 的现有启发式 | **不移植**；没有 typed-judgment 消费者 |
 | `omp stats`、git TUI AI staging、`/omfg` | 无等价前端/命令；`omp stats` 的判定进度由 dashboard 面板取代 | **不移植**；**P5** 用 dashboard `/judgment` 面板展示运行记录 |
-| `progress-hud` 的 judge batch 进度 | 无对应 omp HUD；dashboard 有 Logs/Analytics | **P5** 在 `/judgment` 面板显示 eval batch/最近判定，不新增 transcript 行 |
+| omp `JudgmentBatchProgressHud`（`packages/coding-agent/src/modes/progress-hud.ts:75`，挂在 `interactive-mode.ts:2128`） | omp-ui 已带该组件；Hermes 缺 batch 进度事件与 ADR-4 D11.5 的 batch 桥 | **P5**：dashboard `/judgment` 面板展示 runs；ADR-4 D11.5 落地后发 `judgment.batch_progress`（`{id,intent,done,total,failed,cost}`）给现有 HUD，不新增 transcript 行 |
 
 本 ADR 移植**子系统**、本地 llama.cpp 文本后端、`judgglob`/`judggrep`、`$HERMES_HOME/judgment/eval/`
 文件、TTSR 消费点、图像/box 与 dashboard 面板；prewalk、title drift、unexpected-stop、omp stats/git/
@@ -207,7 +210,7 @@ Workers AI 或“判定 API”概念；provider profile（`providers/base.py:142
 | 缓存里再记一张 usage 表 | 与 session ledger 双计；账本唯一，缓存只存答案 |
 | 把未脱敏 state 直接发给原生 provider | 代码/密钥会离开进程；原生请求必须走 `redact_for_egress` |
 | 在流式输出中判定 | TTSR judged rule 只对完整 output 判定；流式中判定会重复、误报或需要回滚 |
-| 图像/box 一并移植 | 没有 Hermes 消费者；还要 fitting、bounds、wire 差异；放 P4 |
+| P1–P3 一并移植图像/box | 没有 P1 消费者且需要 fitting/bounds/wire 差异；P4 单独交付，P1–P3 明确拒绝 |
 | 原生失败后降到文本 | 文本没有校准概率，会破坏“阈值 0.7”的语义；默认 native-only tail |
 
 ## 选项
@@ -222,10 +225,14 @@ Workers AI 或“判定 API”概念；provider profile（`providers/base.py:142
 | F. 关键词解析 vs `response_format`/JSON | **关键词** | omp 已验证；小模型/thinking 前导更稳；one-hot 文本语义明确；`auxiliary_structured_output.py` 的 schema 协商仍可作为后续显式替代 |
 | G. 缓存 WAL vs DELETE | **DELETE** | 遵守 `hermes_state_wal.py:265-275` 的“新库不要 WAL”约束 |
 | H. 缓存保存 usage vs 只存答案 | **只存答案** | session ledger 是计费唯一来源；缓存 usage 会双计 |
+| I. 本地后端自建 worker vs 复用 managed llama.cpp | **复用** | `hermes_cli/local_runtime` 已有二进制/监督/端点解析；只加 `LocalChatBackend` |
+| J. 语义 find 不移植 vs `judgglob`/`judggrep` | **两个只读工具** | omp find 是判定最大的产品消费者；工具化后仍保持受限 schema/预算 |
+| K. UI 做成 transcript 行 vs dashboard 面板 | **dashboard 面板** | 不污染模型上下文/prompt cache；runs 审计 + eval 文件已足够展示 |
+| L. eval 判定只进 DB vs 文件 + DB | **文件 + DB** | 文件可离线/批量检查，DB 供面板过滤；两者都不含正文 |
 
 ## 决策
 
-### D1. 判定是旁路原语，不是模型工具、transcript 行或 turn 触发源
+### D1. 判定是旁路原语，不是 transcript 行或 turn 触发源
 
 - 新包 `agent/judgment/` 暴露一个 `Judge` 协议。一次 `judge()` 只做一次（或一组分片）旁路模型调用，
   返回结构化答案；**不**追加消息、**不**改 system prompt、**不**注册模型工具、**不**发 UI 事件、
@@ -402,8 +409,8 @@ State:
 嵌套对象/数组用 YAML block 并转义；数组根作为 `<state>` 的 YAML block；空对象 → `<state>{}</state>`。
 转义只处理 `& < >` 与属性引号。
 YAML 序列化用 `yaml.safe_dump(sort_keys=False)`；不要求和 omp 的 Bun YAML 字节一致（prompt cache 只在
-本进程/本实现内命中），但同一 state 在同一实现内必须稳定。`guard_state` 默认 true，调用方不能关闭，
-除非明确构造面向本地分类器的后端（P4 之前没有这种后端）。
+本进程/本实现内命中），但同一 state 在同一实现内必须稳定。`guard_state` 默认 true，正常文本/native
+调用方不能关闭；只有 D13 的 `LocalChatBackend` 这种本地分类器后端显式设置 false。
 
 **解析**逐条移植 `text.ts`：whole-word、大小写不敏感、最早命中、同位置更长 label 胜出；yes/no 最早
 命中；独立整数（排除 `v2`、`1.5`，允许末尾句点）；多问题行匹配 `<id>: <answer>` / `=` / ` - ` 与带
@@ -421,7 +428,7 @@ vision 模型与原生图像。
 `NativeJudge` 实现 `Judge`，并把每个 api 的差异收进 `wire` 协议（`target/encode/decode`）：
 
 - **P1**：`typesafe`（含任意 System One 服务器，通过 `base_url` 覆盖）、`openrouter-decisions`；同时
-  实现 401/402/403 候选拒绝冷却（P1 就有原生请求，不能等到 P2 才避免重复付费）。
+  实现 401/402/403 候选拒绝冷却（P1 就有原生请求，不能等到后续阶段才避免重复付费）。
 - **P2**：`openai-decisions`、`workers-ai-systemone`；同时实现 `max_questions` 分片。
 - **P4**：图像与 `box`；在 P1–P3 中 `ImageContent`/`BoxQuestion` 被拒绝。
 
@@ -533,8 +540,9 @@ judgment:
 
 - **只缓存 native**：文本判定是 one-hot，且 `call_llm` 有自己的 provider fallback，缓存文本答案会
   把“某个聊天模型这次恰好答了什么”固化；omp 同样只缓存 native。
-- **目录**：`$HERMES_HOME/judgment/` 是 profile 的判定目录，按 `get_hermes_home()` 隔离；多路复用网关
-  不会串 profile。`judgment.db` 存答案缓存与运行审计，`eval/` 存 eval 判定文件（D16）。
+- **目录**：`JUDGMENT_HOME = get_hermes_home() / "judgment"`，按 profile 隔离；多路复用网关不会串
+  profile。`JUDGMENT_HOME / "judgment.db"` 存答案缓存与运行审计，`JUDGMENT_HOME / "eval"` 存 eval
+  判定文件（D16）。
 - **schema**：
 
 ```sql
@@ -565,6 +573,9 @@ CREATE INDEX IF NOT EXISTS idx_answers_state ON answers(state);
 CREATE TABLE IF NOT EXISTS runs (
   id            TEXT PRIMARY KEY,
   created_at    INTEGER NOT NULL,
+  session_id    TEXT NOT NULL,      -- CLI/无会话时为空
+  execution_id  TEXT NOT NULL,      -- eval cell/批次；无则空
+  request_id    TEXT NOT NULL,      -- 调用方生成的请求 id；无则空
   purpose       TEXT NOT NULL,
   mode          TEXT NOT NULL,
   api           TEXT NOT NULL,
@@ -578,9 +589,12 @@ CREATE TABLE IF NOT EXISTS runs (
   latency_ms    INTEGER NOT NULL,
   status        TEXT NOT NULL,      -- ok | partial | error | aborted
   error         TEXT NOT NULL,      -- 脱敏、截断
-  state_sha     TEXT NOT NULL
+  state_sha     TEXT NOT NULL,
+  answers_sha   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_runs_purpose ON runs(purpose, created_at);
 ```
 
 - **runs 不是计费源**：它只服务 `/judgment` 面板、`hermes judgment log` 与排障；billing 仍以
@@ -638,7 +652,7 @@ hermes judgment doctor [--json]
   解析，再查 `$HERMES_HOME/judgment/eval/questions/`。P1 不做 Handlebars 模板；模板化等到有消费者再加。
 - `doctor` 不联网：列出 `mode`、每个 native 路由的可用性（凭证是否存在、base URL）、文本/本地路线
   （provider/model、`llamacpp` 端点是否存在）、`judgment` toolset 门控、图像能力、缓存/审计路径与
-  `runs` 数、`eval/` 大小、跳过原因。`--probe` 可留到 P2。
+  `runs` 数、`eval/` 大小、跳过原因。`--probe` 可留到后续阶段。
 - `log` 读 `$HERMES_HOME/judgment/judgment.db` 的 `runs` 表：`--limit`（默认 50）、`--purpose`、
   `--status`、`--json`；只输出时间、来源/模型、计数、tokens/cost/latency、状态/错误，不输出正文。
 - CLI 不在会话中，账本跳过；缓存/审计/判定文件仍然可用（与 omp `openStandaloneJudge` 一致）。
@@ -685,20 +699,20 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
     "timeout_ms": 10_000,
     "parse_retries": 2,
     "redact_state": True,
-    "images": True,
+    "images": False,  # P1–P3 默认 false；P4 起默认 true
     "tools": {"enabled": "auto"},
     "local": {
         "autostart": False,
         "merge_prompt": True,
         "answer_max_tokens": 16,
         "reasoning_max_tokens": 1024,
-        "timeout_s": 30,
     },
     "native": [],
 }
 ```
 
-- `judgment.tools.enabled`: `auto`（仅 native 可用时注册 `judgment` toolset）/`on`/`off`。
+- `judgment.tools.enabled`: `auto`（core 工具，`check_fn` 仅 native 可达）/`on`（文本也可达）/`off`；
+  `disabled_toolsets: [judgment]` 可整组移除。
 - `judgment.images`: 总开关；`auxiliary.judge.images` 是文本 vision 的二级开关（默认 false）。
 - `judgment.local.*` 见 D13；`audit`/`eval_*` 见 D16；`images` 见 D15。
 - 新环境变量（凭证、端点与账户标识；行为开关进 `config.yaml`）：
@@ -706,9 +720,10 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
   加入 `hermes_cli/config.py:_EXTRA_ENV_KEYS` / `OPTIONAL_ENV_VARS`、`.env.example` 与
   `website/docs/reference/environment-variables.md`；OpenRouter/OpenAI 复用现有键。
 - 配置校验：`mode`/`tools.enabled` 枚举、`native` 为 list、`api` 已知、`model` 非空、
-  `max_questions`/`timeout_ms`/`cache_max_states`/`audit_max_runs`/`eval_max_bytes`/`parse_retries`
-  为正整数、`images`/`audit` 为 bool；非法路由在解析时 warning + 跳过，`doctor` 显示原因，不让整个
-  agent 启动失败。
+  `max_questions`/`timeout_ms`/`cache_max_states`/`audit_max_runs`/`eval_max_bytes`/`parse_retries`/
+  `local.answer_max_tokens`/`local.reasoning_max_tokens` 为正整数、`images`/`audit`/
+  `eval_debug`/`local.autostart`/`local.merge_prompt` 为 bool；非法路由在解析时 warning + 跳过，
+  `doctor` 显示原因，不让整个 agent 启动失败。
 - 文档：`website/docs/user-guide/configuration.md` 的 auxiliary 表与新增 `judgment` 小节；
   `website/docs/integrations/providers.md` 注明“judgment 不是聊天 provider”；`website/docs/reference/
   environment-variables.md` 新增 TypeSafe/Cloudflare 行；`website/docs/reference/cli-commands.md`
@@ -720,14 +735,16 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 - **新增文件**：`agent/judgment/`（含 `local.py`）、`hermes_cli/subcommands/judgment.py`、
   `tools/judggrep_tool.py`、`tools/judgglob_tool.py`、`hermes_cli/web_routers/judgment.py`、
   `web/src/pages/JudgmentPage.tsx`、测试；修改配置默认值、aux 槽位、env 键、`aux_accounting.py` 的公开
-  getter、`hermes_cli/main.py` 的 subcommand 注册、`toolsets.py` 的 `judgment` toolset、
-  `web/src/App.tsx` 的路由/导航、文档。不改 `model_tools.py`、`run_agent.py`、`cli.py` 的主循环、
-  transcript 契约、gateway 事件、omp-ui/Desktop/Ink 客户端。
-- **零默认调用**：默认配置没有 native 路由、`judgment.tools.enabled: auto` 在无 native 时关闭工具、
+  getter、`hermes_cli/main.py` 的 subcommand 注册、`toolsets.py` 的 `_HERMES_CORE_TOOLS` 与
+  `judgment` toolset、`web/src/App.tsx` 的路由/导航、文档。不改 `model_tools.py`、`run_agent.py`、
+  `cli.py` 的主循环、transcript 契约、除 P5 `judgment.batch_progress` 外的 gateway 事件、
+  Desktop/Ink/omp-ui 组件。
+- **零默认调用**：默认配置没有 native 路由、`judgment.tools.enabled: auto` 在无 native 时隐藏工具、
   TTSR 未实现；没有消费者会在后台调用。显式入口是 `hermes judgment ask|log`，以及用户启用 native
   judge 后的 `judgglob`/`judggrep`。
-- **prompt cache 不受影响**：判定是独立请求，不进入会话消息序列；默认不改变主会话工具表。启用
-  `judgment` toolset 时按 Hermes 既有工具集加载规则增加两个工具，这是显式 opt-in，不是每轮动态换面。
+- **prompt cache 不受影响**：判定是独立请求，不进入会话消息序列。`judggrep`/`judgglob` 是
+  service-gated core 工具：无 native 时 `check_fn` 隐藏，默认工具表不变；会话开始时已有 native 则
+  工具表包含它们。中途改配置/凭证在下一个会话生效，不按轮次换面。
 - **profile 隔离**：`$HERMES_HOME/judgment/`、拒绝冷却键、凭证读取、dashboard 面板查询都用
   `get_hermes_home()`；多路复用网关按 profile 绑定。
 - **模型权限面**：没有通用 `judge` 工具；只有两个受限、只读的 find 工具（D14）。它们不能传任意
@@ -744,8 +761,8 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 - 不把 `goal_judge`、`monitor`、approval classifier 迁到 typed judgment：它们各自有提示词/JSON/超时
   语义，迁移会改变行为；需要时另立 ADR。
 - 不做 `question` 规则的流式中断/回滚：ADR-6 P3 的 stream rewind 另立 ADR。
-- 不做 transcript 行/实时事件/omp-ui、Desktop、Ink 渲染：判定只在 dashboard `/judgment` 面板、CLI 与
-  两个 find 工具上出现。
+- 不做 transcript 行，也不新增通用实时事件；UI 只有 dashboard `/judgment` 面板、CLI，以及 ADR-4 D11.5
+  batch 落地后的 omp-ui `judgment.batch_progress`（喂现有 HUD）。不新增客户端组件。
 - 不新增通用 `judge` 模型工具：模型只能调用 D14 的两个受限、只读工具。
 
 ### D13. 本地 tiny/on-device：复用 managed llama.cpp
@@ -755,25 +772,27 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 ```yaml
 judgment:
   local:
-    autostart: false          # true = 端点缺失时调用 ensure_local_runtime()
+    autostart: false          # true = 端点缺失时调用 ensure_local_runtime(load_config())
     merge_prompt: true        # 小模型用单轮 system+state 合并提示词
     answer_max_tokens: 16     # 非推理小模型
     reasoning_max_tokens: 1024
-    timeout_s: 30
 ```
 
 - **触发**：`auxiliary.judge.provider` 为 `llamacpp` / `llama.cpp` / `llama-cpp` / `local` 且没有显式
   `base_url` 时，`call_llm` 的 provider 解析经 `agent.auxiliary_local_runtime.bare_llamacpp_endpoint(
   provider, base_url, api_key)` 取当前 profile 的 `llama-server` 端点；端点文件由
-  `hermes_cli.local_runtime.endpoint.resolve_llamacpp_endpoint()` 维护。
+  `hermes_cli.local_runtime.endpoint.resolve_llamacpp_endpoint(config=load_config())` 维护。
 - **启动**：默认不自动启动。`judgment.local.autostart: true` 时才调用
-  `hermes_cli.local_runtime.ensure_local_runtime()`；它只从已安装的引擎启动，不下载。服务器不可用时
-  返回 `JudgmentUnavailable`，**不回退到云端**，与 `bare_llamacpp_endpoint` 的“没有服务器就是不可用”
-  语义一致。
+  `hermes_cli.local_runtime.ensure_local_runtime(load_config())`；它遵守 `local_runtime.enabled`，只从
+  已安装的引擎启动，不下载。返回 supervisor 后，若 `auxiliary.judge.model` 非空，调用
+  `supervisor.ensure_model_ready(model_id)`；返回 False/`KeyError` 时判定不可用。另一进程已持有时
+  `ensure_local_runtime` 可能返回 None，此时依赖 router 的 `--models-autoload`；请求若返回
+  “model not loaded” 也映射为 `JudgmentUnavailable`。服务器不可用时返回 `JudgmentUnavailable`，
+  **不回退到云端**，与 `bare_llamacpp_endpoint` 的“没有服务器就是不可用”语义一致。
 - **后端**：`LocalChatBackend` 包装 `call_llm(task="judge", provider="llamacpp", ...)`：
   `merge_prompt` 时把 system + state 合并成一条 user 消息（omp `prompts/system/judgment-local.md`），
-  `guard_state=False`、`temperature=0`、按 `answer_max_tokens`/`reasoning_max_tokens` 限制输出；不发送
-  tools；`reasoning_effort: "none"`。
+  `guard_state=False`、`temperature=0`、按 `answer_max_tokens`（单问题 16；多问题 `16 + 8 × 问题数`）/
+  `reasoning_max_tokens` 限制输出；不发送 tools；`reasoning_effort: "none"`。
 - **能力边界**：本地文本后端不支持图像/box（D15）。它优先级低于 native；`mode: auto` 且 native
   为空时才会用到它。usage 由 `call_llm` 记账，不另设 ledger。
 - **验收**：服务器在跑时离线判定成功；服务器停掉时 `JudgmentUnavailable` 且没有云端请求；别名/显式
@@ -811,6 +830,10 @@ judgment:
       "query": {"type": "string"},
       "path": {"type": "string"},
       "glob": {"type": "string", "description": "Optional include glob, e.g. 'src/**/*.py'."},
+      "keywords": {
+        "type": "array", "items": {"type": "string"}, "default": [],
+        "description": "Optional identifiers/terms for the lexical prefilter.",
+      },
       "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
       "context_lines": {"type": "integer", "minimum": 0, "maximum": 8, "default": 2},
     },
@@ -819,19 +842,23 @@ judgment:
 }
 ```
 
-- **门控**：`judgment.tools.enabled: auto|on|off`（默认 `auto`）。`auto` 仅在 `has_native_judge()` 为真
-  时注册 `judgment` toolset；`on` 允许文本判定（结果带 `uncalibrated: true` 警告）；`off` 不注册。
-  `check_fn` 只读配置/凭证，不发网络请求、不按会话临时换面。
+- **门控**：`judgment.tools.enabled: auto|on|off`（默认 `auto`）。`judggrep`/`judgglob` 加入
+  `_HERMES_CORE_TOOLS`（与 `code_intel`/`code_graph_update` 同一 service-gated 模式），并归入
+  `judgment` toolset；不需要用户额外 opt-in toolset。`check_fn` 回答可达性：`auto` 仅当
+  `has_native_judge()` 为真，`on` 允许文本判定（结果带 `uncalibrated: true` 警告），`off` 永远不可达。
+  `check_fn` 只读配置/凭证，不发网络请求、不按会话临时换面；`disabled_toolsets: [judgment]` 可整组
+  移除。工具表在会话开始时按配置/凭证确定；会话中途改配置在下一个会话生效，避免 prompt cache 抖动。
 - **`judgglob` 流程**：列文件（gitignore-aware；默认排除隐藏、二进制、空文件、凭证文件）→ 文件名
   词法预筛 → 每批 64 个 `noul` 问题（“这个文件名/路径是否匹配描述？”）→ 返回按概率排序的路径。
   只读目录树与文件名/大小，不读正文。
-- **`judggrep` 流程**：在 scope 内做词法预筛（最多 20 个文件、每文件 4 MiB、每文件 24 个 8 KiB 窗口）
-  → 每个窗口生成 384 B sketch（最多 46 个/请求）→ `noul` 评分（≥0.45 进入验证，最多 40 段）→
-  完整段验证 → 合并相邻命中（阈值 0.20）→ 返回 `path:start-end`、概率、snippet。最多 16 个请求
-  在飞，20s wall budget，读文件不写。
+- **`judggrep` 流程**：在 scope 内用 query + `keywords` 做词法预筛（最多 20 个文件、每文件 4 MiB、
+  每文件 24 个 8 KiB 窗口）→ 每个窗口生成 384 B sketch（最多 46 个/请求）→ `noul` 评分（≥0.45 进入
+  验证，最多 40 段）→ 完整段验证 → 合并相邻命中（阈值 0.20）→ 返回 `path:start-end`、概率、snippet。
+  最多 16 个请求在飞，20s wall budget，读文件不写。
 - **返回**：`judgglob` 为 `{query, hits:[{path, score, confidence}], coverage, stats}`；`judggrep` 为
   `{query, hits:[{path, score, ranges:[{start,end,p,snippet}]}], coverage:"complete|partial|unavailable",
-  stats:{files, windows, requests, failed}}`。两者都带 `uncalibrated` 仅当文本判定。
+  stats:{files, windows, requests, failed}}`。两者都带 `uncalibrated` 仅当文本判定。`judggrep` 的
+  snippet 走现有 `grep`/`read` 的截断与 secret redaction；凭证/二进制文件在扫描前已排除。
 - **错误**：空 query、坏 path/glob 是 `tool_error`；没有可用 judge 时 `tool_error("judgment unavailable;
   use grep/glob")`，不能把“没判定”说成“没有命中”；全部请求失败时 error 并提示“不是 absence 证据”；
   部分失败保留命中并标 `partial`。
@@ -842,11 +869,13 @@ judgment:
 
 ```yaml
 judgment:
-  images: true                 # 总开关；false 时带图请求直接 ValidationError
+  images: true                 # P4 起；P1–P3 默认 false；false 时带图请求直接 ValidationError
 auxiliary:
   judge:
     images: false              # true = 允许文本 vision 候选；默认只用 native
 ```
+
+P1–P3 的默认 `judgment.images: false`；P4 打开并把 `JudgmentImage` 接入候选链。
 
 - **请求**：`JudgmentRequest.images: tuple[JudgmentImage, ...]`（base64 + MIME + 可选 detail）。
   P1–P3 遇到非空 images 报 `JudgmentValidationError`；P4 打开。
@@ -856,7 +885,7 @@ auxiliary:
   不丢图、不降级成文本。
 - **尺寸**：Jev 类（TypeSafe/OpenRouter）要求 PNG/JPEG、每边 280–1568 px、总像素
   78,400–2,458,624；不满足的图先等比缩放，极端长宽比再以左上角像素 padding，重新编码 PNG（超过字节
-  上限则 JPEG）。fit 后把 `box` 四边按 `FittedImage.content` 反映射回原图并 clamp。Workers AI Clef
+  上限则 JPEG）。fit 后把 `box` 四边按 fit 结果的 `content` 区域反映射回原图并 clamp。Workers AI Clef
   最多 4 张、每张 4 MiB、总计 8 MiB、16 MP、PNG/JPEG/WebP；OpenAI Decisions 最多 128 张并透传
   `detail`。
 - **wire 编码**：
@@ -879,38 +908,50 @@ auxiliary:
 
 ### D16. 判定文件、审计与 `/judgment` 面板
 
-`$HERMES_HOME/judgment/eval/` 是 eval 判定的文件面，和 `judgment.db` 的 `runs` 表一起支撑日志面板：
+`JUDGMENT_HOME / "eval"` 是 eval 判定的文件面，和 `judgment.db` 的 `runs` 表一起支撑日志面板：
 
 ```text
-$HERMES_HOME/judgment/
+JUDGMENT_HOME/
 ├── judgment.db                 # states/answers 缓存 + runs 审计
 └── eval/
     ├── questions/*.json        # omp QuestionSpec 形状；用户/评测作者可读
-    └── runs/<session_id>/<execution_id>.jsonl
+    ├── batches/*.json          # ADR-4 D11.5 的 batch attach manifest
+    └── logs/<session_id>/<execution_id>.jsonl
 ```
+
+无 session（CLI/独立 eval）时用 `logs/_standalone/<request_id>.jsonl`。
 
 - **questions/**：`{id: {instructions, criteria?}}`，形状推断同 D8；`hermes judgment ask
   --questions-file` 可指向这里。文件由用户/测试拥有，**不自动删除**。
-- **runs/**：每次 `purpose="eval"` 的判定写一行（request 级，不写 chunk）：`ts`、`session_id`、
+- **batches/**：`{batch_id, session_id, execution_id, keys, status, created_at}`；由 ADR-4 D11.5 的
+  host batch run 写入/更新，判定引擎只读。没有 batch 时目录为空。
+- **logs/**：每次 `purpose="eval"` 的判定写一行（request 级，不写 chunk）：`ts`、`session_id`、
   `execution_id`、`request_id`、`mode`、`api`、`provider`、`model`、`questions`、`cached`、
   `usage`、`latency_ms`、`status`、`error`、`state_sha`、`answers_sha`。默认不写 state/问题/答案正文；
   `judgment.eval_debug: true` 才写脱敏后的 state/answers（用于复现）。目录/文件权限按 profile 目录；
-  `eval_max_bytes` 默认 50 MiB，超出按最老 `runs/` 文件淘汰，`questions/` 永不淘汰。
-- **runs 表**：D6 的 `runs` 表与 `runs/*.jsonl` 同源；DB 行给面板过滤，文件给批量/离线查看。两者都
+  `eval_max_bytes` 默认 50 MiB，超出按最老 `logs/` 文件淘汰，`questions/`/`batches/` 不自动删。
+- **runs 表**：D6 的 `runs` 表与 `logs/*.jsonl` 同源；DB 行给面板过滤，文件给批量/离线查看。两者都
   best-effort，失败不影响判定。
 - **panel API**（`hermes_cli/web_routers/judgment.py`，read-only，profile-scoped，复用
   `_profile_scope`/`late` 惯例）：
-  - `GET /api/judgment/runs?limit=&purpose=&status=&profile=`：按 `created_at` 倒序；不带正文。
+  - `GET /api/judgment/runs?limit=&purpose=&status=&session_id=&execution_id=&profile=`：按 `created_at`
+    倒序；不带正文。
   - `GET /api/judgment/summary?days=7`：次数、成功率、缓存命中率、tokens、cost、p50/p95 latency。
   - `GET /api/judgment/routes`：解析出的候选、凭证是否存在（布尔，不返回值）、cache/audit 路径。
   - `GET /api/judgment/eval/files?session_id=`：文件列表/大小/mtime，不返回内容。
 - **panel UI**（`web/src/pages/JudgmentPage.tsx`，路由 `/judgment`，`web/src/App.tsx` 的
   `BUILTIN_ROUTES_CORE`/`BUILTIN_NAV_REST` 注册）：过滤 purpose/status、最近运行表、来源/模型、
   缓存命中、tokens/cost/latency、错误列；刷新按钮 + 10s 轮询；profile 切换跟随 dashboard 现有
-  scope。不显示 state/问题/答案正文、不显示密钥、不提供“重跑”按钮（重跑走 CLI）。
+  scope。不显示 state/问题/答案正文、不显示密钥、不提供“重跑”按钮（重跑走 CLI）。这是 Hermes 的
+  **dashboard 表面**，不是 omp-ui HUD 的替代。
+- **omp-ui HUD**：`JudgmentBatchProgressHud`（`packages/coding-agent/src/modes/progress-hud.ts:75`，
+  挂在 `interactive-mode.ts:2128`）已经在壳里；本 ADR 不新增组件。P5 在 ADR-4 D11.5 的 batch 桥落地后，
+  由本地 viewer 发 `judgment.batch_progress`（`{id,intent,done,total,failed,cost}`）喂它；没有 batch
+  桥时不发事件、HUD 不出现，也不伪造进度。
 - **CLI**：`hermes judgment log [--limit N] [--purpose ...] [--json]` 读同一 DB；`ask`/`doctor` 已有。
-- **验收**：面板在无 DB 时显示空态而不是错误；审计关闭时显示“已关闭”；runs 文件轮转不删
-  `questions/`；profile A/B 不串；UI 不含正文/密钥；`judgment.db` 损坏时面板降级为只读错误。
+- **验收**：面板在无 DB 时显示空态而不是错误；审计关闭时显示“已关闭”；`logs/` 轮转不删
+  `questions/`/`batches/`；profile A/B 不串；UI 不含正文/密钥；`judgment.db` 损坏时面板降级为只读
+  错误；HUD 只在真实 batch 进度事件下出现。
 
 ## 协议
 
@@ -937,6 +978,71 @@ def resolve_judge(*, purpose: str) -> Judge:
 `resolve_judge` 每次返回一个轻量 `ChainJudge`；候选在第一次 `judge()` 时解析并缓存到本次调用（配置
 变化下次生效）。`cancel_event` 在每次网络尝试前、每次分片派发前检查；文本后端通过
 `auxiliary_client.aux_interrupt_protection(cancel_event=...)` 传递。
+
+### 本地后端
+
+```yaml
+auxiliary:
+  judge:
+    provider: llamacpp
+    model: <local-model>
+judgment:
+  local:
+    autostart: false
+    merge_prompt: true
+    answer_max_tokens: 16
+    reasoning_max_tokens: 1024
+```
+
+```python
+if provider in {"llamacpp", "llama.cpp", "llama-cpp", "local"} and not base_url:
+    model_id = cfg_get(cfg, "auxiliary", "judge", "model", default="")
+    endpoint = bare_llamacpp_endpoint(provider, base_url, api_key)  # (base_url, api_key) or None
+    if endpoint is None and local.autostart:
+        supervisor = ensure_local_runtime(load_config())
+        if supervisor is not None and model_id:
+            if not supervisor.ensure_model_ready(model_id):
+                raise JudgmentUnavailable(f"local model {model_id} is not ready")
+        endpoint = bare_llamacpp_endpoint(provider, base_url, api_key)
+    if endpoint is None:
+        raise JudgmentUnavailable("local llama.cpp server is not running")
+```
+
+`LocalChatBackend` 只在 `merge_prompt` 时合并 system+state；正常聊天模型仍用 omp 的两段提示词。
+
+### find 工具
+
+```text
+judgglob(query, path?, limit=32, hidden=false)
+  -> {query, hits:[{path, score, confidence}], coverage, stats}
+
+judggrep(query, path?, glob?, limit=20, context_lines=2)
+  -> {query, hits:[{path, score, ranges:[{start, end, p, snippet}]}],
+      coverage:"complete|partial|unavailable", stats:{files, windows, requests, failed}}
+```
+
+两个工具都只读、受 `judgment.tools.enabled`/`check_fn` 与 20s/caps 约束；没有可用 judge 时返回
+`tool_error`，不能把“未判定”说成“没有命中”。
+
+### eval 文件与面板
+
+```text
+$HERMES_HOME/judgment/eval/questions/<name>.json
+$HERMES_HOME/judgment/eval/logs/<session_id>/<execution_id>.jsonl
+```
+
+JSONL 一行一个 request 级记录：`ts, session_id, execution_id, request_id, purpose, mode, api, provider,
+model, questions, cached, usage, latency_ms, status, error, state_sha, answers_sha`。默认不含正文；
+`judgment.eval_debug: true` 才写脱敏 state/answers。
+
+```http
+GET /api/judgment/runs?limit=100&purpose=eval&status=ok
+GET /api/judgment/summary?days=7
+GET /api/judgment/routes
+GET /api/judgment/eval/files?session_id=<id>
+```
+
+只读、profile-scoped；不返回 state/问题/答案正文或密钥。
 
 ### 原生 wire 示例
 
@@ -974,7 +1080,8 @@ Content-Type: application/json
 
 ### 缓存
 
-见 D6 的 DDL。`states.state` 存 canonical JSON（已脱敏）；`answers.answer` 存答案 JSON。没有 usage 表。
+见 D6 的 DDL。`states.state` 存 canonical JSON（已脱敏）；`answers.answer` 存答案 JSON；`runs` 是
+审计/面板数据，不是计费表，也没有 usage 表。
 
 ### CLI
 
@@ -984,27 +1091,39 @@ api=typesafe provider=typesafe model=jev-1.14.0
 q0: noul 0.82
 usage: input=420 output=2 cost=$0.0001
 cache: 0/1 hit
+
+$ hermes judgment log --limit 5 --purpose judggrep
+2026-11-03T12:00:00Z judggrep typesafe/jev-1.14.0 ok 6/8 cached 1.2s 420tok $0.0001
 ```
 
 ## 实现落点
 
 | 层 | 位置 | 改动 |
 |---|---|---|
-| 类型 | `agent/judgment/types.py` | `JudgmentState`、四种 question、四种 answer、`Judge`、错误、校验 |
+| 类型 | `agent/judgment/types.py` | `JudgmentState`、`JudgmentImage`、四种 question/answer、`Judge`、错误、校验 |
 | 文本渲染/解析 | `agent/judgment/text.py` | 三个模板、state XML/YAML、choice/noul/score 解析、多行拆分、重试 |
 | 文本后端 | `agent/judgment/chat.py` | `call_llm("judge")`、取消、usage 不重复记账 |
-| 原生 | `agent/judgment/native.py` | `NativeJudge`、重试/超时/分片/冷却、usage、脱敏 |
-| wires | `agent/judgment/wires.py` | TypeSafe / OpenRouter / OpenAI / Workers AI 的 target/encode/decode |
+| 本地后端 | `agent/judgment/local.py` | `LocalChatBackend`、单轮合并提示词、llama.cpp 端点/autostart、无云端回退 |
+| 原生 | `agent/judgment/native.py` | `NativeJudge`、重试/超时/分片/冷却、usage、脱敏、图像 fitting |
+| wires | `agent/judgment/wires.py` | TypeSafe / OpenRouter / OpenAI / Workers AI 的 target/encode/decode（含图像资产） |
 | 问题文件 | `agent/judgment/questions.py` | JSON 形状推断（无模板） |
-| 链 | `agent/judgment/chain.py` | 解析、native-only tail、`has_native_judge`、拒绝冷却 |
-| 缓存 | `agent/judgment/cache.py` | SQLite DELETE、canonical 键、上限、best-effort |
-| 配置 | `agent/judgment/config.py` | `judgment` 默认值/校验、`auxiliary.judge` 读取 |
-| CLI | `hermes_cli/subcommands/judgment.py` | `ask` / `doctor`；`hermes_cli/main.py` 注册 |
+| 链 | `agent/judgment/chain.py` | 解析、native-only tail、`has_native_judge`、拒绝冷却、图像/box 过滤 |
+| 缓存/审计 | `agent/judgment/cache.py` | SQLite DELETE、canonical 键、`states`/`answers`/`runs`、上限、best-effort |
+| 判定文件 | `agent/judgment/eval_files.py` | `$HERMES_HOME/judgment/eval/{questions,batches,logs}` 写入/轮转 |
+| find 引擎 | `agent/judgment/find.py` | 关键词预筛、窗口/草图/验证级联、`p=0.45/0.20` 阈值、16 并发与 20s wall budget、限制与排除规则 |
+| 工具 | `tools/judggrep_tool.py`、`tools/judgglob_tool.py` | 两个只读语义 find 工具、schema、caps、`judgment` toolset 注册 |
+| 工具集 | `toolsets.py` | `judgment` toolset + `judgment.tools.enabled` 门控 |
+| 配置 | `agent/judgment/config.py` | `judgment` 默认值/校验、`auxiliary.judge`、local/tools/images/audit |
+| CLI | `hermes_cli/subcommands/judgment.py` | `ask` / `doctor` / `log`；`hermes_cli/main.py` 注册 |
 | 配置核心 | `hermes_cli/config_defaults_auxiliary.py`、`hermes_cli/aux_slots.py`、`hermes_cli/config_defaults.py` | `auxiliary.judge`、`judgment`、`AUX_TASK_META`、`OMP_ROLE_TAGS` |
+| 本地运行时 | `hermes_cli/local_runtime/`、`agent/auxiliary_local_runtime.py` | 只复用，不新增下载/监督逻辑；autostart 走 `ensure_local_runtime(load_config())` |
 | 环境变量 | `hermes_cli/config.py`、`.env.example`、`website/docs/reference/environment-variables.md` | TypeSafe/Cloudflare 键 |
+| 面板 API | `hermes_cli/web_routers/judgment.py` | `/api/judgment/runs|summary|routes|eval/files`，只读/profile scope |
+| 面板 UI | `web/src/pages/JudgmentPage.tsx`、`web/src/App.tsx` | `/judgment` 路由、导航、过滤/刷新/空态 |
+| omp-ui HUD | `tui_gateway/contracts/events.py`、`gateway/local_viewer_events.py` | P5/ADR-4 落地后发 `judgment.batch_progress` 喂现有 `JudgmentBatchProgressHud`；不新增组件 |
 | 账本 | `agent/aux_accounting.py` | 公开 `current_context()` getter |
-| 文档 | `website/docs/user-guide/configuration.md`、`website/docs/integrations/providers.md` | 配置/非聊天 provider 说明 |
-| 测试 | `tests/agent/test_judgment_*.py`、`tests/hermes_cli/test_judgment_cli.py`、`tests/hermes_cli/test_aux_slots.py` | 解析、wire mock、链、缓存、CLI、槽位顺序 |
+| 文档 | `website/docs/user-guide/configuration.md`、`website/docs/integrations/providers.md`、`website/docs/user-guide/features/` | 配置、非聊天 provider、工具/面板说明 |
+| 测试 | `tests/agent/test_judgment_*.py`、`tests/tools/test_judggrep_tool.py`、`tests/tools/test_judgglob_tool.py`、`tests/hermes_cli/test_judgment_cli.py`、`tests/hermes_cli/test_judgment_web.py`、`tests/hermes_cli/test_aux_slots.py` | 解析、wire mock、链、缓存/审计、工具、CLI、面板、槽位顺序 |
 
 P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确定文件名），只增加
 “完成后判定 + 0.7 阈值 + `ttsr.judge` 门控”，不改 ADR-6 的匹配/交付。
@@ -1013,10 +1132,11 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
-| P1 | D1–D3、D4 的 TypeSafe + OpenRouter、候选拒绝冷却、D5、D6、D7、D8、D10、D11 | `hermes judgment ask` 对文本/TypeSafe/OpenRouter 返回结构化答案；文本解析与 omp 语义一致；账本只记一次；缓存按 state/model/问题隔离；401/402/403 冷却不重复付费；无默认后台调用 |
-| P2 | D4 的 OpenAI Decisions + Workers AI Clef、`max_questions` 分片 | 四种 wire 的 mock 契约测试；分片合并/部分 usage；`doctor` 显示每个路由 |
-| P3 | D9 的 TTSR `question` 规则（依赖 ADR-6 P1） | `question` 规则在 `ttsr.judge=auto` 只走 native；`on` 可用文本；命中阈值 0.7；失败静默；通知/reminder 与 ADR-6 P1 一致；无新行/事件 |
-| P4 | 图像判定、`box`、图像 fitting/bounds、图像缓存身份 | 仅在出现真实消费者后进行；原生 wire 的图像契约与 omp 对齐；文本/原生无图像时字节不变 |
+| P1 | D1–D3、D13 本地 llama.cpp、D4 的 TypeSafe + OpenRouter、候选拒绝冷却、D5–D8、D10、D11、D6/D16 的 `runs` 审计表 | `hermes judgment ask` 对文本/本地/TypeSafe/OpenRouter 返回结构化答案；文本解析与 omp 语义一致；账本只记一次；`$HERMES_HOME/judgment/judgment.db` 按 state/model/问题隔离；`runs` 可查；401/402/403 冷却不重复付费；无默认后台调用 |
+| P2 | D4 的 OpenAI Decisions + Workers AI Clef、`max_questions` 分片、D14 `judgglob`/`judggrep`、D16 的 `$HERMES_HOME/judgment/eval/` 文件 | 四种 wire 的 mock 契约测试；分片合并/部分 usage；两个工具在 native judge 下返回路径/区间/概率；无 judge 时报 “use grep/glob”；20s/文件/请求 caps 生效；eval JSONL 按 session/execution 落盘并轮转 |
+| P3 | D9 TTSR `question` 规则（依赖 ADR-6 P1） | `question` 规则 `auto` 只走 native、`on` 可用文本、阈值 0.7、失败静默；通知/reminder 与 ADR-6 P1 一致；无新行/事件 |
+| P4 | D15 图像判定、`box`、图像 fitting/bounds、图像缓存身份 | 已实现（2026-11-04）：四类 wire 的图像契约；fit/pad 后 box 反映射；TypeSafe/Workers AI/OpenAI 上限；无兼容候选报错；无图请求字节不变 |
+| P5 | D16 的 `/judgment` 页面与 API | 面板列出 runs、过滤 purpose/status、显示缓存命中/tokens/cost/latency、空态/损坏态、profile 隔离；不显示正文/密钥 |
 
 ## 验收
 
@@ -1035,18 +1155,33 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
    journal；`cache_max_states` 淘汰最老；损坏库降级为无缓存且不阻断；Windows 路径可用。
 7. **配置**：`auxiliary.judge` 出现在 `DEFAULT_CONFIG`、`AUX_TASK_KEYS`、picker 与文档；顺序测试
    更新；非法 `judgment.native` 路由 warning + 跳过；env 键出现在 `.env.example`/文档/`_EXTRA_ENV_KEYS`。
-8. **零 footprint**：`toolsets.py`、system prompt、transcript 行、gateway 事件、omp-ui 均无 diff；
-   默认配置下没有任何判定调用；主对话的 prompt cache 前缀不变。
-9. **CLI**：`ask` 输出答案/usage/缓存命中；`--json` 可解析；退出码 0/1/2 正确；`doctor` 不联网且
-   列出跳过原因。
+8. **默认零 footprint**：system prompt、transcript 行、除 P5 HUD 外的 gateway 事件、omp-ui/Desktop/Ink
+   组件均无 diff；`judggrep`/`judgglob` 在 `_HERMES_CORE_TOOLS` 但 `auto` 无 native 时 `check_fn` 隐藏；
+   不按会话动态加工具；`disabled_toolsets: [judgment]` 可整组移除；dashboard 只新增只读 `/judgment` 页面；
+   主对话的 prompt cache 前缀在会话内稳定。
+9. **CLI**：`ask` 输出答案/usage/缓存命中；`log` 读 `runs` 表；`--json` 可解析；退出码 0/1/2 正确；
+   `doctor` 不联网且列出本地端点/工具门控/图像能力/缓存/审计/eval 大小/跳过原因。
 10. **脱敏**：原生 state 中的密钥形态被 `redact_for_egress` 替换；缓存存脱敏后的 state；日志/异常
-    body 不含原文；某个字符串脱敏为 `REDACTION_UNAVAILABLE` 时原生请求抛 `JudgmentValidationError`，
-    不发网络请求、不写缓存。
+   body 不含原文；某个字符串脱敏为 `REDACTION_UNAVAILABLE` 时原生请求抛 `JudgmentValidationError`，
+   不发网络请求、不写缓存。
 11. **并发/取消**：分片最多 4 并发；答案不丢；`cancel_event` 在尝试/分片前生效；超时上抛；SQLite
-    写入不跨网络调用持锁。
+   写入不跨网络调用持锁。
 12. **P3 TTSR**：每个完成 output 一次请求；规则问题合并为 noul；0.7 阈值；`auto/on/off`；
-    失败静默；同一规则被同一条消息的多个 output 命中时只交付一次（coordinator 级 claim）；通知/
-    reminder 与 ADR-6 P1 逐字一致；`question` 在 P3 前仍不参与匹配。
+   失败静默；同一规则被同一条消息的多个 output 命中时只交付一次（coordinator 级 claim）；通知/
+   reminder 与 ADR-6 P1 逐字一致；`question` 在 P3 前仍不参与匹配。
+13. **本地后端**：`llamacpp` 端点存在时离线判定成功（无网络请求）；端点消失或
+   `supervisor.ensure_model_ready(model)` 返回 false 时 `JudgmentUnavailable` 且不回退云端；
+   `autostart: true` 只启动已安装引擎；`merge_prompt` 只影响本地后端；usage 只记一次。
+14. **find 工具**：`judgglob` 返回排序路径；`judggrep` 返回 `path:start-end`/概率/snippet；无 native
+   且 `auto` 时 `check_fn` 隐藏（core 列表仍在）；`disabled_toolsets: [judgment]` 可整组移除；没有
+   judge 时 tool_error 指向 grep/glob；20s wall、文件/窗口/请求 caps、只读/隐藏/凭证过滤、部分失败
+   coverage 生效；文本判定结果标 `uncalibrated`。
+15. **图像/box**：四类 wire 的编码契约；Jev/Workers AI/OpenAI 上限与 fit/pad；box 反映射；
+   无兼容候选显式报错；`judgment.images: false` 时带图请求 ValidationError；图像缓存 identity 合并
+   MIME/base64 变体、TypeSafe 忽略 detail。
+16. **审计/eval/panel**：`runs` 行与 `eval/logs/*.jsonl` 同源且不含正文；`eval/questions/*.json`/
+   `eval/batches/*.json` 不被轮转删除；`eval_max_bytes`/`audit_max_runs` 淘汰最老；`/judgment` 页面
+   空态/损坏态/profile 隔离；API 只读且不泄露密钥；`hermes judgment log` 与面板一致。
 
 ## 风险
 
@@ -1073,39 +1208,59 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
   用 CLI 把规则“假装”激活。
 - **profile 隔离**：缓存/冷却/凭证都必须用 profile home；多路复用网关下漏用 `get_hermes_home()` 会
   串 profile 的答案或密钥。
+- **本地运行时**：`llamacpp` 端点由现有 supervisor 管理，judgment 只在 `autostart` 时尝试启动已安装
+  引擎；服务器未启动、模型不匹配、上下文不足都必须返回 `JudgmentUnavailable`，不能悄悄切云端。小模型
+  的单轮合并提示词可能仍输出前言，解析失败按失败处理。
+- **find 工具成本/误判**：`judggrep` 的语义分数不是“代码理解”保证，低分可能只是 sketch 差；20s/
+  文件/请求 caps 与 `partial` 必须生效，工具结果要明确“不是 absence 证据”。`judgglob` 只按文件名，
+  不读正文，避免把大文件内容送进判定。
+- **图像成本/兼容**：图像判定按次计费且 Jev 有严格尺寸/像素范围；fit/pad 会重编码，可能损失细节或
+  放大成本。Workers AI/OpenAI 的上限与 TypeSafe assets 语义不同，必须按 wire 拒绝而不是截断。
+- **面板/审计隐私**：`runs`/JSONL 只存哈希与计数；`eval_debug` 默认 false，开启后也只写脱敏正文。
+  面板 API 必须 profile-scoped、只读、不返回密钥/正文；审计/文件轮转不能删 `questions/`。
+- **工具集暴露**：`judgment` toolset 默认不在 core；用户显式加入后才可能看到工具，`check_fn` 只回答
+  可达性，不按会话动态换面。启用工具集会改变该会话的工具清单（prompt cache 只在该显式 opt-in 后变化）。
 
 ## 不采纳
 
-- **把 `judge` 暴露成模型工具**：模型可以绕过调用方的门槛/预算，且判定结果会进入主上下文；没有消费者
-  需要。
-- **把判定结果写成 transcript 行或事件**：没有 UI 消费者；会增加 prompt/持久化面，违反“一个事实一次”。
+- **把通用 `judge` 暴露成模型工具**：模型可以传任意 questions/state，绕过调用方的门槛/预算。只允许
+  D14 的两个受限、只读 find 工具。
+- **把判定结果写成 transcript 行或伪造/通用实时事件**：没有这类消费者；会增加 prompt/持久化面。
+  HUD 只认真实的 `judgment.batch_progress`（ADR-4 batch），dashboard 是只读日志面。
 - **复用 `auxiliary.goal_judge`**：`/goal` 的 JSON 理由、wait 指令、超时和解析都不同；迁移会改变
   `/goal` 行为。
 - **把文本模型放在 native 失败之后**：文本没有校准概率，会破坏阈值语义；默认 native-only tail。
 - **把 TypeSafe/Cloudflare 注册成聊天 provider**：会污染 picker、`/models`、chat 路由和凭证路径。
 - **依赖 omp catalog 的 kind/max-questions 规则**：Hermes 没有 catalog kind；显式配置是唯一可靠的
   来源。端点上限（如 Workers AI 64）作为路由默认值内置。
-- **在本 ADR 实现 eval 内核桥/prelude，或移植 auto-prewalk/find/auto-thinking/git staging**：eval 桥由
-  ADR-4 D11.5 拥有、落地时调用本引擎；其余在 Hermes 没有对应功能；先有消费者再移植。
-- **P1 做图像/box**：没有消费者，且 fitting/bounds/wire 差异大；P4 单独做。
+- **在本 ADR 实现 eval 内核桥/prelude，或移植 auto-prewalk/auto-thinking/git staging/omfg**：eval 桥
+  由 ADR-4 D11.5 拥有、落地时调用本引擎；其余没有 Hermes 消费者。
+- **P1–P3 做图像/box**：图像/box 是 P4 的明确交付，不是“没有消费者就砍掉”；P1–P3 遇到带图请求
+  直接报 `JudgmentValidationError`，避免半实现。
 - **缓存 WAL 或 usage 表**：WAL 与仓库 SQLite 约束冲突；usage 表与 session ledger 双计。
 - **用 `response_format`/JSON 代替关键词解析**：文本判定的目标是任意聊天模型（含小模型），关键词 +
   严格解析是 omp 已验证的路径；JSON mode 在部分 provider 上不可用，且无法保留“one-hot 文本”语义。
+  结构化输出保留为后续显式替代，不是默认。
 - **在流式中判定/中断**：TTSR judged rule 只在完整 output 上判定；流式中断属于 ADR-6 P3 的 stream
   rewind，不在本 ADR 夹带。
 - **会话模型自动兜底**：主模型通常是昂贵对话模型，后台判定不得静默使用；需要时显式配置。
+- **自己实现 llama.cpp/模型下载/监督**：D13 复用 `hermes_cli/local_runtime`，只加 `LocalChatBackend`。
+- **在 `/judgment` 面板显示 state/问题/答案正文或密钥**：面板只显示计数、哈希、来源/模型、usage；
+  正文只在 `eval_debug` 的脱敏 JSONL 里。
+- **让 `judggrep`/`judgglob` 写文件、读隐藏/凭证文件或接受任意 questions**：它们是只读产品工具，不是
+  通用判定入口。
 
 ## 遗留
 
-- 图像判定、`box`、图像 fitting/bounds 与图像缓存身份留到 P4；P1–P3 遇到图像/box 直接报
-  `JudgmentValidationError`，不静默丢弃。
-- Cloudflare 账户凭证的完整解析（凭证池/多账户）在 P2 细化；P1 的 `doctor` 只需说明缺少哪个键。
+- 图像 fitting 的极端长宽比/Workers AI 多账户凭证在 P4 细化；Jev 的 detail 忽略与 OpenRouter 的
+  detail 保留按 D15 执行。
+- Cloudflare Workers AI 的凭证池/多账户解析在 P2 细化；P1 的 `doctor` 只需说明缺哪个键。
 - `judgment-questions-max` 目前是路由配置 + 内置端点默认值；omp 的 catalog 策略表不移植。若未来
   Hermes 增加模型 kind 目录，再把策略迁到 catalog。
-- 本地 tiny/on-device 后端不移植；如果 Hermes 增加本地小模型运行时，可复用 `TextBackend` 接口另立
-  ADR。
+- 本地 tiny 后端已按 D13 复用 managed llama.cpp；后续只调 `autostart` 默认值、单轮提示词和
+  `answer_max_tokens`，不新增运行时。本地 vision 仍不支持（D15）。
 - `goal_judge`/`monitor`/approval classifier 的迁移不在本 ADR；它们保留现有 JSON/提示词路径，避免
   行为回归。
-- 判定的 UI/日志面板不在本 ADR；`hermes judgment doctor` 是诊断面，后续若需要 transcript/卡片再按
-  ADR-2/ADR-10 的行型规则设计。
+- `/judgment` 面板 P5 只做最近 runs/eval 文件与汇总；ADR-4 D11.5 落地后再加 batch 级进度/取消视图，
+  仍不新增 transcript 行。
 - 缓存淘汰目前是“最老状态”而非 LRU；如果实际命中率低或库过大，再评估 TTL/LRU，不在 P1 过度设计。

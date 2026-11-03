@@ -293,10 +293,8 @@ TRANSCRIPT_BLOCKS: tuple[TranscriptBlock, ...] = (
     TranscriptBlock("recap", False, UNSUPPORTED, fields=("text", "generated_at", "skipped"),
                     needs="the ADR-5 P3 idle recap producer (`recap.generate`)",
                     reason="ADR-5 owns idle recap; review.summary is a background review"),
-    TranscriptBlock("ttsr_notification", False, UNSUPPORTED, ("ttsr.triggered",),
-                    fields=("rules",),
-                    needs="the ADR-6 P1 TTSR rule-trigger event (`ttsr.triggered`)",
-                    reason="ADR-6 owns the local-viewer TTSR producer"),
+    TranscriptBlock("ttsr_notification", True, READY, ("ttsr.triggered",),
+                    fields=("rules",)),
     TranscriptBlock("late_diagnostics", False, UNSUPPORTED, ("diagnostics.late",),
                     fields=("files", "removed_paths"),
                     needs="the ADR-9 late verdict carrier (`diagnostics.late` / a "

@@ -1013,6 +1013,7 @@ export class GatewayOmpSession {
 		"session.resume_progress": payload => this.#onResumeProgress(payload),
 		"approval.cancelled": payload => this.#onApprovalCancelled(payload),
 		"notice": payload => this.#onNotice(payload),
+		"ttsr.triggered": payload => this.#onTtsrTriggered(payload),
 		"error": payload => this.#onErrorNotice(payload)
 	}
 
@@ -1211,6 +1212,20 @@ export class GatewayOmpSession {
 	#onNotice(payload: Record<string, unknown>): void {
 		const text = asString(payload.message)
 		if (text) this.#emitNotice("info", text, "gateway")
+	}
+
+	/** ADR-6 D6: shape-check only; merging, truncation and copy belong to the pi-tui component. */
+	#onTtsrTriggered(payload: Record<string, unknown>): void {
+		const rules = (Array.isArray(payload.rules) ? payload.rules : [])
+			.map(asRecord)
+			.filter((rule): rule is Record<string, unknown> => rule !== undefined)
+			.map(rule => ({
+				name: asString(rule.name) ?? "",
+				description: asString(rule.description),
+				content: asString(rule.content)
+			}))
+			.filter(rule => rule.name.length > 0)
+		if (rules.length > 0) this.#emit({ type: "ttsr_triggered", rules })
 	}
 
 	#onErrorNotice(payload: Record<string, unknown>): void {

@@ -16,6 +16,7 @@ import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
@@ -71,6 +72,8 @@ export class EventController {
 	#pendingMessageUpdate: Extract<AgentSessionEvent, { type: "message_update" }> | undefined;
 	#messageUpdateTimer: NodeJS.Timeout | undefined;
 	#lastReadGroup: ReadToolGroupComponent | undefined;
+	/** Latest TTSR notification block while it is still the live tail (ADR-6 D6). */
+	#lastTtsrNotification: TtsrNotificationComponent | undefined;
 	/** Assistant block a read's inline images belong under, keyed by call id. */
 	#readToolCallAssistant = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined;
@@ -142,6 +145,9 @@ export class EventController {
 			case "notice":
 				this.#handleNotice(event);
 				return;
+			case "ttsr_triggered":
+				this.#handleTtsrTriggered(event);
+				return;
 			case "model_changed":
 			case "thinking_level_changed":
 				this.ctx.statusLine.invalidate();
@@ -209,6 +215,7 @@ export class EventController {
 		this.#readToolCallAssistant.clear();
 		this.#lastAssistantComponent = undefined;
 		this.#lastIntent = undefined;
+		this.#lastTtsrNotification = undefined;
 		this.#pinnedErrorComponent?.setErrorPinned(false);
 		this.#pinnedErrorComponent = undefined;
 		this.ctx.clearPinnedError();
@@ -451,6 +458,24 @@ export class EventController {
 		if (event.level === "error") this.ctx.showError(message);
 		else if (event.level === "warning") this.ctx.showWarning(message);
 		else this.ctx.showStatus(message);
+	}
+
+	/** ADR-6 D6: merge into the live tail when possible, else mount a new component. */
+	#handleTtsrTriggered(event: Extract<AgentSessionEvent, { type: "ttsr_triggered" }>): void {
+		const previous = this.#lastTtsrNotification;
+		if (
+			previous &&
+			this.ctx.chatContainer.children.at(-1) === previous &&
+			this.ctx.chatContainer.canRemoveBlock(previous)
+		) {
+			previous.addRules(event.rules);
+			this.ctx.ui.requestRender();
+			return;
+		}
+		const component = new TtsrNotificationComponent(event.rules);
+		component.setExpanded(this.ctx.toolOutputExpanded);
+		this.ctx.present(component);
+		this.#lastTtsrNotification = component;
 	}
 
 	#handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {

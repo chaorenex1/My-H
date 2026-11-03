@@ -1436,6 +1436,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             local_sinks = local_viewer_events.wire(self, agent)
             from gateway.session_usage import TURN_BASE_ATTR
             setattr(agent, TURN_BASE_ATTR, int(getattr(agent, "session_output_tokens", 0) or 0))
+        ttsr_sinks = None
+        from agent.ttsr_runtime import install_turn_coordinator
+
+        ttsr_sinks = install_turn_coordinator(self, agent)
         try:
             agent_history, observed_group_context, history_media_paths = self._load_turn_history(agent, reused_cached_agent)
             persist_msg, persist_ts = self._prepare_turn_message(agent_history)
@@ -1457,6 +1461,9 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 publish_usage(self, agent, record=True)  # turn end: the final API call's counters
                 from gateway.session_local_inventory import publish_settled_info
                 publish_settled_info(self, agent)
+            from agent.ttsr_runtime import restore_coordinator
+
+            restore_coordinator(agent, ttsr_sinks)
         persisted_turn = _persisted_turn(agent, agent_history, result, compressions)
         self._finish_stream_consumer(result, agent_history, stream_consumer)
         if _finite_viewer_turn() and getattr(agent, "_codex_session", None) is not None:

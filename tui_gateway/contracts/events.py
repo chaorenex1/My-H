@@ -546,6 +546,31 @@ class AgentPrintPayload(Payload):
 event("agent.print", AgentPrintPayload, doc="A status line the agent printed during a local viewer's turn.")
 
 
+# ── TTSR (ADR-6 P1) ───────────────────────────────────────────────────────────────────────────
+
+
+class TtsrRulePayload(Payload):
+    """One matched rule, exactly the fields ``TtsrNotificationComponent`` renders.
+
+    ``description``/``content`` may be empty strings; the component falls back from one to the
+    other. Local paths and matching metadata never cross the wire (ADR-6 D3).
+    """
+
+    name: str
+    description: str | None = None
+    content: str | None = None
+
+
+class TtsrTriggeredPayload(Payload):
+    """``gateway.local_viewer_events.publish_ttsr_triggered`` (ADR-6 D3)."""
+
+    rules: list[TtsrRulePayload]
+
+
+event("ttsr.triggered", TtsrTriggeredPayload,
+      doc="A TTSR rule matched this local viewer's turn; render the notification component.")
+
+
 # ── tools ─────────────────────────────────────────────────────────────────────────────────────
 
 

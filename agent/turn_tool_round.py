@@ -111,6 +111,9 @@ def run_tool_round(
         agent, assistant_message=assistant_message, finish_reason=finish_reason, messages=messages
     )
     append_message(messages, assistant_msg)
+    from agent.ttsr_runtime import stash_tool_round_outputs
+
+    stash_tool_round_outputs(agent, assistant_msg)
 
     # Mixed batch: error-result invalid calls and drop them from execution.
     if _invalid_batch_calls:

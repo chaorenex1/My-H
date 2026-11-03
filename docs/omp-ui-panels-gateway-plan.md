@@ -441,7 +441,7 @@ Todo 提醒的旧判断以 ADR-2 为准。
 | 压缩摘要 | 快照把 compaction carrier 投影成 `display_content`，但 `display_kind="hidden"` 的独立 summary 在 `_history_to_messages` 被丢弃；合并进用户回合的 carrier 只保留真实尾部内容，退化成普通 user/assistant 行。ADR-10 P2 后：`session.resume` 传 `include_compaction:true` 时，独立 handoff 投影成 `role:"compaction_summary"`（无 counter 时客户端缺省 `tokensBefore=0` 并省略徽标；tokens/method/boundary 待 ADR-5 P1 盖章后从 `details.compaction` 读取），默认不传仍与今天逐字一致；实时只有 `status.update{kind:compacting…}` 与 `agent.print` 的压缩行 | `#compacting` 只影响输入排队；`CompactionSummaryMessageComponent` 读 `role:"compactionSummary"` entry。`status.update` 不能拼成摘要 | 部分 |
 | Recap | 无。`review.summary` 是后台 review（`agent/background_review.py`、`gateway/session_refine.py`），不是 omp 的 idle recap；`/recap` 是本地 CLI 计算（`hermes_cli/session_recap.py`），网关无事件 | `RecapNotice` 由本机 recap 引擎触发。不得用 `review.summary` 冒充 | 无 producer |
 | Todo 提醒 | ADR-10 P3：stop gate（`agent/todo_reminder.py`）在交互 surface 追加 durable reminder 行并发一次 `todo.reminder{todos,attempt,max_attempts,row_id}`；`todo.updated` 仍是任务快照（供 HUD） | `rowToAgentMessage`/`#onTodoReminder` 按 `custom_type:"todo-reminder"` + `details` 画 `TodoReminderComponent`，`row_id` 合并快照 | 已接 |
-| TTSR 通知 | 无（omp 专属 stream rewind 规则） | `ttsr_triggered` 是本机事件 | 无 producer |
+| TTSR 通知 | ADR-6 P1：`gateway/local_viewer_events.publish_ttsr_triggered` 在工具执行前发 `ttsr.triggered{name,description,content}`；匹配到 `patch`/`write_file` 的规则正文作为隐藏 user reminder 在批次后注入 | `ttsr_triggered` 是本机事件；`#onTtsrTriggered` 挂 `TtsrNotificationComponent`，live tail 合并 | 已接（local） |
 | Late diagnostics | `tool.complete.result` 内的 `lsp_diagnostics`（`tools/file_operations.py` 的 WriteResult）随编辑/写入卡展示；没有 turn-end 诊断事件 | 独立块由本机 `LATE_DIAGNOSTICS_MESSAGE_TYPE` 触发。诊断已在工具卡内，不另造块 | 无 producer |
 | Cache miss 标记 | ADR-10 P3：`message.complete.step_usage`/`tool.start.step_usage` 给出本步 `input/cache_read/cache_write/cost_usd`；`message.complete.usage` 保持 session 累计 | 客户端把 `step_usage` 写进该条 assistant `message.usage`，`detectCacheInvalidation` 读 `usage.cacheRead`；缺失不回落累计值 | 已接 |
 | Served model 标记 | ADR-10 P3：`message.complete.served_model`/`requested_model` 取自 turn result（`agent/served_model.py`）；`session.info.fallback_model` 仍是回退模型，不是 served | 客户端把 `served_model` 写入 `AssistantMessage.upstreamModel`，`ServedModelTracker.check` 触发；缺失保持 undefined | 已接 |
@@ -507,8 +507,8 @@ Todo 提醒的旧判断以 ADR-2 为准。
 **P4 校准（2026-11-03，ADR-10 D6/D8.4）**：`runtime.describe.transcript_blocks` 现在覆盖 plan
 §2.3.2 的区块目录：角色项仍由 `TRANSCRIPT_ROLES` 派生，新增 `adviser`（`message.adviser`）、
 `skill_invocation`（durable 行）、`tool_execution`（`tool.start`/`tool.progress`/`tool.complete`）、
-`notice`（`transcript.notice`）四个已生产区块；`recap`/`ttsr_notification`/`late_diagnostics`/
-`background_tan` 按 ADR-5/6/9/3 报 `supported:false` + `needs`，网关不发对应行/事件；
+`notice`（`transcript.notice`）、`ttsr_notification`（`ttsr.triggered`，ADR-6 P1）五个已生产区块；
+`recap`/`late_diagnostics`/`background_tan` 按 ADR-5/9/3 报 `supported:false` + `needs`，网关不发对应行/事件；
 `compaction_summary` 仍为 `partial`（仅 `include_compaction:true` 时投影，`tokensBefore` 缺省 0）。
 omp-ui 删除手写的 `GATEWAY_PENDING_TRANSCRIPT_BLOCKS`；`connectGatewayOmpSession` 在 create/resume
 后非阻塞读一次 `runtime.describe`，缓存 `transcript_blocks` 并暴露 `transcriptBlock(id)`。

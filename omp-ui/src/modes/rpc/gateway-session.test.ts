@@ -804,3 +804,25 @@ describe("gateway block events", () => {
 		expect(events).toEqual([])
 	})
 })
+
+describe("ttsr projection", () => {
+	test("a matched rule becomes a shell-owned ttsr_triggered event", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "ttsr.triggered",
+			payload: { rules: [{ name: "ts-no-any", description: "d", content: "c" }] }
+		})
+		expect(events).toEqual([
+			{ type: "ttsr_triggered", rules: [{ name: "ts-no-any", description: "d", content: "c" }] }
+		])
+	})
+
+	test("rules without a usable name are dropped, not rendered as an empty notice", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "ttsr.triggered",
+			payload: { rules: [{ description: "no name" }, { name: "ok" }] }
+		})
+		expect(events).toEqual([{ type: "ttsr_triggered", rules: [{ name: "ok", description: undefined, content: undefined }] }])
+	})
+})

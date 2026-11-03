@@ -707,6 +707,15 @@ CREATE TABLE IF NOT EXISTS session_jobs (
 CREATE INDEX IF NOT EXISTS idx_session_jobs_session
     ON session_jobs(origin_session_id, next_due_seq);
 
+-- TTSR ``repeatMode: once`` state (ADR-6 D4): the live notification is never persisted; only the
+-- delivered rule names are, so a resumed omp-ui session does not inject the same reminder twice.
+CREATE TABLE IF NOT EXISTS session_ttsr_injections (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    rule_name TEXT NOT NULL,
+    injected_at REAL NOT NULL,
+    PRIMARY KEY (session_id, rule_name)
+);
+
 CREATE TABLE IF NOT EXISTS session_job_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL,

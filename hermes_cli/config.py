@@ -3162,7 +3162,7 @@ _KNOWN_CONTAINER_TYPES = {
     "model_catalog.excluded_providers": "list",
 }
 # List slots whose readers go through ``parse_config_string_list``: a bare name is one entry.
-_SCALAR_AS_ONE_ITEM_LIST_KEYS = frozenset({"agent.disabled_toolsets", "skills.disabled"})
+_SCALAR_AS_ONE_ITEM_LIST_KEYS = frozenset({"agent.disabled_toolsets", "skills.disabled", "ttsr.disabled_rules"})
 
 
 def _expected_container_type(key: str, user_config: dict[str, Any]) -> Optional[str]:

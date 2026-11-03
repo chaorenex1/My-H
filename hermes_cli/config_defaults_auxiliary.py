@@ -113,6 +113,9 @@ def auxiliary_defaults() -> dict:
         "kanban_estimator": _aux(60, reasoning_effort=False),
         "profile_describer": _aux(60),   # 1-2 sentence profile blurb; short, cheap
         "goal_judge": _aux(60),          # /goal satisfaction + contract drafting; JSON calls
+        # Typed side-channel judgments (ADR-11). Text/one-hot fallback only; native routes are
+        # configured separately under the top-level `judgment:` section.
+        "judge": {**_aux(30), "reasoning_effort": "none", "max_tokens": 4096, "images": False},
         "group_router": _aux(20),        # Group Chat routing "auto": who answers; fast/cheap model OK
         # Curator skill-usage review can take minutes on reasoning models (umbrellas over hundreds
         # of skills); route cheaper via `hermes model` → auxiliary → Curator.

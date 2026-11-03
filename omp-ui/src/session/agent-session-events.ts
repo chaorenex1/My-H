@@ -33,6 +33,9 @@ export type AgentSessionEvent =
 			resolved?: Effort;
 	  }
 	| { type: "notice"; level: "info" | "warning" | "error"; message: string; source?: string }
+	// ADR-6 D6: a live TTSR notification; never a transcript row, so it has no row id and is
+	// absent after resume. Rules are deduped/merged by the component.
+	| { type: "ttsr_triggered"; rules: { name: string; description?: string; content?: string }[] }
 	| { type: "config_warnings_changed" }
 	// Coalesced snapshot of the authority's steering/follow-up queue; emitted whenever it differs
 	// from the last `queue_update` (enqueue, delivery, removal, clear, session switch).

@@ -14,6 +14,10 @@ Hermes reads environment variables from the process environment and, for user-ma
 |----------|-------------|
 | `OPENROUTER_API_KEY` | OpenRouter API key (recommended for flexibility) |
 | `OPENROUTER_BASE_URL` | Override the OpenRouter-compatible base URL |
+| `TYPESAFE_API_KEY` | TypeSafe judgment API key for native System One routes (`judgment.native` with `api: typesafe`); unused when no native route is configured. |
+| `TYPESAFE_BASE_URL` | Override the TypeSafe judgment base URL (default: `https://api.typesafe.ai`). |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token for Workers AI Clef judgments (`judgment.native` with `api: workers-ai-systemone`). |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID used to fill the Workers AI `ai/run` endpoint (`<account>` in the route's base URL). |
 | `FIREWORKS_API_KEY` | Fireworks AI API key ([app.fireworks.ai](https://app.fireworks.ai/settings/users/api-keys)). Configure endpoint overrides with `model.base_url` in `config.yaml`. |
 | `HERMES_OPENROUTER_CACHE` | Enable OpenRouter response caching (`1`/`true`/`yes`/`on`). Overrides `openrouter.response_cache` in config.yaml. See [Response Caching](https://openrouter.ai/docs/guides/features/response-caching). |
 | `HERMES_OPENROUTER_CACHE_TTL` | Cache TTL in seconds (1-86400). Overrides `openrouter.response_cache_ttl` in config.yaml. |

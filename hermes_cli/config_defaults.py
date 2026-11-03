@@ -7,6 +7,8 @@ docs of config.yaml.
 from hermes_cli.config_defaults_agent_loop import _agent_loop
 from hermes_cli.config_defaults_auxiliary import auxiliary_defaults
 from hermes_cli.config_defaults_code_execution import _code_execution
+from hermes_cli.config_defaults_judgment import judgment_defaults
+from hermes_cli.config_defaults_ttsr import ttsr_defaults
 from hermes_cli.config_defaults_omp import OMP_CONFIG_SECTION
 
 #: Image every container backend uses unless the user pins one. LEGACY_SANDBOX_IMAGES are the
@@ -716,6 +718,8 @@ DEFAULT_CONFIG = {
     },
     "agent_loop": _agent_loop(),
     "auxiliary": auxiliary_defaults(),
+    "judgment": judgment_defaults(),
+    "ttsr": ttsr_defaults(),
     # Named snapshots of the Models-hub role assignments (wire: model.presets.*). Each preset maps
     # role id -> {provider, model, base_url, reasoning_effort, fallback_chain}; applying one writes
     # it back through the same per-role writers model.roles.set uses.
@@ -2662,6 +2666,18 @@ OPTIONAL_ENV_VARS = OptionalEnvVars({
     "OPENROUTER_API_KEY": _env("OpenRouter API key (for vision, web scraping helpers, and MoA)",
         "OpenRouter API key", url="https://openrouter.ai/keys", password=True, tools=["vision_analyze"],
         category="provider", advanced=True),
+    # Judgment transports (ADR-11): TypeSafe/Cloudflare answer typed questions; they are not
+    # chat providers and never appear in the model picker.
+    "TYPESAFE_API_KEY": _prov(
+        "TypeSafe judgment API key (native System One decisions; unused without judgment.native)",
+        "TypeSafe API key", "https://typesafe.ai/"),
+    "TYPESAFE_BASE_URL": _base_url("TypeSafe"),
+    "CLOUDFLARE_API_TOKEN": _prov(
+        "Cloudflare API token for Workers AI judgment models (Clef; unused until ADR-11 P2)",
+        "Cloudflare API token", "https://dash.cloudflare.com/profile/api-tokens"),
+    "CLOUDFLARE_ACCOUNT_ID": _prov(
+        "Cloudflare account ID for Workers AI judgment endpoints (ADR-11 P2)",
+        "Cloudflare account ID", None, password=False),
     "GOOGLE_API_KEY": _prov("Google AI Studio API key (also recognized as GEMINI_API_KEY)",
         "Google AI Studio API key", "https://aistudio.google.com/app/apikey"),
     "GEMINI_API_KEY": _prov("Google AI Studio API key (alias for GOOGLE_API_KEY)", "Gemini API key",

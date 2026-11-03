@@ -6676,6 +6676,16 @@ export interface ReviewSummaryPayload {
 export interface AgentPrintPayload {
   text: string
 }
+/** ``gateway.local_viewer_events.publish_ttsr_triggered`` (ADR-6 D3). */
+export interface TtsrTriggeredPayload {
+  rules: TtsrRulePayload[]
+}
+/** One matched rule, exactly the fields ``TtsrNotificationComponent`` renders. ``description``/``content`` may be empty strings; the component falls back from one to the other. Local paths and matching metadata never cross the wire (ADR-6 D3). */
+export interface TtsrRulePayload {
+  name: string
+  description?: string | null
+  content?: string | null
+}
 /** ``tool_progress._on_tool_start`` (+ ``agent_callbacks._mirror_subagent_to_child`` rows with ``preview`` and empty ``args``). ``todos``/``revision`` are NOT set by the emitter; kept optional because tool.start rows may pass through connector redaction unchanged. */
 export interface ToolStartPayload {
   tool_id: string
@@ -8227,6 +8237,8 @@ export interface BackendGatewayEventMap {
   'tool.start': ToolStartPayload
   /** A deduped one-shot transcript notice; omp-ui ignores agent.print/status.update for these lines. */
   'transcript.notice': TranscriptNoticePayload
+  /** A TTSR rule matched this local viewer's turn; render the notification component. */
+  'ttsr.triggered': TtsrTriggeredPayload
   /** The accepted prompt turn finished; emitted exactly once, on every exit path. */
   'turn.end': TurnEndPayload
   /** An accepted prompt turn began (paired with turn.end). */
@@ -8327,6 +8339,7 @@ export const GATEWAY_EVENT_TYPES = [
   'tool.progress',
   'tool.start',
   'transcript.notice',
+  'ttsr.triggered',
   'turn.end',
   'turn.start',
   'voice.interrupted',

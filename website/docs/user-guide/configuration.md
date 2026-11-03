@@ -1963,6 +1963,8 @@ If you use Codex OAuth as your main model provider, vision works automatically �
 **Vision requires a multimodal model.** If you set `provider: "main"`, make sure your endpoint supports multimodal/vision — otherwise image analysis will fail.
 :::
 
+The **Judge** slot (`auxiliary.judge`) is the text-only, one-hot fallback for typed judgments. It defaults to `reasoning_effort: none` and `max_tokens: 4096` (the keyword answer should land after any thinking preamble), and its `images: false` default keeps text judgment text-only; set it to `true` to let a known-vision chat model take images (still never `box`). Native judgment routes are configured separately under the top-level `judgment:` section — see [Judgment](#judgment).
+
 ### Environment Variables (legacy)
 
 Auxiliary models can also be configured via environment variables. However, `config.yaml` is the preferred method — it's easier to manage and supports all options including `base_url` and `api_key`.
@@ -1979,6 +1981,161 @@ Compression and fallback model settings are config.yaml-only. (`AUXILIARY_WEB_EX
 :::tip
 Run `hermes config` to see your current auxiliary model settings. Overrides only show up when they differ from the defaults.
 :::
+
+## Judgment
+
+Judgments are typed side-channel questions: a caller supplies a JSON state and named questions (`choice`, `noul` yes/no, ordered `score`, or `box` over an attached image), and gets structured answers with probabilities. They never become transcript rows, never edit the system prompt, and never start a turn — so the prompt cache is unaffected.
+
+```yaml
+judgment:
+  mode: auto                 # auto | native | text | off
+  text_after_native: false   # text cannot stand in for failed native probabilities
+  cache: true
+  cache_max_states: 50000
+  audit: true
+  audit_max_runs: 20000
+  timeout_ms: 10000          # native per-attempt timeout
+  parse_retries: 2           # text parse retries (each billed)
+  redact_state: true         # native state goes through redact_for_egress
+  images: true               # false rejects image/box requests before any candidate
+  native: []                 # explicit routes; empty = text fallback only
+```
+
+Image and `box` questions are native-first. Requests with images only consider candidates that accept them: TypeSafe and OpenRouter Decisions take `box`; OpenAI Decisions takes images but no `box`; Workers AI takes up to 4 images (4 MiB each, 8 MiB total, 16 MP) and no `box`. When no configured candidate supports the request, the judgment fails with `no compatible judge candidate supports images/box` — images are never dropped or demoted to text.
+
+Jev-style routes enforce 280–1568 px sides and 78,400–2,458,624 px total, so Hermes scales an image into those bounds (keeping its aspect ratio) and pads short sides with the top-left pixel before sending; `box` edges are then mapped back onto the source image and clamped. Workers AI and OpenAI caps reject the request instead of resizing it. The cache identity includes each image's decoded-bytes digest, MIME, and `detail`, so padded/unpadded base64 of the same bytes share an answer; TypeSafe drops `detail` from both the wire and the cache key.
+
+Text vision is opt-in and never answers `box`:
+
+```yaml
+auxiliary:
+  judge:
+    images: true             # also requires a model known to accept image input
+```
+
+Each native route names a wire, a provider, and a model. Four wires are implemented: `typesafe`, `openrouter-decisions`, `openai-decisions`, and `workers-ai-systemone`. These endpoints are **not chat providers**: they never appear in `hermes model`, `/models`, or chat routing.
+
+```yaml
+judgment:
+  native:
+    - api: typesafe
+      provider: typesafe
+      model: jev-1.14.0
+      # base_url: https://api.typesafe.ai   # or TYPESAFE_BASE_URL
+    - api: openrouter-decisions
+      provider: openrouter
+      model: typesafe/jev-1.14
+    - api: openai-decisions
+      provider: openai-api
+      model: gpt-6-luna
+    - api: workers-ai-systemone
+      provider: cloudflare-workers-ai
+      model: "@cf/cloudflare/clef"
+      max_questions: 64        # 0 = endpoint default (64 for Workers AI)
+```
+
+Credentials: `TYPESAFE_API_KEY` (and optional `TYPESAFE_BASE_URL`); OpenRouter reuses `OPENROUTER_API_KEY` or the credential pool; OpenAI reuses `OPENAI_API_KEY`/`OPENAI_BASE_URL` or the `openai-api` credential pool; Workers AI needs `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID` (it fills `<account>` in the `ai/run` endpoint). A 401/402/403 cools that candidate for five minutes instead of paying for the same refusal on every judgment.
+
+When a wire caps questions per call (`max_questions`, defaulting to the endpoint's own limit — 64 for Workers AI), Hermes splits the request into shards of at most four concurrent calls, merges the answers, and sums usage. A shard failure stops the remaining shards; already-billed shards stay recorded and nothing partial is cached.
+
+`mode`:
+- `auto` — native routes first. Text is used only when no native route has credentials, or when `text_after_native: true`.
+- `native` — native routes only; no text fallback.
+- `text` — `auxiliary.judge` only (one-hot probabilities).
+- `off` — no judgments.
+
+Local tiny models reuse the managed llama.cpp runtime; there is no downloader and no cloud fallback:
+
+```yaml
+auxiliary:
+  judge:
+    provider: llamacpp
+    model: <local-model>
+judgment:
+  local:
+    autostart: false         # start the managed server when missing (installed engines only)
+    merge_prompt: true       # one merged user turn for small models
+    answer_max_tokens: 16
+    reasoning_max_tokens: 1024
+```
+
+The cache and run audit live in `$HERMES_HOME/judgment/judgment.db` (DELETE journal). Only native answers are cached; `runs` stores hashes/counts, never state or answer bodies, and the session ledger remains the only billing source. An unavailable or corrupt store degrades to uncached judgments instead of failing them.
+
+Run and inspect judgments from the CLI:
+
+```bash
+hermes judgment ask --state-file state.json --questions-file questions.json
+hermes judgment ask --state "text" --questions-file questions.json --json
+hermes judgment ask --state-file state.json --questions-file box.json --image shot.png
+hermes judgment doctor
+hermes judgment log --limit 20 --purpose cli
+```
+
+`--image` is repeatable; the flag order is the index `box` questions name. A question file entry with `instructions` plus an integer `image` (and no `criteria`) is a `box` question.
+
+`ask` exits 0 on success, 2 for a bad parameter/question file, and 1 when no candidate can answer. `doctor` is offline: it lists route/credential availability, the text and local routes, tool gating, image capability, and cache/audit state.
+
+### Semantic find tools
+
+Two read-only model tools use the judgment route. They build their own restricted yes/no questions — the model cannot pass questions or state — and they never write files or touch git.
+
+| Tool | What it returns |
+|---|---|
+| `judgglob` | `{query, hits:[{path, score, confidence}], coverage, stats}` — paths ranked by a plain-language description (names and locations only, no contents). |
+| `judggrep` | `{query, hits:[{path, score, ranges:[{start, end, p, snippet}]}], coverage, stats}` — the file ranges that implement a described behavior. |
+
+`judgglob` scans the tree (skipping VCS/cache dirs, hidden files, credentials, binaries, and root-`.gitignore` matches), lexically shortlists 128 paths, and judges them in batches of 64. `judggrep` prefilters at most 20 files by keyword (4 MiB per file, 24 windows of 8 KiB), scores 384-byte sketches at a 0.45 cutoff, verifies at most 40 full passages, merges adjacent hits at 0.20, keeps at most 16 requests in flight, and stops at a 20 s wall budget. `context_lines` widens the reported range.
+
+Gate them with `judgment.tools.enabled`:
+
+```yaml
+judgment:
+  tools:
+    enabled: auto        # auto = only when a native route is credentialed; on = text allowed; off = hidden
+```
+
+With `auto`, the tools are hidden unless `has_native_judge()` is true; `on` also allows the one-hot text route and marks results `uncalibrated: true`. `disabled_toolsets: [judgment]` removes both tools. The decision is made at session start from config/credentials (no network call), so the tool list does not churn mid-conversation.
+
+When no judge is reachable the tools return a tool error pointing at `glob`/`search_files`; when every judgment request failed they say so explicitly — never "no matches", because an unjudged tree is not evidence of absence. Partial failures keep their hits and report `coverage: partial`.
+
+### Eval files
+
+```text
+$HERMES_HOME/judgment/
+├── judgment.db                 # native answer cache + run audit
+└── eval/
+    ├── questions/*.json        # question files for `hermes judgment ask` (never rotated)
+    ├── batches/*.json          # eval batch manifests (written by the eval host, not by judgments)
+    └── logs/<session_id>/<execution_id>.jsonl
+```
+
+Every `purpose="eval"` judgment appends one request-level JSONL line (`ts`, session/execution/request ids, mode, api, provider, model, question/cache counts, usage, latency, status, error, and state/answer hashes); standalone runs key on the request id under `logs/_standalone/`. Bodies are omitted unless `judgment.eval_debug: true`, which writes the already-redacted state and the answers. `judgment.eval_max_bytes` (default 50 MiB) evicts the oldest log files only — `questions/` and `batches/` are never deleted.
+
+## TTSR rules (local omp-ui viewers)
+
+TTSR (Time-Traveling Stream Rules) passively matches the project's `rules/*.md` conditions against
+the source text of `patch`/`write_file` tool calls. A match is announced in the transcript and the
+rule body is appended to the model context as a hidden reminder after the tool batch; nothing is
+interrupted. Only sessions created with `client: "omp-ui"` run rules; CLI, Desktop, messaging, ACP
+and subagents are unchanged.
+
+```yaml
+ttsr:
+  enabled: true
+  builtin_rules: true      # false = skip the shipped corpus under the installation root
+  disabled_rules: []       # rule names, case-sensitive
+  judge: auto              # question rules: auto = native judge only, on = text too, off = never
+```
+
+Rules using `interruptMode` other than `never`, or only `astCondition`, are listed once in a
+warning notice and stay inactive. `repeatMode: once` is durable per session
+(`session_ttsr_injections`), so a resumed session does not inject the same reminder again.
+
+`question` rules are judged after a completed assistant output in one batched `noul` request per
+output (state `{"output": subject, "content": …}` truncated to 56,000 characters); a yes
+probability of at least 0.7 delivers the warning. `judge: auto` uses them only when
+`has_native_judge()` is true; `on` also allows the `auxiliary.judge` text route (one-hot
+probabilities). Judgment failures are logged and never surface as a turn error.
 
 ## Reasoning Effort
 

@@ -371,7 +371,6 @@ def finish_text_response(
         and any(messages[-1].get(flag) for flag in _EPHEMERAL_SCAFFOLDING_FLAGS)
     ):
         messages.pop()
-
     _sg = apply_stop_gates(
         agent, final_msg, final_response=final_response, messages=messages,
         conversation_history=conversation_history,
@@ -400,8 +399,9 @@ def finish_text_response(
         else:
             final_msg["content"] = final_response
     publish_held_final_row(agent, final_msg, final_response, _joined)
-
     append_message(messages, final_msg)
+    from agent.ttsr_runtime import judge_final_message
+    judge_final_message(agent, messages, final_msg, final_response, finish_reason)
     # Make the answer durable before leaving the loop (_DB_PERSISTED_MARKER keeps
     # _persist_session idempotent). Failure must NOT abort the turn: finalize retries.
     try:

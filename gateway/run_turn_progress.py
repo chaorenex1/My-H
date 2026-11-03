@@ -928,14 +928,19 @@ class GatewayTurnProgressMixin:
 
     def combined_tool_start_callback(self, call_id, tool_name, args):
         """Compose the voice ack + native task-card start consumers."""
+        holder = getattr(self._ctx, "agent_holder", None)
         if local_viewer_turn(self):
             from gateway import local_viewer_events
             local_viewer_events.note_tool_start(self, call_id, tool_name, args)
+            coordinator = getattr(holder[0] if holder else None, "ttsr_coordinator", None)
+            if coordinator is not None:
+                matched = coordinator.match_tool_start(call_id, tool_name, args)
+                if matched:
+                    local_viewer_events.publish_ttsr_triggered(self, matched)
         start_payload = _tool_lifecycle_payload(call_id, tool_name, args)
         # ADR-2 D1: the provider response that requested this call carries its own usage.
         from agent.turn_usage import step_usage
 
-        holder = getattr(self._ctx, "agent_holder", None)
         if (step := step_usage(holder[0] if holder else None)) is not None:
             start_payload["step_usage"] = step
         self._publish_execution("tool.start", start_payload)

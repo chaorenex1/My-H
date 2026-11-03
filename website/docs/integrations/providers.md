@@ -113,6 +113,10 @@ Groups = x25519:secp256r1:secp384r1:x448
 Even when using Nous Portal, Codex, or a custom endpoint, some features (vision, compression, MoA) use a separate "auxiliary" model. By default (`auxiliary.*.provider: "auto"`), Hermes routes these tasks to your **main chat model** — the same model you picked in `hermes model`. You can override each task individually to route it to a cheaper/faster model (e.g. Gemini Flash on OpenRouter) — see [Auxiliary Models](../user-guide/configuration.md#auxiliary-models).
 :::
 
+:::note Judgment routes are not chat providers
+TypeSafe System One and OpenRouter/OpenAI Decisions answer typed judgments only. Configure them under `judgment.native` (with `TYPESAFE_API_KEY` or the existing OpenRouter credential) and under `judgment:` keys; they never appear in the model picker, `/models`, or chat routing. See [Judgment](../user-guide/configuration.md#judgment).
+:::
+
 :::tip Nous Tool Gateway
 Paid Nous Portal subscribers also get access to the **[Tool Gateway](../user-guide/features/tool-gateway.md)** — web search, image generation, TTS, and browser automation routed through your subscription. No extra API keys needed. On a fresh install, `hermes setup --portal` logs you in, sets Nous as your provider, and turns the gateway on in one command. Existing users can enable it from `hermes model` or per-tool from `hermes tools`. Inspect routing at any time with `hermes portal info`.
 :::
