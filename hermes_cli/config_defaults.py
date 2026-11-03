@@ -2332,6 +2332,9 @@ DEFAULT_CONFIG = {
         "update": True,
         # Refresh files changed by a turn after the final answer (P6). Hash-diff only.
         "auto_update": True,
+        # Install a missing grammar wheel through PM on first use (language extras).
+        # Set false to fail with the install hint instead of touching the environment.
+        "auto_install": True,
         # Call agent/lsp during indexing (P4). Off by default: LSP may run project build scripts.
         "semantic": False,
         # Dangerous-pattern diagnostics. `mode: auto` uses Semgrep's registry rules

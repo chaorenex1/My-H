@@ -176,19 +176,71 @@ def exported(name: str, descriptor: LanguageDescriptor) -> bool:
     return True
 
 
+_GRAMMAR_INSTALL_ATTEMPTED: set[tuple[str, str]] = set()
+_GRAMMAR_INSTALL_FAILURES: dict[tuple[str, str], str] = {}
+
+
+def _auto_install_enabled() -> bool:
+    try:
+        from ...config import CodeGraphLimits
+
+        return CodeGraphLimits.from_config().auto_install
+    except Exception:  # health: allow BLE001 -- config is optional; auto-install defaults on
+        return True
+
+
+def _ensure_grammar(descriptor: LanguageDescriptor) -> None:
+    """Install the descriptor's grammar extra before giving up."""
+    from ...exceptions import CodeGraphUnavailableError
+
+    extra = descriptor.extra or "codegraph"
+    key = (descriptor.language, extra)
+    failure = _GRAMMAR_INSTALL_FAILURES.get(key)
+    if failure is not None:
+        raise CodeGraphUnavailableError(
+            f"grammar {descriptor.grammar_package!r} is not installed and "
+            f"auto-install failed: {failure}; run `{_install_hint(descriptor)}`"
+        )
+    if not _auto_install_enabled():
+        raise CodeGraphUnavailableError(
+            f"grammar {descriptor.grammar_package!r} is not installed; "
+            f"run `{_install_hint(descriptor)}` (code_intel.auto_install is false)"
+        )
+    if key in _GRAMMAR_INSTALL_ATTEMPTED:
+        raise CodeGraphUnavailableError(
+            f"grammar {descriptor.grammar_package!r} is still unavailable after "
+            f"auto-install; run `{_install_hint(descriptor)}` and restart Hermes"
+        )
+    _GRAMMAR_INSTALL_ATTEMPTED.add(key)
+    try:
+        from pm import extras
+
+        extras.ensure_import(extra)
+    except Exception as exc:  # health: allow BLE001 -- PM install failures surface as structured unavailability
+        _GRAMMAR_INSTALL_FAILURES[key] = f"{type(exc).__name__}: {exc}"
+        raise CodeGraphUnavailableError(
+            f"generic grammar auto-install for {descriptor.language!r} failed: "
+            f"{type(exc).__name__}: {exc}; run `{_install_hint(descriptor)}`"
+        ) from exc
+
+
 def _grammar_module(descriptor: LanguageDescriptor) -> Any:
     import importlib
+
+    from ...exceptions import CodeGraphUnavailableError
 
     package = descriptor.grammar_package.replace("-", "_")
     try:
         return importlib.import_module(package)
-    except ImportError as exc:
-        from ...exceptions import CodeGraphUnavailableError
-
-        raise CodeGraphUnavailableError(
-            f"grammar {descriptor.grammar_package!r} is not installed; "
-            f"run `{_install_hint(descriptor)}`"
-        ) from exc
+    except ImportError:
+        _ensure_grammar(descriptor)
+        try:
+            return importlib.import_module(package)
+        except ImportError as retry_exc:
+            raise CodeGraphUnavailableError(
+                f"grammar {descriptor.grammar_package!r} is still unavailable after "
+                f"auto-install; run `{_install_hint(descriptor)}` and restart Hermes"
+            ) from retry_exc
 
 
 def _install_hint(descriptor: LanguageDescriptor) -> str:

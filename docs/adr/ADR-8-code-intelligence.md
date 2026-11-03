@@ -1072,6 +1072,7 @@ code_intel:
   enabled: true           # 代码智能系统总开关：模型工具、自动刷新、语义增强、Semgrep 诊断
   update: true            # P5：是否暴露 code_graph_update（写回仍受证据/并发校验）
   auto_update: true       # P6：最终回答后后台刷新本仓库变更文件（只处理 hash 不同的文件）
+  auto_install: true      # 首次遇到缺 grammar 时通过 PM 安装对应 extra；false 则返回安装提示
   semantic: false         # 索引时是否调用 agent/lsp 做语义增强
   semgrep:
     enabled: false        # 危险模式诊断；需 `hermes pm install semgrep`
@@ -1090,6 +1091,9 @@ code_intel:
   `hermes code ...` CLI 仍可用于索引/诊断，并在 `status`/`doctor` 中报告 `enabled=false`；
 - `code_intel.semgrep.enabled` 只在 `code_intel.enabled=true` 时生效；semgrep 未安装或平台
   不支持时诊断跳过并给 install hint，不阻塞语法索引；
+- `code_intel.auto_install=true`（默认）时，首次加载某语言 grammar 失败会调用
+  `pm.ensure_import(descriptor.extra or "codegraph")` 并重试一次；安装失败或需要重启进程时返回
+  结构化 unavailable，不静默忽略。`false` 时只返回安装提示，不修改依赖环境；
 - `code_intel.semgrep.mode` 只接受 `auto`（默认）与 `custom_dir`；其他值在配置加载时拒绝。
   `auto` 用 Semgrep registry 推荐规则（首次/缓存失效时可能联网，始终 `--metrics=off`）；
   `custom_dir` 只读 `get_hermes_home()/code-intelligence/semgrep/`，离线可用；目录缺失/为空时

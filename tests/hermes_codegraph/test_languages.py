@@ -384,3 +384,69 @@ def test_install_target_gap(target, expected):
         assert gap is None
     else:
         assert gap is not None and expected in gap
+
+
+def test_missing_grammar_auto_installs_the_descriptor_extra(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from hermes_codegraph.adapters.languages import base
+    from hermes_codegraph.config import CodeGraphLimits
+
+    base._GRAMMAR_INSTALL_ATTEMPTED.clear()
+    base._GRAMMAR_INSTALL_FAILURES.clear()
+    calls: list[str] = []
+    missing = {"first": True}
+    import importlib
+
+    real_import = importlib.import_module
+    fake = SimpleNamespace(language=lambda: "fake")
+
+    def fake_import(name: str, package: str | None = None):
+        if name != "tree_sitter_missing":
+            return real_import(name, package) if package else real_import(name)
+        if missing["first"]:
+            missing["first"] = False
+            raise ImportError(name)
+        return fake
+
+    monkeypatch.setattr("importlib.import_module", fake_import)
+    monkeypatch.setattr("pm.extras.ensure_import", calls.append)
+    monkeypatch.setattr(
+        CodeGraphLimits,
+        "from_config",
+        classmethod(lambda cls, config=None: cls(auto_install=True)),
+    )
+    descriptor = replace(
+        default_registry().get("python"),
+        grammar_package="tree-sitter-missing",
+        grammar_install="builtin",
+    )
+    assert base._grammar_module(descriptor) is fake
+    assert calls == ["codegraph"]
+
+
+def test_missing_grammar_respects_auto_install_false(monkeypatch):
+    from dataclasses import replace
+
+    from hermes_codegraph.adapters.languages import base
+    from hermes_codegraph.config import CodeGraphLimits
+    from hermes_codegraph.exceptions import CodeGraphUnavailableError
+
+    base._GRAMMAR_INSTALL_ATTEMPTED.clear()
+    base._GRAMMAR_INSTALL_FAILURES.clear()
+    calls: list[str] = []
+    monkeypatch.setattr("pm.extras.ensure_import", calls.append)
+    monkeypatch.setattr(
+        CodeGraphLimits,
+        "from_config",
+        classmethod(lambda cls, config=None: cls(auto_install=False)),
+    )
+    descriptor = replace(
+        default_registry().get("python"),
+        grammar_package="tree-sitter-missing",
+        grammar_install="builtin",
+    )
+    with pytest.raises(CodeGraphUnavailableError, match="auto_install is false"):
+        base._grammar_module(descriptor)
+    assert calls == []

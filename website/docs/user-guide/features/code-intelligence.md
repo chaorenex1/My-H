@@ -92,6 +92,7 @@ code_intel:
   enabled: true
   update: true
   auto_update: true
+  auto_install: true   # install a missing grammar extra on first use
   semantic: false
   semgrep:
     enabled: false
@@ -108,6 +109,11 @@ code_intel:
 background, single-flight per profile/workspace. It never blocks the answer and
 never writes change-history edges for a dirty worktree. One-shot/cron sessions
 use a bounded synchronous flush instead, because the process exits immediately.
+
+`auto_install` (default `true`) makes the first missing grammar load install that
+language's extra through PM and retry once; if the extra cannot be installed or
+only takes effect after a restart, index reports the structured unavailable error.
+Set it to `false` to get the install hint without touching the environment.
 
 `semantic: true` reuses `agent/lsp` and can execute project build scripts
 through language servers; keep it off for untrusted or offline repositories.

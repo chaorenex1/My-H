@@ -24,6 +24,7 @@ class CodeGraphLimits:
     enabled: bool = True
     update: bool = True
     auto_update: bool = True
+    auto_install: bool = True
     semantic: bool = False
     semgrep_enabled: bool = False
     semgrep_mode: str = "auto"
@@ -97,6 +98,7 @@ class CodeGraphLimits:
             enabled=bool(section.get("enabled", True)),
             update=bool(section.get("update", True)),
             auto_update=bool(section.get("auto_update", True)),
+            auto_install=bool(section.get("auto_install", True)),
             semantic=bool(section.get("semantic", False)),
             semgrep_enabled=bool(semgrep.get("enabled", False)),
             semgrep_mode=semgrep_mode,

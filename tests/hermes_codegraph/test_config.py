@@ -13,6 +13,7 @@ def test_defaults_expose_code_intel_and_no_codegraph_domain():
     section = DEFAULT_CONFIG["code_intel"]
     assert isinstance(section, dict)
     assert section["enabled"] is True
+    assert section["auto_install"] is True
     assert section["semantic"] is False
     assert section["semgrep"] == {"enabled": False, "mode": "auto"}
 
@@ -47,3 +48,11 @@ def test_missing_semgrep_block_uses_defaults():
     limits = CodeGraphLimits.from_config({"code_intel": {}})
     assert limits.semgrep_enabled is False
     assert limits.semgrep_mode == "auto"
+
+
+def test_auto_install_defaults_on_and_can_be_disabled():
+    assert CodeGraphLimits.from_config({"code_intel": {}}).auto_install is True
+    assert (
+        CodeGraphLimits.from_config({"code_intel": {"auto_install": False}}).auto_install
+        is False
+    )
