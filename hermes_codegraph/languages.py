@@ -124,69 +124,85 @@ def _validate_extraction(value: Any, *, source: str) -> None:
         raise LanguageDescriptorError(
             f"{source}: unknown extraction key(s): {', '.join(unknown)}"
         )
+    _validate_extraction_scalars(value, source)
+    _validate_extraction_mappings(value, source)
+    _validate_extraction_lists(value, source)
+    _validate_extraction_table(
+        value, "method_parents", source, kinds=True
+    )
+    _validate_extraction_table(value, "value_defs", source)
+    _validate_extraction_table(value, "owner_relations", source)
+
+
+def _validate_extraction_scalars(value: dict[str, Any], source: str) -> None:
     for key in _EXTRACTION_STRING_KEYS:
         if key in value and not _nonempty_string(value[key]):
             raise LanguageDescriptorError(
                 f"{source}: extraction.{key} must be a non-empty string"
-            )
-    for key in _EXTRACTION_MAPPING_KEYS:
-        if key not in value:
-            continue
-        mapping = value[key]
-        if not isinstance(mapping, dict):
-            raise LanguageDescriptorError(
-                f"{source}: extraction.{key} must be a mapping"
-            )
-        for node, target in mapping.items():
-            if not _nonempty_string(node) or not _nonempty_string(target):
-                raise LanguageDescriptorError(
-                    f"{source}: extraction.{key} entries must be non-empty strings"
-                )
-    for key in _EXTRACTION_LIST_KEYS:
-        if key not in value:
-            continue
-        items = value[key]
-        if not isinstance(items, list) or any(
-            not _nonempty_string(item) for item in items
-        ):
-            raise LanguageDescriptorError(
-                f"{source}: extraction.{key} must be a list of non-empty strings"
             )
     for key in _EXTRACTION_BOOL_KEYS:
         if key in value and not isinstance(value[key], bool):
             raise LanguageDescriptorError(
                 f"{source}: extraction.{key} must be a boolean"
             )
-    parents = value.get("method_parents")
-    if parents is not None:
-        if not isinstance(parents, dict):
+
+
+def _validate_extraction_mappings(value: dict[str, Any], source: str) -> None:
+    for key in _EXTRACTION_MAPPING_KEYS:
+        mapping = value.get(key)
+        if mapping is None:
+            continue
+        if not isinstance(mapping, dict):
             raise LanguageDescriptorError(
-                f"{source}: extraction.method_parents must be a mapping"
+                f"{source}: extraction.{key} must be a mapping"
             )
-        for node, kinds in parents.items():
-            if not _nonempty_string(node) or not isinstance(kinds, list) or any(
-                not _nonempty_string(kind) for kind in kinds
+        if any(
+            not _nonempty_string(node) or not _nonempty_string(target)
+            for node, target in mapping.items()
+        ):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} entries must be non-empty strings"
+            )
+
+
+def _validate_extraction_lists(value: dict[str, Any], source: str) -> None:
+    for key in _EXTRACTION_LIST_KEYS:
+        items = value.get(key)
+        if items is None:
+            continue
+        if not isinstance(items, list) or any(
+            not _nonempty_string(item) for item in items
+        ):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} must be a list of non-empty strings"
+            )
+
+
+def _validate_extraction_table(
+    value: dict[str, Any], key: str, source: str, *, kinds: bool = False
+) -> None:
+    table = value.get(key)
+    if table is None:
+        return
+    if not isinstance(table, dict):
+        raise LanguageDescriptorError(
+            f"{source}: extraction.{key} must be a mapping"
+        )
+    for node, target in table.items():
+        if not _nonempty_string(node):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} keys must be non-empty strings"
+            )
+        if kinds:
+            if not isinstance(target, list) or any(
+                not _nonempty_string(kind) for kind in target
             ):
                 raise LanguageDescriptorError(
-                    f"{source}: extraction.method_parents values must be string lists"
+                    f"{source}: extraction.{key} values must be string lists"
                 )
-    value_defs = value.get("value_defs")
-    if value_defs is not None:
-        if not isinstance(value_defs, dict) or any(
-            not _nonempty_string(node) or not _nonempty_string(rule)
-            for node, rule in value_defs.items()
-        ):
+        elif not _nonempty_string(target):
             raise LanguageDescriptorError(
-                f"{source}: extraction.value_defs must map nodes to rule names"
-            )
-    owner_relations = value.get("owner_relations")
-    if owner_relations is not None:
-        if not isinstance(owner_relations, dict) or any(
-            not _nonempty_string(node) or not _nonempty_string(owner)
-            for node, owner in owner_relations.items()
-        ):
-            raise LanguageDescriptorError(
-                f"{source}: extraction.owner_relations must map nodes to owner sources"
+                f"{source}: extraction.{key} values must be non-empty strings"
             )
 
 

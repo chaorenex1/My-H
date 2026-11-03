@@ -547,7 +547,7 @@ class LSPClient:
     ) -> Any:
         """Position-based request with **1-based** line/column (LSP is 0-based)."""
         params: dict[str, Any] = {
-            "textDocument": {"uri": file_uri(os.path.abspath(path))},
+            "textDocument": {"uri": file_uri(os.path.abspath(path))},  # health: allow ASYNC240 -- abspath is pure string work, no I/O
             "position": {"line": max(0, int(line) - 1), "character": max(0, int(column) - 1)},
         }
         if extra:

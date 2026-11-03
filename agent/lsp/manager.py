@@ -548,7 +548,7 @@ class LSPService:
             result = self._loop.run(
                 self._document_symbols_async(file_path, timeout), timeout=timeout + 2.0
             )
-        except Exception as exc:
+        except Exception as exc:  # health: allow BLE001 -- optional document-symbol query; failure degrades to empty
             self._mark_broken_for_file(file_path, exc)
             logger.debug("LSP document symbols failed for %s: %s", file_path, exc)
             return []
@@ -570,7 +570,7 @@ class LSPService:
                 ),
                 timeout=timeout + 1.0,
             )
-        except Exception as exc:
+        except Exception as exc:  # health: allow BLE001 -- optional workspace-symbol query; failure degrades to empty
             logger.debug("LSP workspace symbols failed: %s", exc)
             return []
         symbols = _normalise_symbols(result)
@@ -594,7 +594,7 @@ class LSPService:
                 self._query_position_async(method, file_path, line, column, timeout, extra),
                 timeout=timeout + 2.0,
             )
-        except Exception as exc:
+        except Exception as exc:  # health: allow BLE001 -- optional position query; failure degrades to empty
             self._mark_broken_for_file(file_path, exc)
             logger.debug("LSP %s failed for %s: %s", method, file_path, exc)
             return []

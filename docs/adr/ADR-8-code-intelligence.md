@@ -543,8 +543,9 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
   非空；单文件内重复的 `language` id/alias/extension、未知字段、缺必填字段或类型错误拒绝该文件；
 - 合并顺序固定：内置 registry 先加载；profile 中 `language` 已存在时跳过该条目（不覆盖、不重复
   注册）；profile 的 alias/extension/filename 与已加载条目冲突时跳过并报告 conflict；profile
-  新增语言仍使用同一 descriptor schema 并由同一通用抽取器处理；缺 `extraction` 块或 grammar
-  未安装时，索引记 `unsupported`；
+  新增语言仍使用同一 descriptor schema 并由同一通用抽取器处理；缺 `extraction` 块时索引记
+  `unsupported`，grammar 未安装时抽取抛 `CodeGraphUnavailableError`，索引记 `failed` 并保留
+  上次成功的图；
 - `tree_sitter_queries` 的键是 `symbols/imports/calls/types/tests`，值必须是非空 `.scm` 路径，
   相对**各自 registry 根目录**，拒绝绝对路径与 `..`；引用的查询文件必须存在且非空；
 - `parser` 可选，仅作为 tree-sitter CLI 的元数据；代码图运行时**忽略**该字段，不 `dlopen`、不
@@ -594,7 +595,8 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
 - 额外语言的 descriptor、`extraction` 与查询文件随包或 profile registry 提供：descriptor 用
   `grammar_install: on_demand:codegraph-<language>`，`language install` 据此找到 extra；grammar
   不进入 `[codegraph]` 基线，未安装时 `language list` 显示 `available=false` 与安装命令；只写
-  descriptor 而缺 `extraction` 或 grammar 时，索引记 `unsupported`；
+  descriptor 而缺 `extraction` 时，索引记 `unsupported`；grammar 未安装时索引记 `failed` 并保留
+  上次成功图；
 - 每个额外 extra 在 `pm/extras.py` 有独立 tuple anchor（如 `tree_sitter_java`），
   `pm.available("codegraph-java")` 可独立判断。
 
@@ -1423,8 +1425,8 @@ core 测试必须用 `scripts/run_tests.sh` 与临时 `HERMES_HOME`，不得写 
    每个 item 用 `language:` 区分；profile 中 `language` 已由内置 registry 加载的条目被跳过
    （不重复、不覆盖），`status`/`doctor` 报告 skipped 数；内置四种 descriptor 字段完整
    （grammar、tree_sitter_queries、kind_map、import_resolution、test_detection、capabilities、
-   semantic_provider）且共享同一个通用抽取器；profile 新增语言缺 `extraction` 块或 grammar 未
-   安装时，索引记为 `unsupported`，不产生猜测性事实；单文件内重复
+   semantic_provider）且共享同一个通用抽取器；profile 新增语言缺 `extraction` 块时索引记为
+   `unsupported`，grammar 未安装时记为 `failed`（保留旧图），都不产生猜测性事实；单文件内重复
    `language` id/alias/extension、未知字段、缺必填字段、类型错误、绝对/越界 query/parser 路径
    拒绝该文件；未知语言抛 `LanguageUnsupportedError`，没有隐式 fallback。
 4. **按需 grammar**：`language list` 显示内置/可安装；`language install <lang>` 只调用
