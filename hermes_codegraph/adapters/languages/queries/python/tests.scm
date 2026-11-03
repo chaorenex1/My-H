@@ -1,1 +1,1 @@
-(function_definition name: (identifier) @test.name) @test.definition
+(function_definition name: (identifier) @test.name) @test.def

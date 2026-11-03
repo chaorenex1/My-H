@@ -1,1 +1,1 @@
-(call function: (_) @call.function) @call.expression
+(call function: (_) @call.name) @call.def

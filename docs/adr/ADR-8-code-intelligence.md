@@ -63,11 +63,12 @@ skill；**P5** 分析事实回写工具 `code_graph_update`（按文件
   wheel：正确行为是 `available=false`（anchor 缺失）+ `ensure_import` 在 uv 解析处失败。因此
   `status`/`doctor` 与 `language install` 先用 `pm.store.current_target()`（会返回
   `linux-arm64-musl`/`linux-*-bionic`）给出明确 gap，不把 resolver 错误当安装提示。
-- Language Registry：包内 `languages.yaml` 只有四个内置语言，`_EXTRACTORS`/`_GRAMMAR_LOADERS`
-  同样只注册四种；`pyproject.toml`/`pm/extras.py` 已预留 `codegraph-java`，但包内没有 Java
-  descriptor 或抽取器，因此当前没有任何可 `language install` 的按需语言。profile 新增 descriptor
-  能通过 schema 校验并被 `language list` 列出，但索引时为 `unsupported`（`no extractor`）；
-  descriptor 不是可插拔的语言实现。
+- Language Registry：包内 `languages.yaml` 只有四个内置语言；每个 descriptor 带 `extraction`
+  块，`adapters/languages/extractor.py` 是唯一抽取器（没有 `_EXTRACTORS`/`_GRAMMAR_LOADERS`，
+  grammar 由 `grammar_package` 动态导入）。`pyproject.toml`/`pm/extras.py` 已预留
+  `codegraph-java`，但包内没有 Java descriptor，因此当前没有任何可 `language install` 的按需
+  语言。profile 新增语言只要提供 descriptor、`extraction` 与查询文件并已安装 grammar wheel，就
+  走同一抽取器；缺 `extraction` 时索引为 `unsupported`。
 - 工具面：`tools/registry.py::_check_fn_cache` 的键是 `(check_fn, check_fn_cache_scope())`；单 profile
   为 `None`（进程级），多路 gateway 用路由 profile 的 home override，不是 `hermes_home_key()`；TTL
   30 秒、成功后 60 秒失败宽限。`model_tools.get_tool_definitions()` 的 memo 键包含 registry
@@ -195,7 +196,7 @@ API）。明确不接入：
 | Syntax Layer（Tree-sitter） | D6 的默认解析器；**始终可用**的基线 |
 | Syntax Layer（ast-grep） | 可选结构搜索/校验；通过现有 PM 安装，**不参与图事实生成** |
 | Semantic Layer（LSP） | 复用 `agent/lsp` 的 server 注册表、trust、安装与生命周期 |
-| Semantic Layer（Language Adapters） | D6 的 descriptor schema + 包内 `<language>.py` 抽取器 |
+| Semantic Layer（Language Adapters） | D6 的 descriptor schema + 唯一通用抽取器 |
 | Analysis Layer（Semgrep / CodeQL 可选） | Semgrep 危险模式诊断受 `code_intel.semgrep.enabled` 控制；只写 `CodeDiagnostic`，不阻塞索引，不生成调用事实 |
 | Search Layer（ripgrep / Symbol Search） | 文本搜索复用现有 `search_files`；符号搜索走图 API |
 | Unified Code Graph（LadybugDB / NetworkX / SQLite） | LadybugDB = 唯一事实源；NetworkX = 只读临时快照；**SQLite 不采用为事实源**（D3） |
@@ -449,17 +450,23 @@ Agent 使用策略：
 
 `invalidated` 的证据不参与任何策略；已删除符号的边在 `include_deleted=false`（默认）时同样过滤。
 
-### D6. Language Registry：所有语言共用一种 descriptor，四个内置，其余按需安装
+### D6. Language Registry：一种 descriptor 与一个通用抽取器，四个内置，其余按需安装
 
-所有语言共用**同一种** descriptor schema（实现为 `LanguageDescriptor`），内置语言与按需语言没有
-第二种格式。descriptor 是语言**元数据**的唯一事实来源：识别键、grammar、query 路径、规则映射与
-capabilities 都只在 descriptor 里声明；但 AST 遍历与 ACIE 映射代码不在 descriptor 内——每种可
-索引语言还需要一个包内 `adapters/languages/<language>.py` 抽取器，并在
-`indexer._EXTRACTORS` 与 `base._GRAMMAR_LOADERS` 注册。v1 的抽取器实际读取的 descriptor 字段只有
-`module_naming`、`visibility_rules` 与 `test_detection`（后者仅 Python/TypeScript 抽取器使用）；
-`kind_map`、`container_rules`、`signature_rules`、`import_resolution` 和 `tree_sitter_queries` 已
-进入 schema 并被 registry 校验（query 文件随包发布），但当前抽取器不读取：AST kind 与遍历逻辑在
-`<language>.py` 中硬编码，这些字段留待后续语言接入时启用。没有抽取器的 descriptor 可以出现在
+所有语言共用**同一种** descriptor schema（实现为 `LanguageDescriptor`）与**一个**通用抽取器
+（`adapters/languages/extractor.py`）：没有每语言 `.py` 抽取器，也没有 `_EXTRACTORS` 分派表。
+descriptor 声明识别键、grammar、query 路径、`extraction` 语法档（节点表、字段名与模式开关）、
+capabilities 与规则映射；抽取器运行 descriptor 的 `tree_sitter_queries` 定位候选节点，再用
+`extraction` 把节点映射为 ACIE 实体，grammar 由 `grammar_package` 动态导入。新语言只增加
+descriptor、其 `.scm` 查询与 `extraction` 块（以及已安装的 grammar wheel），不修改 Python 代码。
+
+v1 实际读取的字段：`tree_sitter_queries`、`kind_map`、`module_naming`、`visibility_rules`
+（Python 导出规则）、`test_detection`、`capabilities` 与 `extraction`
+（`module_mode`、`grammar_loader`、`container_fields`、`container_kinds`、`method_parents`、
+`value_defs`、`call_name_fields`、`instantiation_nodes`、`import_mode`、`import_nodes`、
+`type_name_nodes`、`test_mode`、`export_mode`、`self_container_fields`、`language_kind_from`、
+`owner_relations`、`structural_interfaces`）。`container_rules`、`signature_rules` 与
+`import_resolution` 仍进入 schema 校验，但当前抽取器不读取：签名统一取
+`header_before_body`，导入解析由 `import_mode` 完成。没有 `extraction` 块的 descriptor 可以出现在
 `language list`，索引却只能按 `unsupported` 跳过，不产生猜测性事实；不存在“猜一个扩展名就套
 Tree-sitter”的隐式回退。语言注册文件有**两个位置**，按顺序合并：
 
@@ -469,7 +476,8 @@ Tree-sitter”的隐式回退。语言注册文件有**两个位置**，按顺�
 
 **profile 文件不重复加载内置 registry 已加载的语言**：按 `language` 去重；profile 中与内置
 `language` 同名的条目被跳过（不覆盖、不重复注册），`status`/`doctor` 报告 skipped 数；profile
-只补充新语言，不能新增可索引语言（抽取器必须在包内）。内置文件不会被复制到 profile，也不是
+可补充新语言：descriptor、`extraction` 与相对 profile 根目录的 `.scm` 查询一起校验，grammar 由
+`grammar_package` 动态导入，必须先安装对应 wheel。内置文件不会被复制到 profile，也不是
 bootstrap 模板。两个文件使用同一结构（同一 descriptor schema）：
 
 ```yaml
@@ -507,6 +515,19 @@ signature_rules: {...}
 module_naming: {...}
 import_resolution: {...}
 test_detection: {...}
+extraction:                   # 通用抽取器的语法档；所有语言同一结构
+  module_mode: stem           # stem | directory | rust
+  grammar_loader: default     # default | typescript（TS/TSX 语法选择）
+  container_fields: {class_definition: name}
+  container_kinds: {class_definition: class}
+  method_parents: {function_definition: [class]}
+  value_defs: {assignment: python_assignment}
+  call_name_fields: {attribute: attribute}
+  import_mode: python         # python | typescript | go | rust
+  import_nodes: [import_statement]
+  type_name_nodes: [identifier]
+  test_mode: python
+  export_mode: underscore     # underscore | uppercase | rust | always
 capabilities:                 # 缺省视为 false；内置 registry 显式声明全部键
   symbols: true
   references: true
@@ -522,12 +543,14 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
   非空；单文件内重复的 `language` id/alias/extension、未知字段、缺必填字段或类型错误拒绝该文件；
 - 合并顺序固定：内置 registry 先加载；profile 中 `language` 已存在时跳过该条目（不覆盖、不重复
   注册）；profile 的 alias/extension/filename 与已加载条目冲突时跳过并报告 conflict；profile
-  新增语言仍使用同一 descriptor schema，但 profile 不提供抽取器——只有包内已注册抽取器的语言
-  才能被索引，其余在索引时记 `unsupported`；
+  新增语言仍使用同一 descriptor schema 并由同一通用抽取器处理；缺 `extraction` 块或 grammar
+  未安装时，索引记 `unsupported`；
 - `tree_sitter_queries` 的键是 `symbols/imports/calls/types/tests`，值必须是非空 `.scm` 路径，
   相对**各自 registry 根目录**，拒绝绝对路径与 `..`；引用的查询文件必须存在且非空；
 - `parser` 可选，仅作为 tree-sitter CLI 的元数据；代码图运行时**忽略**该字段，不 `dlopen`、不
   校验其存在性（用户可编辑的 `.so` 不得成为代码执行入口）；
+- `extraction` 可省略（省略则该语言索引为 `unsupported`）；出现时只接受固定键集合，节点表/字段
+  名/列表/布尔值类型错误拒绝整个文件；profile 与内置 registry 使用同一校验；
 - 规则映射（`kind_map`/`container_rules`/`visibility_rules`/`signature_rules`/`module_naming`/
   `import_resolution`/`test_detection`）可省略；省略时该语言不使用对应规则，不回退到通用规则；
 - `capabilities` 缺键视为 `false`；内置 registry 必须显式声明全部键。
@@ -554,10 +577,10 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
 | Go | struct/interface/type_alias/func/method/field/constant | `import` | 嵌入字段、接口实现 | `_test.go`/`Test*` |
 | Rust | struct/enum/trait/impl/fn/method/mod/const | `use` | impl Trait/trait bounds | `#[test]` |
 
-表中的语言细节是抽取输出契约，由 `<language>.py` 抽取器与 descriptor 的 `capabilities` 共同保证，
-不是 descriptor 字段清单；`kind_map` 等字段的当前读取状态见 D6 开头。具体 Tree-sitter query 在
+表中的语言细节是抽取输出契约，由通用抽取器、descriptor 的 `extraction` 块与 `capabilities` 共同
+保证，不是 descriptor 字段清单；具体 Tree-sitter query 在
 各自 registry 的 `queries/`（内置包内 / profile 的 `tree-sitter/queries/`），AST 节点名留在
-`adapters/languages/<language>.py`，不进入公共 API。
+`extraction` 的节点表里，不进入公共 API。
 
 **其他 grammar 按需安装**：
 
@@ -568,10 +591,10 @@ parser_version: "..."         # grammar + adapter/parser 版本，参与增量�
   resolver 错误抛给用户）；
 - 安装成功后，`code_intel.languages` 必须包含该语言 id 才会参与索引；`language list` 显示
   installed / enabled 两列，避免“装了 grammar 但没启用”的静默状态；
-- 额外语言的 descriptor 与抽取器都必须随包发布：descriptor 在包内 registry 中声明
+- 额外语言的 descriptor、`extraction` 与查询文件随包或 profile registry 提供：descriptor 用
   `grammar_install: on_demand:codegraph-<language>`，`language install` 据此找到 extra；grammar
   不进入 `[codegraph]` 基线，未安装时 `language list` 显示 `available=false` 与安装命令；只写
-  profile descriptor 不会让语言变得可索引；
+  descriptor 而缺 `extraction` 或 grammar 时，索引记 `unsupported`；
 - 每个额外 extra 在 `pm/extras.py` 有独立 tuple anchor（如 `tree_sitter_java`），
   `pm.available("codegraph-java")` 可独立判断。
 
@@ -1277,10 +1300,10 @@ D6 的 occurrence 规则升级边。LSP 请求超时/失败返回空并保留语
 
 - 六类关系图共享一套节点/边/证据/Revision 模型；Coding Agent/Reviewer/Advisor 不再各自解析代码。
 - 存储、事务、scope 版本、算法复用 ADR-7，不产生第二套图实现；换存储只改 `hermes_graph`。
-- Language Registry 用同一种 descriptor schema 描述所有语言；内置 registry 先加载，
-  profile 扩展 registry 按 `language` 去重、只补充新语言（不提供抽取器）；`languages` 列表按
-  `language` 区分，内置四种开箱即用，其他语言按需安装 grammar，LSP 按需安装 server。AST 遍历
-  仍在包内 `<language>.py` 抽取器，不下沉到数据文件。
+- Language Registry 用同一种 descriptor schema 描述所有语言，并由**一个** descriptor/query 驱动的
+  通用抽取器处理；内置 registry 先加载，profile 扩展 registry 按 `language` 去重、只补充新语言；
+  `languages` 列表按 `language` 区分，内置四种开箱即用，其他语言按需安装 grammar，LSP 按需安装
+  server。新增语言只写 descriptor、`extraction` 与 `.scm` 查询，不新增遍历代码。
 - 语法/语义/风险三层开关分离：`code_intel.enabled` 是总开关，`semantic` 与 `semgrep.enabled`
   独立 opt-in；关闭危险模式诊断不影响语法/语义索引。
 - 证据与解析状态分层，模型不会把推断当事实；`verified` 只来自覆盖率运行证据。
@@ -1400,14 +1423,14 @@ core 测试必须用 `scripts/run_tests.sh` 与临时 `HERMES_HOME`，不得写 
    每个 item 用 `language:` 区分；profile 中 `language` 已由内置 registry 加载的条目被跳过
    （不重复、不覆盖），`status`/`doctor` 报告 skipped 数；内置四种 descriptor 字段完整
    （grammar、tree_sitter_queries、kind_map、import_resolution、test_detection、capabilities、
-   semantic_provider）且都有包内抽取器；profile 新增语言没有包内抽取器时，索引记为
-   `unsupported`，不产生猜测性事实；单文件内重复
+   semantic_provider）且共享同一个通用抽取器；profile 新增语言缺 `extraction` 块或 grammar 未
+   安装时，索引记为 `unsupported`，不产生猜测性事实；单文件内重复
    `language` id/alias/extension、未知字段、缺必填字段、类型错误、绝对/越界 query/parser 路径
    拒绝该文件；未知语言抛 `LanguageUnsupportedError`，没有隐式 fallback。
 4. **按需 grammar**：`language list` 显示内置/可安装；`language install <lang>` 只调用
    `pm.ensure_import("codegraph-<lang>")`；缺安装时结构化报错并提供 install hint；不执行裸 pip。
-   当前包内只有四个内置 descriptor，可安装列为空；新增按需语言必须同时提供包内 descriptor
-   与抽取器。
+   当前包内只有四个内置 descriptor，可安装列为空；新增按需语言必须提供 descriptor、
+   `extraction` 与查询文件。
 5. **多语言抽取**：Python/TypeScript/Go/Rust fixture 的符号 `kind`、`qualified_name`、容器、
    起止位置正确；同名函数/重载不合并；未知 AST 类型落到 `unknown` 且保留 `language_kind`。
 6. **证据**：每条边至少一条 Evidence，含工具名、版本、文件、行列、`excerpt_hash`；证据不保存
@@ -1529,7 +1552,7 @@ hermes-agent/
 │   ├── update.py                # P5：refresh_file/apply_evidence/invalidate、冲突与审计
 │   ├── auto_update.py           # P6：变更探测、single-flight、预算、post-turn 调度
 │   └── adapters/
-│       ├── languages/           # languages.yaml + queries/**/*.scm + <language>.py extractors
+│       ├── languages/           # languages.yaml + queries/**/*.scm + extractor.py (single engine)
 │       └── analysis/            # ast-grep / semgrep / codeql 可选适配
 ├── hermes_graph/services/edges.py   # 加法：upsert
 ├── hermes_graph/services/index.py   # 加法：snapshot filters

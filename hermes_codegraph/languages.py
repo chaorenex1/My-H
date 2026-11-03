@@ -55,6 +55,7 @@ OPTIONAL_FIELDS = frozenset(
         "import_resolution",
         "test_detection",
         "semantic_provider",
+        "extraction",
     }
 )
 RULE_FIELDS = (
@@ -67,6 +68,36 @@ RULE_FIELDS = (
     "test_detection",
 )
 _SEQUENCE_FIELDS = ("aliases", "extensions", "filenames")
+_EXTRACTION_STRING_KEYS = frozenset(
+    {
+        "module_mode",
+        "value_scope",
+        "import_mode",
+        "test_mode",
+        "export_mode",
+        "grammar_loader",
+    }
+)
+_EXTRACTION_MAPPING_KEYS = frozenset(
+    {
+        "container_fields",
+        "container_kinds",
+        "call_name_fields",
+        "self_container_fields",
+        "language_kind_from",
+    }
+)
+_EXTRACTION_LIST_KEYS = frozenset(
+    {"instantiation_nodes", "import_nodes", "type_name_nodes", "skip_defs"}
+)
+_EXTRACTION_BOOL_KEYS = frozenset({"resolve_same_file", "structural_interfaces"})
+_EXTRACTION_KEYS = (
+    _EXTRACTION_STRING_KEYS
+    | _EXTRACTION_MAPPING_KEYS
+    | _EXTRACTION_LIST_KEYS
+    | _EXTRACTION_BOOL_KEYS
+    | {"method_parents", "value_defs", "owner_relations"}
+)
 _LANGUAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 _INSTALL_POLICY = re.compile(r"(?:builtin|on_demand:[a-z0-9][a-z0-9._-]*)\Z")
 
@@ -77,6 +108,86 @@ PROFILE_REGISTRY_PARTS = ("code-intelligence", "tree-sitter", "languages.yaml")
 
 def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_extraction(value: Any, *, source: str) -> None:
+    """Validate the generic extractor's grammar profile.
+
+    The block is data only: node-kind tables, field names and mode switches.
+    Unknown keys and wrong types fail the file, like every other descriptor
+    field; the extractor never guesses.
+    """
+    if not isinstance(value, dict):
+        raise LanguageDescriptorError(f"{source}: extraction must be a mapping")
+    unknown = sorted(str(key) for key in set(value) - _EXTRACTION_KEYS)
+    if unknown:
+        raise LanguageDescriptorError(
+            f"{source}: unknown extraction key(s): {', '.join(unknown)}"
+        )
+    for key in _EXTRACTION_STRING_KEYS:
+        if key in value and not _nonempty_string(value[key]):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} must be a non-empty string"
+            )
+    for key in _EXTRACTION_MAPPING_KEYS:
+        if key not in value:
+            continue
+        mapping = value[key]
+        if not isinstance(mapping, dict):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} must be a mapping"
+            )
+        for node, target in mapping.items():
+            if not _nonempty_string(node) or not _nonempty_string(target):
+                raise LanguageDescriptorError(
+                    f"{source}: extraction.{key} entries must be non-empty strings"
+                )
+    for key in _EXTRACTION_LIST_KEYS:
+        if key not in value:
+            continue
+        items = value[key]
+        if not isinstance(items, list) or any(
+            not _nonempty_string(item) for item in items
+        ):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} must be a list of non-empty strings"
+            )
+    for key in _EXTRACTION_BOOL_KEYS:
+        if key in value and not isinstance(value[key], bool):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.{key} must be a boolean"
+            )
+    parents = value.get("method_parents")
+    if parents is not None:
+        if not isinstance(parents, dict):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.method_parents must be a mapping"
+            )
+        for node, kinds in parents.items():
+            if not _nonempty_string(node) or not isinstance(kinds, list) or any(
+                not _nonempty_string(kind) for kind in kinds
+            ):
+                raise LanguageDescriptorError(
+                    f"{source}: extraction.method_parents values must be string lists"
+                )
+    value_defs = value.get("value_defs")
+    if value_defs is not None:
+        if not isinstance(value_defs, dict) or any(
+            not _nonempty_string(node) or not _nonempty_string(rule)
+            for node, rule in value_defs.items()
+        ):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.value_defs must map nodes to rule names"
+            )
+    owner_relations = value.get("owner_relations")
+    if owner_relations is not None:
+        if not isinstance(owner_relations, dict) or any(
+            not _nonempty_string(node) or not _nonempty_string(owner)
+            for node, owner in owner_relations.items()
+        ):
+            raise LanguageDescriptorError(
+                f"{source}: extraction.owner_relations must map nodes to owner sources"
+            )
 
 
 def _validate_artifact_path(value: Any, *, base: Path | None, what: str) -> str:
@@ -125,6 +236,9 @@ class LanguageDescriptor:
     module_naming: dict[str, Any] = field(default_factory=dict)
     import_resolution: dict[str, Any] = field(default_factory=dict)
     test_detection: dict[str, Any] = field(default_factory=dict)
+    extraction: dict[str, Any] = field(default_factory=dict)
+    #: Directory the relative ``tree_sitter_queries`` paths resolve against.
+    query_root: Path | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         self._validate_identity()
@@ -268,6 +382,8 @@ class LanguageDescriptor:
         for name in RULE_FIELDS:
             if name in payload and not isinstance(payload[name], dict):
                 raise LanguageDescriptorError(f"{source}: {name} must be a mapping")
+        if "extraction" in payload:
+            _validate_extraction(payload["extraction"], source=source)
         queries = payload["tree_sitter_queries"]
         if not isinstance(queries, dict) or not queries:
             raise LanguageDescriptorError(
@@ -286,7 +402,7 @@ class LanguageDescriptor:
                 what=f"{source}.tree_sitter_queries.{purpose}",
             )
         try:
-            return cls(**payload)
+            return cls(query_root=registry_root, **payload)
         except LanguageDescriptorError as exc:
             raise LanguageDescriptorError(
                 f"{source}: {exc.message}",

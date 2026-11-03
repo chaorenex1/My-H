@@ -25,12 +25,13 @@ REQUIRED = {
 OPTIONAL = {
     "parser", "kind_map", "container_rules", "visibility_rules", "signature_rules",
     "module_naming", "import_resolution", "test_detection", "semantic_provider",
+    "extraction",
 }
 QUERY_KEYS = {"symbols", "imports", "calls", "types", "tests"}
 CAPABILITY_KEYS = {"symbols", "references", "calls", "types", "inheritance", "tests", "change"}
 MAPPING_FIELDS = {
     "kind_map", "container_rules", "visibility_rules", "signature_rules",
-    "module_naming", "import_resolution", "test_detection",
+    "module_naming", "import_resolution", "test_detection", "extraction",
 }
 LANGUAGE_ID = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
 INSTALL_POLICY = re.compile(r"(?:builtin|on_demand:[a-z0-9][a-z0-9._-]*)\Z")

@@ -1,1 +1,1 @@
-(use_declaration argument: (_) @import.module)
+(use_declaration argument: (_) @import.argument)

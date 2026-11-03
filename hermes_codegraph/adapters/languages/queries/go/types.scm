@@ -1,2 +1,5 @@
-(type_declaration (type_spec type: (struct_type) @type.struct))
-(type_declaration (type_spec type: (interface_type) @type.interface))
+(type_declaration (type_spec type: (struct_type (field_declaration_list (field_declaration type: (_) @type.inherits)))))
+(type_declaration (type_spec type: (struct_type (field_declaration_list (field_declaration name: (_) type: (_) @type.has_type)))))
+(function_declaration result: (_) @type.returns_type)
+(method_declaration result: (_) @type.returns_type)
+(method_declaration receiver: (_) @type.override_receiver name: (field_identifier) @type.override_name)

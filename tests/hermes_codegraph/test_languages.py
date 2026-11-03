@@ -194,6 +194,8 @@ def test_builtin_descriptor_must_declare_every_capability():
         lambda entry: entry.update(aliases="py"),
         lambda entry: entry.update(capabilities={"symbols": "yes"}),
         lambda entry: entry.update(tree_sitter_queries={"symbols": "x.scm"}),
+        lambda entry: entry.update(extraction={"unknown": True}),
+        lambda entry: entry.update(extraction={"import_nodes": "nope"}),
     ],
 )
 def test_bad_descriptor_fields_reject_the_file(mutate):

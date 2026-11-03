@@ -176,40 +176,26 @@ def exported(name: str, descriptor: LanguageDescriptor) -> bool:
     return True
 
 
-def _load_python() -> Any:
-    import tree_sitter_python as grammar
+def _grammar_module(descriptor: LanguageDescriptor) -> Any:
+    import importlib
 
-    return grammar.language()
+    package = descriptor.grammar_package.replace("-", "_")
+    try:
+        return importlib.import_module(package)
+    except ImportError as exc:
+        from ...exceptions import CodeGraphUnavailableError
 
-
-def _load_typescript(path: str) -> Any:
-    import tree_sitter_typescript as grammar
-
-    return (
-        grammar.language_tsx()
-        if path.lower().endswith((".tsx", ".jsx"))
-        else grammar.language_typescript()
-    )
-
-
-def _load_go() -> Any:
-    import tree_sitter_go as grammar
-
-    return grammar.language()
+        raise CodeGraphUnavailableError(
+            f"grammar {descriptor.grammar_package!r} is not installed; "
+            f"run `{_install_hint(descriptor)}`"
+        ) from exc
 
 
-def _load_rust() -> Any:
-    import tree_sitter_rust as grammar
-
-    return grammar.language()
-
-
-_GRAMMAR_LOADERS = {
-    "python": lambda path: _load_python(),
-    "typescript": _load_typescript,
-    "go": lambda path: _load_go(),
-    "rust": lambda path: _load_rust(),
-}
+def _install_hint(descriptor: LanguageDescriptor) -> str:
+    extra = descriptor.extra
+    if extra:
+        return f"hermes pm install --extra {extra}"
+    return "hermes pm install --extra codegraph"
 
 
 def language_object(descriptor: LanguageDescriptor, path: str) -> Any:
@@ -223,10 +209,16 @@ def language_object(descriptor: LanguageDescriptor, path: str) -> Any:
             "tree-sitter is not installed; run `hermes pm install --extra codegraph`"
         ) from exc
 
-    loader = _GRAMMAR_LOADERS.get(descriptor.language)
-    if loader is None:
-        raise ValueError(f"no grammar loader for {descriptor.language!r}")
-    value = loader(path)
+    grammar = _grammar_module(descriptor)
+    loader = descriptor.extraction.get("grammar_loader", "default")
+    if loader == "typescript":
+        value = (
+            grammar.language_tsx()
+            if path.lower().endswith((".tsx", ".jsx"))
+            else grammar.language_typescript()
+        )
+    else:
+        value = grammar.language()
     return value if isinstance(value, Language) else Language(value)
 
 

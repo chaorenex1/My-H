@@ -1,1 +1,1 @@
-(call_expression function: (identifier) @test.function) @test.call
+(call_expression function: (identifier) @test.name arguments: (arguments) @test.args) @test.def

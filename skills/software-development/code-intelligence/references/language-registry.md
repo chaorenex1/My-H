@@ -104,6 +104,7 @@ rejects the whole file.
 | `module_naming` | mapping | no | ADR-8 module naming rules. |
 | `import_resolution` | mapping | no | ADR-8 import resolution rules. |
 | `test_detection` | mapping | no | ADR-8 test detection rules. |
+| `extraction` | mapping | no | Grammar profile consumed by the single code-graph extractor (node tables, field names, modes). Optional here because this store is CLI-only; the code graph requires it to index a language. |
 | `semantic_provider` | string/null | no | `agent/lsp` server id for semantic enrichment. |
 | `capabilities` | mapping | yes | Boolean capability flags; see below. |
 | `parser_version` | string | yes | Grammar + adapter revision; bump when either changes. |

@@ -17,12 +17,9 @@ from typing import Any
 from hermes_graph.serialization import derived_id, new_node_id
 
 from . import schema as code_schema
-from .adapters.languages import go as go_language
-from .adapters.languages import python as python_language
-from .adapters.languages import rust as rust_language
-from .adapters.languages import typescript as typescript_language
 from .adapters.languages.base import ExtractedFile as ParsedFile
 from .adapters.languages.base import ExtractedReference, ExtractedSymbol
+from .adapters.languages.extractor import extract as extract_file
 from .config import CodeGraphLimits
 from .exceptions import (
     CodeGraphError,
@@ -40,13 +37,6 @@ from .scanner import (
 )
 
 logger = logging.getLogger(__name__)
-
-_EXTRACTORS = {
-    "python": python_language.extract,
-    "typescript": typescript_language.extract,
-    "go": go_language.extract,
-    "rust": rust_language.extract,
-}
 
 _STATUS_CONFIDENCE = {
     "resolved": (0.8, "status_mapping"),
@@ -525,8 +515,7 @@ class Indexer:
                 error="binary content",
                 previous_hash=previous_hash,
             )
-        extractor = _EXTRACTORS.get(scanned.language)
-        if extractor is None:
+        if not descriptor.extraction:
             return _Prepared(
                 scanned=scanned,
                 descriptor=descriptor,
@@ -535,14 +524,14 @@ class Indexer:
                 line_count=line_count,
                 action="unsupported",
                 error=(
-                    f"no extractor for language {scanned.language!r} yet; "
-                    "the descriptor is registered for a later phase"
+                    f"language {scanned.language!r} has no extraction profile; "
+                    "add one to the descriptor's extraction block"
                 ),
                 previous_hash=previous_hash,
             )
         started = time.monotonic()
         try:
-            parsed = extractor(data, descriptor, scanned.rel_path)
+            parsed = extract_file(data, descriptor, scanned.rel_path)
         except Exception as exc:  # parser failures are data, not run failures
             logger.debug("parse failed for %s", scanned.rel_path, exc_info=True)
             return _Prepared(

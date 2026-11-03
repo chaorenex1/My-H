@@ -65,7 +65,7 @@ def test_references_are_inferred_edges_with_evidence(ci):
     assert edge["evidence_ids"]
 
 
-def test_reindex_is_idempotent_and_skips_unchanged_parses(ci):
+def test_reindex_is_idempotent_and_skips_unchanged_parses(ci, monkeypatch):
     ci.index()
     first = ci.status()
     before_ids = sorted(
@@ -74,17 +74,14 @@ def test_reindex_is_idempotent_and_skips_unchanged_parses(ci):
     )
 
     calls = {"count": 0}
-    original = indexer_module._EXTRACTORS["python"]
+    original = indexer_module.extract_file
 
     def counted(source, descriptor, path):
         calls["count"] += 1
         return original(source, descriptor, path)
 
-    indexer_module._EXTRACTORS["python"] = counted
-    try:
-        second = ci.index()
-    finally:
-        indexer_module._EXTRACTORS["python"] = original
+    monkeypatch.setattr(indexer_module, "extract_file", counted)
+    second = ci.index()
 
     after = ci.status()
     assert calls["count"] == 0  # unchanged files are not re-parsed
@@ -143,8 +140,8 @@ def test_parse_failure_keeps_previous_symbols_and_recovers(ci, sample_repo: Path
     def boom(source, descriptor, path):
         raise RuntimeError("synthetic parser failure")
 
-    original = indexer_module._EXTRACTORS["python"]
-    monkeypatch.setitem(indexer_module._EXTRACTORS, "python", boom)
+    original = indexer_module.extract_file
+    monkeypatch.setattr(indexer_module, "extract_file", boom)
     result = ci.index()
     assert result["files_failed"] == 1
     assert result["parse_failures"][0]["path"] == "pkg/mod.py"
@@ -160,7 +157,7 @@ def test_parse_failure_keeps_previous_symbols_and_recovers(ci, sample_repo: Path
     assert file_node.properties["parse_status"] == "failed"
     assert file_node.properties["index_status"] == "stale"
 
-    monkeypatch.setitem(indexer_module._EXTRACTORS, "python", original)
+    monkeypatch.setattr(indexer_module, "extract_file", original)
     recovered = ci.index()
     assert recovered["files_failed"] == 0
     assert recovered["files_indexed"] == 1

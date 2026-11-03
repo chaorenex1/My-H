@@ -47,6 +47,27 @@ languages:
       file_patterns: ["test_*.py", "*_test.py"]
       function_prefix: test_
       class_prefix: Test
+    extraction:
+      module_mode: stem
+      container_fields:
+        class_definition: name
+        function_definition: name
+      container_kinds:
+        class_definition: class
+        function_definition: function
+      method_parents:
+        function_definition: [class]
+      value_defs:
+        assignment: python_assignment
+      value_scope: not_function
+      call_name_fields:
+        attribute: attribute
+      resolve_same_file: true
+      import_mode: python
+      import_nodes: [import_statement, import_from_statement]
+      type_name_nodes: [identifier, type, attribute]
+      test_mode: python
+      export_mode: underscore
     capabilities:
       symbols: true
       references: true
@@ -102,6 +123,34 @@ languages:
       frameworks: [jest, vitest, "node:test"]
       file_patterns: ["*.test.ts", "*.spec.ts", "*.test.tsx", "*.spec.tsx"]
       function_prefix: test
+    extraction:
+      module_mode: stem
+      grammar_loader: typescript
+      container_fields:
+        class_declaration: name
+        abstract_class_declaration: name
+        interface_declaration: name
+        function_declaration: name
+        generator_function_declaration: name
+        method_definition: name
+      container_kinds:
+        class_declaration: class
+        abstract_class_declaration: class
+        interface_declaration: interface
+        function_declaration: function
+        generator_function_declaration: function
+        method_definition: method
+      value_defs:
+        variable_declarator: ts_declarator
+      value_scope: not_function
+      call_name_fields:
+        member_expression: property
+      resolve_same_file: true
+      import_mode: typescript
+      import_nodes: [import_statement, export_statement]
+      type_name_nodes: [type_identifier, identifier]
+      test_mode: typescript
+      export_mode: always
     capabilities:
       symbols: true
       references: true
@@ -152,6 +201,32 @@ languages:
       frameworks: [go-test]
       file_patterns: ["*_test.go"]
       function_prefix: Test
+    extraction:
+      module_mode: directory
+      container_fields:
+        type_spec: name
+      container_kinds:
+        type_spec: type
+      language_kind_from:
+        type_spec: type
+      self_container_fields:
+        method_declaration: receiver
+      value_defs:
+        const_spec: constant
+        var_spec: variable
+      value_scope: not_function
+      call_name_fields:
+        selector_expression: field
+        index_expression: __first__
+        parenthesized_expression: __first__
+      instantiation_nodes: [composite_literal]
+      resolve_same_file: false
+      import_mode: go
+      import_nodes: [import_spec]
+      type_name_nodes: [type_identifier, identifier, field_identifier]
+      test_mode: go
+      export_mode: uppercase
+      structural_interfaces: true
     capabilities:
       symbols: true
       references: true
@@ -204,6 +279,41 @@ languages:
       frameworks: [cargo-test]
       file_patterns: ["*.rs"]
       attribute: test
+    extraction:
+      module_mode: rust
+      container_fields:
+        mod_item: name
+        impl_item: type
+        trait_item: name
+        struct_item: name
+        enum_item: name
+      container_kinds:
+        mod_item: module
+        impl_item: impl
+        trait_item: trait
+        struct_item: struct
+        enum_item: enum
+      method_parents:
+        function_item: [impl, trait]
+        function_signature_item: [trait]
+      value_defs:
+        const_item: constant
+        static_item: variable
+      value_scope: not_function
+      call_name_fields:
+        field_expression: field
+        scoped_identifier: name
+        generic_function: function
+      instantiation_nodes: [struct_expression]
+      resolve_same_file: false
+      import_mode: rust
+      import_nodes: [use_declaration]
+      type_name_nodes: [type_identifier, identifier]
+      test_mode: rust
+      export_mode: rust
+      skip_defs: [impl_item]
+      owner_relations:
+        field_declaration: container
     capabilities:
       symbols: true
       references: true
