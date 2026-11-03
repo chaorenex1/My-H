@@ -1,0 +1,215 @@
+# The packaged code-graph language registry (ADR-8 D6).
+#
+# One file, one list item per language. This file is authoritative and always
+# loads first; a profile copy at
+# <HERMES_HOME>/code-intelligence/tree-sitter/languages.yaml may only add new
+# languages (same-language entries are skipped, never merged).
+#
+# Query paths are relative to this file's directory; `parser` is optional and
+# ignored by the code graph (it is tree-sitter CLI metadata).
+schema_version: 1
+languages:
+  - language: python
+    aliases: [py]
+    extensions: [.py, .pyi]
+    filenames: []
+    grammar_package: tree-sitter-python
+    grammar_version: "0.25.0"
+    grammar_install: builtin
+    semantic_provider: pyright
+    tree_sitter_queries:
+      symbols: queries/python/symbols.scm
+      imports: queries/python/imports.scm
+      calls: queries/python/calls.scm
+      types: queries/python/types.scm
+      tests: queries/python/tests.scm
+    kind_map:
+      class_definition: class
+      function_definition: function
+      assignment: variable
+      module: module
+    container_rules:
+      class_definition: true
+      function_definition: true
+    visibility_rules:
+      exported_when_no_underscore: true
+    signature_rules:
+      source: header_before_body
+    module_naming:
+      strip_suffixes: [".pyi", ".py"]
+      init_names: ["__init__"]
+      separator: "."
+    import_resolution:
+      relative: true
+      package_marker: "__init__"
+    test_detection:
+      frameworks: [pytest, unittest]
+      file_patterns: ["test_*.py", "*_test.py"]
+      function_prefix: test_
+      class_prefix: Test
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "tree-sitter==0.26.0;adapter=1"
+
+  - language: typescript
+    aliases: [ts, tsx, typescriptreact]
+    extensions: [.ts, .tsx, .mts, .cts]
+    filenames: []
+    grammar_package: tree-sitter-typescript
+    grammar_version: "0.23.2"
+    grammar_install: builtin
+    semantic_provider: typescript
+    tree_sitter_queries:
+      symbols: queries/typescript/symbols.scm
+      imports: queries/typescript/imports.scm
+      calls: queries/typescript/calls.scm
+      types: queries/typescript/types.scm
+      tests: queries/typescript/tests.scm
+    kind_map:
+      class_declaration: class
+      abstract_class_declaration: class
+      interface_declaration: interface
+      type_alias_declaration: type_alias
+      enum_declaration: enum
+      function_declaration: function
+      method_definition: method
+      public_field_definition: property
+      property_signature: property
+      variable_declarator: variable
+    container_rules:
+      class_declaration: true
+      interface_declaration: true
+      function_declaration: true
+    visibility_rules:
+      exported_when_no_underscore: false
+      export_keyword: true
+    signature_rules:
+      source: header_before_body
+    module_naming:
+      strip_suffixes: [".tsx", ".mts", ".cts", ".ts"]
+      init_names: [index]
+      separator: "."
+    import_resolution:
+      relative: true
+      extensions: [.ts, .tsx, .mts, .cts]
+    test_detection:
+      frameworks: [jest, vitest, "node:test"]
+      file_patterns: ["*.test.ts", "*.spec.ts", "*.test.tsx", "*.spec.tsx"]
+      function_prefix: test
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "tree-sitter==0.26.0;adapter=1"
+
+  - language: go
+    aliases: [golang]
+    extensions: [.go]
+    filenames: []
+    grammar_package: tree-sitter-go
+    grammar_version: "0.25.0"
+    grammar_install: builtin
+    semantic_provider: gopls
+    tree_sitter_queries:
+      symbols: queries/go/symbols.scm
+      imports: queries/go/imports.scm
+      calls: queries/go/calls.scm
+      types: queries/go/types.scm
+      tests: queries/go/tests.scm
+    kind_map:
+      type_spec: type_alias
+      struct_type: struct
+      interface_type: interface
+      function_declaration: function
+      method_declaration: method
+      const_declaration: constant
+      var_declaration: variable
+    container_rules:
+      type_declaration: true
+      function_declaration: true
+    visibility_rules:
+      exported_when_uppercase: true
+    signature_rules:
+      source: header_before_body
+    module_naming:
+      strip_suffixes: [".go"]
+      init_names: []
+      separator: "/"
+    import_resolution:
+      relative: false
+      module_root: go.mod
+    test_detection:
+      frameworks: [go-test]
+      file_patterns: ["*_test.go"]
+      function_prefix: Test
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "tree-sitter==0.26.0;adapter=1"
+
+  - language: rust
+    aliases: [rs]
+    extensions: [.rs]
+    filenames: []
+    grammar_package: tree-sitter-rust
+    grammar_version: "0.24.2"
+    grammar_install: builtin
+    semantic_provider: rust-analyzer
+    tree_sitter_queries:
+      symbols: queries/rust/symbols.scm
+      imports: queries/rust/imports.scm
+      calls: queries/rust/calls.scm
+      types: queries/rust/types.scm
+      tests: queries/rust/tests.scm
+    kind_map:
+      struct_item: struct
+      enum_item: enum
+      trait_item: trait
+      impl_item: impl
+      function_item: function
+      mod_item: module
+      const_item: constant
+    container_rules:
+      impl_item: true
+      trait_item: true
+      mod_item: true
+    visibility_rules:
+      export_keyword: true
+      pub_keyword: true
+    signature_rules:
+      source: header_before_body
+    module_naming:
+      strip_suffixes: [".rs"]
+      init_names: [mod, lib]
+      separator: "::"
+    import_resolution:
+      relative: false
+      module_root: Cargo.toml
+    test_detection:
+      frameworks: [cargo-test]
+      file_patterns: ["*.rs"]
+      attribute: test
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "tree-sitter==0.26.0;adapter=1"

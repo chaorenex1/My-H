@@ -14,7 +14,7 @@ from pm.package import InstallError, Package, StatePackage
 _packages: dict[str, Package] = {}
 
 
-_BUILTIN_MODULES = ("pm.packages", "pm.security_packages")
+_BUILTIN_MODULES = ("pm.packages", "pm.security_packages", "pm.code_intelligence_packages")
 
 
 def _builtins_loaded() -> dict[str, Package]:

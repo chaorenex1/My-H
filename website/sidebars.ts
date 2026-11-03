@@ -91,6 +91,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/features/curator',
             'user-guide/features/memory',
             'user-guide/features/graph',
+            'user-guide/features/code-intelligence',
             'user-guide/features/memory-providers',
             'user-guide/features/honcho',
             'user-guide/features/context-files',
@@ -298,6 +299,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-bundled-software-development',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/bundled/software-development/software-development-code-intelligence',
                     'user-guide/skills/bundled/software-development/software-development-codebase-inspection',
                     'user-guide/skills/bundled/software-development/software-development-dogfood',
                     'user-guide/skills/bundled/software-development/software-development-github',

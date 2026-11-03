@@ -79,6 +79,12 @@ class Package:
     on_path: bool = True
     url: str = ""
     gaps: dict[str, str] = {}
+    # False for packages whose acquisition is not pinned bytes (a Python tool
+    # environment): the lock row keeps a version and no artifacts.
+    has_artifacts: bool = True
+    # False keeps the package out of a native payload's tool store: its
+    # download is too large (or it is host-built) to ride in every bundle.
+    bundle: bool = True
     # How the lockfile `version` field labels this package for `pm update`:
     #   "semver" — one shared version across targets (node 26.7.0, uv 0.12.3).
     #   "minor"  — the version label is major.minor; each target's exact
@@ -313,6 +319,63 @@ class StatePackage(Package):
 
     def apply(self, extras: list[str], *, explicit: bool = False) -> None:
         raise NotImplementedError
+
+    def activation_env(self) -> dict:
+        """PATH/exports this state contributes to an activated shell.
+
+        The venv's bin dir is composed by pm.environments from the selected
+        generation; a state package with its own tool dir overrides this."""
+        return {}
+
+
+class PythonToolPackage(StatePackage):
+    """A CLI distributed only as a Python distribution.
+
+    There is no store entry to pin: the artifact is a resolved dependency set,
+    which PM builds in an isolated environment through
+    :func:`pm.operations.ensure_python_tool` (the same machinery pip-installed
+    LSP servers use). The lock row pins the distribution version and records
+    no artifacts; the environment generation identity covers PM's Python pin
+    and the exact ``name==version`` requirement, so a lock bump rebuilds it.
+    """
+
+    has_artifacts = False
+    on_path = True
+    requirement: str = ""
+    executable: str = ""
+
+    def requirement_for(self, version: str) -> str:
+        return f"{self.requirement}=={version}"
+
+    def apply_tool(self, *, explicit: bool = False) -> Path:
+        from pm.lock import Lockfile
+        from pm.operations import ensure_python_tool
+        from pm.paths import lockfile_path
+
+        version = Lockfile(lockfile_path()).version(self.name)
+        if not version:
+            raise InstallError(self.name, "not in the lockfile",
+                               "add it with `hermes pm lock --bump`")
+        return ensure_python_tool(self.name, [self.requirement_for(version)],
+                                  self.executable, explicit=explicit)
+
+    def selected_tool(self) -> Optional[Path]:
+        from pm.operations import python_tool
+
+        return python_tool(self.name, self.executable)
+
+    def tool_is_current(self) -> bool:
+        from pm.lock import Lockfile
+        from pm.operations import python_tool_is_current
+        from pm.paths import lockfile_path
+
+        version = Lockfile(lockfile_path()).version(self.name)
+        return bool(version) and python_tool_is_current(
+            self.name, [self.requirement_for(version)], self.executable)
+
+    def activation_env(self) -> dict:
+        tool = self.selected_tool()
+        return {"PATH": [str(tool.parent)]} if tool is not None else {}
 
 
 def machine_matches_binary(binary: Path, target: str) -> Optional[bool]:

@@ -1893,6 +1893,14 @@ def run_conversation(
     result = export_current_turn_boundary(agent, result, user_message)
     if isinstance(result, dict):
         result["user_intervened"] = bool(getattr(agent, "_turn_user_intervened", False))
+    try:
+        from hermes_codegraph.auto_update import schedule_codegraph_post_turn
+
+        schedule_codegraph_post_turn(
+            agent, result, turn_id=str(result.get("turn_id") or "")
+        )
+    except Exception:  # never let the reconciler change a turn result
+        logger.debug("post-turn code refresh scheduling failed", exc_info=True)
     from scheduler.agent_hooks import on_turn_committed
     on_turn_committed(agent, result)
     _close_durable_failed_turn(agent, result)

@@ -2320,6 +2320,37 @@ DEFAULT_CONFIG = {
         # language_id: "..." (didOpen languageId), description: "...". Manual install only.
         "servers": {},
     },
+    # Code intelligence (ADR-8): a persistent symbol/evidence graph in this profile's graph
+    # database. The [codegraph] and [graph] extras are both required (they are independent).
+    # `hermes code index` is the only way to build the index; model tools appear only when the
+    # extras are installed.
+    "code_intel": {
+        # Master switch for the `code_intel` model tool (P4), post-turn refresh (P6),
+        # LSP semantic enrichment and Semgrep diagnostics. The CLI stays available.
+        "enabled": True,
+        # Expose `code_graph_update` (P5); evidence/hash checks still apply.
+        "update": True,
+        # Refresh files changed by a turn after the final answer (P6). Hash-diff only.
+        "auto_update": True,
+        # Call agent/lsp during indexing (P4). Off by default: LSP may run project build scripts.
+        "semantic": False,
+        # Dangerous-pattern diagnostics. `mode: auto` uses Semgrep's registry rules
+        # (may fetch on first use); `custom_dir` reads only the profile's rules dir.
+        "semgrep": {
+            "enabled": False,
+            "mode": "auto",
+        },
+        # Extra language ids to enable; the four built-in languages (Python, TypeScript,
+        # Go, Rust) are always enabled once their grammar is installed.
+        "languages": [],
+        # Scan/index ceilings. Exceeding one fails with IndexLimitError, keeping indexed files.
+        "max_file_bytes": 1048576,
+        "max_files": 20000,
+        "max_total_bytes": 134217728,
+        "max_symbols": 1000000,
+        # Extra gitignore-style patterns to exclude (secrets and build dirs are always excluded).
+        "exclude": [],
+    },
     # X (Twitter) Search via xAI's x_search Responses tool. Registers when xAI creds exist
     # (SuperGrok OAuth or XAI_API_KEY) AND the toolset is enabled in `hermes tools`.
     "x_search": {

@@ -265,6 +265,23 @@ graph = [
   "ladybug==0.22.1; sys_platform != 'android'",
   "networkx==3.6.1; sys_platform != 'android'",
 ]
+# Code intelligence. One atomic extra: all four built-in grammars or none, so
+# `pm.available("codegraph")` matches "the parser can index built-in languages".
+# tree-sitter core has no Android wheel; musl aarch64 is a known gap that the
+# PEP 508 marker language cannot express (no libc variable), so it surfaces as
+# a missing anchor instead.
+codegraph = [
+  "tree-sitter==0.26.0; sys_platform != 'android'",
+  "tree-sitter-python==0.25.0; sys_platform != 'android'",
+  "tree-sitter-typescript==0.23.2; sys_platform != 'android'",
+  "tree-sitter-go==0.25.0; sys_platform != 'android'",
+  "tree-sitter-rust==0.24.2; sys_platform != 'android'",
+]
+# On-demand grammars: one extra per language, installed with
+# `hermes code language install <language>`. Versions are verified wheels.
+codegraph-java = [
+  "tree-sitter-java==0.23.5; sys_platform != 'android'",
+]
 # onnxruntime has no Intel macOS or Android wheel. Piper has no Windows ARM64 wheel.
 piper = [
   "piper-tts==1.8.0; (platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
@@ -652,6 +669,9 @@ piper = "(platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_
 google-meet = "sys_platform != 'android'"
 # LadybugDB has no Android/Termux wheel (and cannot be built there).
 graph = "sys_platform != 'android'"
+# tree-sitter core ships no Android wheel; the whole extra is atomic.
+codegraph = "sys_platform != 'android'"
+codegraph-java = "sys_platform != 'android'"
 
 [tool.uv]
 # uv otherwise enables the dev group by default, including in payload builds.
@@ -742,6 +762,8 @@ include = [
   "pm.*",
   "hermes_graph",
   "hermes_graph.*",
+  "hermes_codegraph",
+  "hermes_codegraph.*",
   "tools",
   "tools.*",
 ]
@@ -752,6 +774,13 @@ hermes_cli = [
   "data/*.json",
   "local_runtime/*.json",
   "process_supervisor.sh",
+]
+# Language descriptors are data, not Python: one YAML registry plus the .scm
+# query files it references. Sealed wheels must ship both or every language
+# becomes unsupported.
+hermes_codegraph = [
+  "adapters/languages/languages.yaml",
+  "adapters/languages/queries/*/*.scm",
 ]
 # gateway/assets/ ships status_phrases.yaml and the Telegram BotFather
 # screenshot. Without this, sealed venvs (uv2nix) silently lose both —

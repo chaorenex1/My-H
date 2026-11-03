@@ -69,6 +69,7 @@ _CLIENT_CAPABILITIES: dict[str, Any] = {
         "hover": {"contentFormat": ["markdown", "plaintext"]},
         "definition": {"linkSupport": True},
         "references": {},
+        "implementation": {},
         "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
     },
     "general": {"positionEncodings": ["utf-16"]},
@@ -525,6 +526,33 @@ class LSPClient:
                 if e.code != ERROR_CONTENT_MODIFIED or attempt >= MAX_CONTENT_MODIFIED_RETRIES:
                     raise
                 await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+
+    async def request(self, method: str, params: Any, *, timeout: float) -> Any:
+        """Public bounded request entry used by :class:`LSPService` queries.
+
+        Raises :class:`LSPRequestError`/:class:`LSPProtocolError`; callers that
+        need "empty on failure" semantics translate them at the service edge.
+        """
+        return await self._send_request_with_retry(method, params, timeout=timeout)
+
+    async def request_at_position(
+        self,
+        method: str,
+        path: str,
+        line: int,
+        column: int,
+        *,
+        timeout: float,
+        extra: dict[str, Any] | None = None,
+    ) -> Any:
+        """Position-based request with **1-based** line/column (LSP is 0-based)."""
+        params: dict[str, Any] = {
+            "textDocument": {"uri": file_uri(os.path.abspath(path))},
+            "position": {"line": max(0, int(line) - 1), "character": max(0, int(column) - 1)},
+        }
+        if extra:
+            params.update(extra)
+        return await self.request(method, params, timeout=timeout)
 
     async def _send_notification(self, method: str, params: Any) -> None:
         self._require_open(method)

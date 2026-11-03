@@ -46,6 +46,7 @@ class Edge:
     type: str
     properties: dict[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
+    key: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +56,7 @@ class Edge:
             "type": self.type,
             "properties": self.properties,
             "created_at": _iso(self.created_at),
+            "key": self.key,
         }
 
 

@@ -96,6 +96,26 @@ def derived_id(node_type: str, key: str) -> str:
     return str(uuid.uuid5(ID_NAMESPACE, f"hermes_graph:v1:{node_type}:{key}"))
 
 
+def derived_edge_id(
+    edge_type: str,
+    source_id: str,
+    target_id: str,
+    key: str | None = None,
+) -> str:
+    """Stable identity for ``edges.upsert``: ``(type, source, target, key)``.
+
+    Deliberately separate from :func:`derived_id`: edges are not nodes and the
+    empty key is a legitimate "ungrouped" identity. Callers must validate an
+    explicit key before reaching here.
+    """
+    return str(
+        uuid.uuid5(
+            ID_NAMESPACE,
+            f"hermes_graph:v1:edge:{edge_type}:{source_id}:{target_id}:{key or ''}",
+        )
+    )
+
+
 def validate_scope(scope: str) -> str:
     if not isinstance(scope, str) or not _SCOPE_RE.match(scope):
         raise ValidationError(f"invalid scope {scope!r}; expected lower_snake_case")

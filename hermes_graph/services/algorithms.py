@@ -14,19 +14,26 @@ class AlgorithmService:
     def __init__(self, ctx: GraphContext):
         self.ctx = ctx
 
-    def degree(self, scope: str) -> dict[str, float]:
+    def degree(
+        self, scope: str, *, filters: dict[str, Any] | None = None
+    ) -> dict[str, float]:
         nx = self._nx()
-        graph = self._simple_directed(nx, self.ctx.index.nx_graph(scope))
+        graph = self._simple_directed(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
         values = nx.degree_centrality(graph)
         return {node: float(values[node]) for node in sorted(values)}
 
     def centrality(
-        self, method: str = "pagerank", *, scope: str, weight: str | None = None
+        self, method: str = "pagerank", *, scope: str, weight: str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> dict[str, float]:
         if weight is not None and not isinstance(weight, str):
             raise ValidationError("weight must be an edge property name")
         nx = self._nx()
-        graph = self._simple_directed(nx, self.ctx.index.nx_graph(scope))
+        graph = self._simple_directed(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
         if method == "pagerank":
             values = self._pagerank(nx, graph, weight)
         elif method == "betweenness":
@@ -37,11 +44,16 @@ class AlgorithmService:
             raise AlgorithmError(f"unsupported centrality method {method!r}")
         return {node: float(values[node]) for node in sorted(values)}
 
-    def community(self, scope: str, method: str = "louvain") -> dict[str, int]:
+    def community(
+        self, scope: str, method: str = "louvain",
+        *, filters: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
         if method != "louvain":
             raise AlgorithmError(f"unsupported community method {method!r}")
         nx = self._nx()
-        graph = self._simple_undirected(nx, self.ctx.index.nx_graph(scope))
+        graph = self._simple_undirected(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
         if not graph:
             return {}
         communities = list(nx.community.louvain_communities(graph, seed=0))
@@ -52,9 +64,13 @@ class AlgorithmService:
                 mapping[str(node)] = index
         return {node: mapping[node] for node in sorted(mapping)}
 
-    def connected_components(self, scope: str) -> list[list[str]]:
+    def connected_components(
+        self, scope: str, *, filters: dict[str, Any] | None = None
+    ) -> list[list[str]]:
         nx = self._nx()
-        graph = self._simple_directed(nx, self.ctx.index.nx_graph(scope))
+        graph = self._simple_directed(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
         if not graph:
             return []
         components = [sorted(str(node) for node in part)
@@ -62,14 +78,32 @@ class AlgorithmService:
         components.sort(key=lambda part: part[0] if part else "")
         return components
 
-    def topological_sort(self, scope: str) -> list[str]:
+    def topological_sort(
+        self, scope: str, *, filters: dict[str, Any] | None = None
+    ) -> list[str]:
         nx = self._nx()
-        graph = self._simple_directed(nx, self.ctx.index.nx_graph(scope))
+        graph = self._simple_directed(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
         if not graph:
             return []
         if not nx.is_directed_acyclic_graph(graph):
             raise AlgorithmError("graph contains a cycle; topological sort is undefined")
         return [str(node) for node in nx.topological_sort(graph)]
+
+    def cycles(
+        self, scope: str, *, filters: dict[str, Any] | None = None
+    ) -> list[list[str]]:
+        """Elementary cycles in the directed graph, each sorted and stably ordered."""
+        nx = self._nx()
+        graph = self._simple_directed(
+            nx, self.ctx.index.nx_graph(scope, filters=filters)
+        )
+        if not graph:
+            return []
+        found = [sorted(str(node) for node in cycle) for cycle in nx.simple_cycles(graph)]
+        found.sort(key=lambda cycle: (len(cycle), cycle))
+        return found
 
     # ── internals ────────────────────────────────────────────────────────
     @classmethod

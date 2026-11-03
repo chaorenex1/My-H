@@ -93,6 +93,7 @@ CONFIGURABLE_TOOLSETS = [
     ("discord",         "💬 Discord (read/participate)", "fetch messages, search members, create thread"),
     ("discord_admin",   "🛡️  Discord Server Admin",    "list channels/roles, pin, assign roles"),
     ("computer_use",     "🖱️  Computer Use (macOS/Windows/Linux)", "background desktop control via cua-driver"),
+    ("codegraph",        "🧭 Code Intelligence",        "code_intel, code_graph_update (requires [graph] + [codegraph])"),
 ]
 
 
@@ -430,7 +431,7 @@ def enabled_mcp_server_names(config: dict) -> set[str]:
 #: toolset on a checklist, an unchecking user's config is byte-identical to one saved before it existed and this
 #: rule would turn the opt-out back on (stuck checkbox). ``check_fn``-gated toolsets cost nothing here; never
 #: probe a remote service from this path — it runs on every CLI start, gateway session and cron tick.
-_RECENTLY_SHIPPED_TOOLSETS: frozenset = frozenset()
+_RECENTLY_SHIPPED_TOOLSETS: frozenset = frozenset({"codegraph"})
 
 
 def _enable_recently_shipped_toolsets(enabled_toolsets: set[str], config: dict, platform: str) -> None:

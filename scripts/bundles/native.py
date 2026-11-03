@@ -18,10 +18,17 @@ from pm.registry import get_package, walk
 from pm.store import current_target
 
 def _bundle_package_names() -> list[str]:
+    from pm.package import StatePackage
+
     names = [
         n
         for n in _lockfile().names()
-        if not get_package(n).internal or n == "uv"
+        if (not get_package(n).internal or n == "uv")
+        # The payload store holds realized entries: a state package (semgrep's
+        # Python tool environment) is built on the installing host, and a
+        # `bundle = False` tool is too large to ship in every artifact.
+        and get_package(n).bundle
+        and not isinstance(get_package(n), StatePackage)
     ]
     if "python" not in names:
         names.append("python")

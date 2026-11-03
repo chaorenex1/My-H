@@ -33,6 +33,31 @@ class _CacheEntry:
         self.graph: Any = None
 
 
+def _filter_key(
+    node_defs: tuple[NodeType, ...], filters: dict[str, Any] | None
+) -> tuple[tuple[str, Any], ...]:
+    """Validate a snapshot filter and turn it into a stable cache-key component.
+
+    Filters are equality matches on declared, typed fields only; a type without
+    the field is excluded rather than matched unfiltered.
+    """
+    if filters is None:
+        return ()
+    if not isinstance(filters, dict):
+        raise ValidationError("filters must be a dict")
+    declared = {name for definition in node_defs for name in definition.fields}
+    items: list[tuple[str, Any]] = []
+    for name, value in filters.items():
+        if not isinstance(name, str) or name not in declared:
+            raise ValidationError(
+                f"filter {name!r} is not a declared field of the selected node types"
+            )
+        if not isinstance(value, (str, int, float, bool)):
+            raise ValidationError(f"filter {name!r} must be a scalar value")
+        items.append((name, value))
+    return tuple(sorted(items))
+
+
 class IndexService:
     def __init__(self, ctx: GraphContext):
         self.ctx = ctx
@@ -62,30 +87,45 @@ class IndexService:
         node_types: list[str] | None = None,
         edge_types: list[str] | None = None,
         *,
+        filters: dict[str, Any] | None = None,
         use_cache: bool = True,
     ) -> GraphSnapshot:
         scope = validate_scope(scope)
         nodes = self._resolve_node_types(scope, node_types)
         edges = self._resolve_edge_types(scope, edge_types)
-        names = (tuple(t.name for t in nodes), tuple(t.name for t in edges))
+        filter_key = _filter_key(nodes, filters)
+        names = (
+            tuple(t.name for t in nodes),
+            tuple(t.name for t in edges),
+            filter_key,
+        )
         if use_cache:
             cached = self._get((scope, self.ctx.scope_version(scope), *names))
             if cached is not None:
                 return cached.snapshot
-        snapshot = self._build(scope, nodes, edges)
+        snapshot = self._build(scope, nodes, edges, filters=dict(filters or {}))
         self._put((scope, snapshot.version, *names), snapshot)
         return snapshot
 
-    def nx_graph(self, scope: str) -> Any:
+    def nx_graph(self, scope: str, *, filters: dict[str, Any] | None = None) -> Any:
         scope = validate_scope(scope)
         nodes = self._resolve_node_types(scope, None)
         edges = self._resolve_edge_types(scope, None)
-        names = (tuple(t.name for t in nodes), tuple(t.name for t in edges))
+        filter_key = _filter_key(nodes, filters)
+        names = (
+            tuple(t.name for t in nodes),
+            tuple(t.name for t in edges),
+            filter_key,
+        )
         key = (scope, self.ctx.scope_version(scope), *names)
         entry = self._get(key)
         if entry is not None and entry.graph is not None:
             return entry.graph
-        snapshot = entry.snapshot if entry is not None else self.snapshot(scope)
+        snapshot = (
+            entry.snapshot
+            if entry is not None
+            else self.snapshot(scope, filters=filters)
+        )
         graph = self._to_nx(snapshot)
         with self._lock:
             entry = self._cache.get((scope, snapshot.version, *names))
@@ -103,6 +143,8 @@ class IndexService:
         scope: str,
         node_defs: tuple[NodeType, ...],
         edge_defs: tuple[EdgeType, ...],
+        *,
+        filters: dict[str, Any] | None = None,
     ) -> GraphSnapshot:
         """Read a consistent snapshot inside one read-only Ladybug transaction."""
         self.ctx.last_used = time.monotonic()
@@ -112,7 +154,7 @@ class IndexService:
             store.execute(connection, "BEGIN TRANSACTION READ ONLY")
             try:
                 version = self._read_version(connection, scope)
-                node_rows = self._read_nodes(connection, node_defs)
+                node_rows = self._read_nodes(connection, node_defs, filters or {})
                 edges = self._read_edges(connection, edge_defs, node_rows)
                 self._check_bytes(node_rows, edges)
                 store.execute(connection, "COMMIT")
@@ -142,17 +184,31 @@ class IndexService:
         return int(rows[0]["version"]) if rows else 0
 
     def _read_nodes(
-        self, connection: Any, node_defs: tuple[NodeType, ...]
+        self,
+        connection: Any,
+        node_defs: tuple[NodeType, ...],
+        filters: dict[str, Any],
     ) -> dict[str, Node]:
         node_rows: dict[str, Node] = {}
         for definition in node_defs:
+            if any(name not in definition.fields for name in filters):
+                # A type without the filtered field cannot match; never widen
+                # the filter to "all rows of this type".
+                continue
+            where = " AND ".join(
+                f"n.{name}=${name}" for name in sorted(filters)
+            )
+            statement = (
+                f"MATCH (n:{definition.name}) WHERE n.deleted_at IS NULL"
+                + (f" AND {where}" if where else "")
+                + f" RETURN {node_select(definition)} ORDER BY n.id"
+            )
             remaining = self.ctx.limits.max_snapshot_nodes - len(node_rows)
             try:
                 rows = self.ctx.store.execute(
                     connection,
-                    f"MATCH (n:{definition.name}) WHERE n.deleted_at IS NULL "
-                    f"RETURN {node_select(definition)} ORDER BY n.id",
-                    {},
+                    statement,
+                    dict(filters),
                     max_rows=max(remaining, 0),
                 )
             except QueryLimitError as exc:

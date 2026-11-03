@@ -33,6 +33,8 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     "computer_use",
+    # Code graph: read-only queries + evidence-constrained updates (ADR-8).
+    "code_intel", "code_graph_update",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -96,6 +98,11 @@ TOOLSETS = {
         "screenshots, mouse, keyboard, scroll, drag. Does NOT steal the user's cursor "
         "or keyboard focus. Works with any tool-capable model.",
         ["computer_use"],
+    ),
+    "codegraph": _ts(
+        "Code graph queries and evidence-backed updates (symbols, calls, types, "
+        "dependencies, tests, changes, context)",
+        ["code_intel", "code_graph_update"],
     ),
     "terminal": _ts("Terminal/command execution and process management tools", ["terminal", "process_manage"]),
     "skills": _ts(

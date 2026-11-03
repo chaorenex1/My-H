@@ -9,8 +9,11 @@ from ..models import Edge, QueryResult
 from ..schema.definitions import EdgeType
 from ..serialization import (
     EDGE_RESERVED_FIELDS,
+    derived_edge_id,
     new_node_id,
+    parse_timestamp,
     utc_now,
+    validate_key,
     validate_node_id,
     validate_properties,
 )
@@ -102,6 +105,97 @@ class EdgeService:
                 type=definition.name,
                 properties=dict(props),
                 created_at=stamp,
+            )
+
+        return self._write(_do)
+
+    def upsert(
+        self,
+        source_id: str,
+        target_id: str,
+        type: str,
+        *,
+        key: str | None = None,
+        properties: dict[str, Any] | None = None,
+    ) -> Edge:
+        """Idempotent write of ``(type, source, target, key)``.
+
+        ``create()`` always appends a new record; this updates the row with the
+        derived identity instead. The relation table has no primary key, so
+        uniqueness is the derived id plus the MATCH-then-SET below.
+        """
+        definition = self._definition(type)
+        source_id = validate_node_id(source_id)
+        target_id = validate_node_id(target_id)
+        if key is not None:
+            key = validate_key(key)
+        props = validate_properties(properties)
+        validate_property_names(props, set(EDGE_RESERVED_FIELDS))
+        edge_id = derived_edge_id(definition.name, source_id, target_id, key)
+
+        def _do(connection: Any, tx: Transaction) -> Edge:
+            self._require_endpoint(tx, source_id, definition.source)
+            self._require_endpoint(tx, target_id, definition.target)
+            declared, props_json = split_properties(
+                definition.fields, props, max_bytes=self.ctx.limits.max_properties_bytes
+            )
+            existing = self._execute(
+                connection,
+                f"MATCH (a:{definition.source})-[r:{definition.name}]->"
+                f"(b:{definition.target}) WHERE r.id=$id "
+                "RETURN r.created_at AS created_at",
+                {"id": edge_id},
+            )
+            if existing:
+                params: dict[str, Any] = {"id": edge_id, "props": props_json}
+                assignments = ["r.props=$props"]
+                for name in definition.fields:
+                    params[name] = declared.get(name)
+                    assignments.append(f"r.{name}=${name}")
+                self._execute(
+                    connection,
+                    f"MATCH (a:{definition.source})-[r:{definition.name}]->"
+                    f"(b:{definition.target}) WHERE r.id=$id "
+                    f"SET {', '.join(assignments)}",
+                    params,
+                )
+                stamp = utc_now()
+                created = parse_timestamp(existing[0].get("created_at")) or stamp
+            else:
+                stamp = utc_now()
+                created = stamp
+                params = {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "id": edge_id,
+                    "created_at": stamp.isoformat(),
+                    "props": props_json,
+                }
+                fields = ["id:$id", "created_at:$created_at", "props:$props"]
+                for name in definition.fields:
+                    params[name] = declared.get(name)
+                    fields.append(f"{name}:${name}")
+                self._execute(
+                    connection,
+                    f"MATCH (a:{definition.source} {{id:$source_id}}), "
+                    f"(b:{definition.target} {{id:$target_id}}) "
+                    f"CREATE (a)-[r:{definition.name} {{{', '.join(fields)}}}]->(b)",
+                    params,
+                )
+            self._execute(
+                connection,
+                "MERGE (r:GraphEdgeRef {id:$id}) SET r.type=$type",
+                {"id": edge_id, "type": definition.name},
+            )
+            tx.mark(definition.scope)
+            return Edge(
+                id=edge_id,
+                source_id=source_id,
+                target_id=target_id,
+                type=definition.name,
+                properties=dict(props),
+                created_at=created,
+                key=key,
             )
 
         return self._write(_do)
