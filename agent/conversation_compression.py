@@ -16,16 +16,13 @@ import contextvars
 import copy
 import dataclasses
 import inspect
-import json
 import logging
 import math
 import os
-import tempfile
 import time
 import uuid
 import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from agent.auxiliary_client import AuxiliaryExplicitCancellation
@@ -33,6 +30,12 @@ from agent.context_compressor_summary import _accepts_keyword_argument
 from agent.context_engine import automatic_compaction_status_message, sanitize_memory_context
 from agent.conversation_compression_codex import _compress_context_via_codex_app_server
 from agent.conversation_compression_deadline import resolve_context_compression_timeouts
+from agent.conversation_compression_images import (
+    IMAGE_SHRINK_TARGET_BYTES,
+    shrink_data_url,
+    source_to_data_url,
+    write_data_url_to_source,
+)
 from agent.conversation_compression_scaffolding import _SYNTHETIC_USER_FLAGS, _message_text, is_user_role_scaffolding
 from agent.conversation_compression_telemetry import (
     _emit_aborted_attempt_telemetry, _emit_blocked_attempt_telemetry, _emit_bypassed_attempt_telemetry,
@@ -3675,6 +3678,10 @@ def _commit_compaction(
                 agent._last_flushed_db_idx = len(compressed)
                 agent._flushed_db_message_session_id = agent.session_id
             session_commit_succeeded = True
+            # ADR-5 D4: the durable carrier now has its _row_id/timestamp; one slot per commit.
+            from agent.compaction_display import record_committed_compaction
+
+            record_committed_compaction(agent, compressed, (attempt.seed or {}).get("trigger_source"))
         except Exception as e:
             # Rotation: atomic publication failed (including lease loss) — keep the parent live and discard the stale
             # compacted snapshot. In-place: archive_and_compact is atomic so old rows stay active, but marker-swept
@@ -3890,6 +3897,7 @@ def _begin_compression_attempt(
     # Transient-block signal (#97488): cleared with the same per-attempt rule; set by the breaker gates
     # below when a TRANSIENT guard (cooldown / structural backoff) no-ops this pass.
     agent._compression_blocked_transient = None
+    agent._last_compaction_display = None  # ADR-5 D4: an aborted attempt republishes nothing
     started_at = time.monotonic()
     attempt_id = uuid.uuid4().hex
     trigger = trigger or ("manual" if force else "auto")
@@ -4214,110 +4222,6 @@ def compress_context(
                 commit_fence.finish_commit()
 
 
-# 4 MB leaves headroom under Anthropic's 5 MB; shrinking loses quality but only
-# runs after a confirmed provider rejection, so the alternative is failure.
-_IMAGE_SHRINK_TARGET_BYTES = 4 * 1024 * 1024
-_IMAGE_SUFFIX_BY_MIME = {
-    "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/jpeg": ".jpg", "image/jpg": ".jpg",
-    "image/bmp": ".bmp",
-}
-
-
-def _data_url_mime(header: str, default: str = "image/jpeg") -> str:
-    """``image/*`` mime from a ``data:`` URL header, else ``default``."""
-    if header.startswith("data:"):
-        candidate = header[len("data:") :].split(";", 1)[0].strip()
-        if candidate.startswith("image/"):
-            return candidate
-    return default
-
-
-def _decode_pixels(data_url: str) -> Optional[tuple]:
-    """``(width, height)`` of a base64 data URL; None when Pillow is missing or the payload is corrupt."""
-    try:
-        import base64, io
-        _, _, data_d = data_url.partition(",")
-        if not data_d or not data_url.startswith("data:"):
-            return None
-        from PIL import Image
-        with Image.open(io.BytesIO(base64.b64decode(data_d))) as _img:
-            return _img.size
-    except Exception:
-        return None
-
-
-def _shrink_data_url(url: str, *, max_dimension: int, resize_fn: Any) -> tuple:
-    """Return ``(resized_url, unshrinkable)`` for a data URL.
-    ``resized_url`` is None when no rewrite applied. ``unshrinkable`` is True only when the image violated a
-    constraint and resizing failed to satisfy that same constraint, so the caller knows a retry is pointless.
-    The accept gate MUST use the axis that triggered the shrink: a pixel downscale can re-encode to MORE bytes
-    (PNG non-monotonic); a byte-only reject wedges."""
-    target_bytes = _IMAGE_SHRINK_TARGET_BYTES
-    if not isinstance(url, str) or not url.startswith("data:"):
-        return None, False
-    triggered_by = "bytes" if len(url) > target_bytes else None  # over byte budget
-    if triggered_by is None:
-        # Bytes fine; check pixels against the provider cap (tiny bytes, huge pixels).
-        dims = _decode_pixels(url)
-        if dims is None or max(dims) <= max_dimension:
-            return None, False
-        triggered_by = "dimension"
-    try:
-        header, _, data = url.partition(",")
-        mime = _data_url_mime(header)
-        import base64 as _b64
-        raw = _b64.b64decode(data)
-        tmp = tempfile.NamedTemporaryFile(
-            prefix="hermes_shrink_", suffix=_IMAGE_SUFFIX_BY_MIME.get(mime, ".jpg"), delete=False
-        )
-        try:
-            tmp.write(raw)
-            tmp.close()
-            resized = resize_fn(
-                Path(tmp.name), mime_type=mime, max_base64_bytes=target_bytes, max_dimension=max_dimension
-            )
-        finally:
-            with contextlib.suppress(Exception):
-                Path(tmp.name).unlink(missing_ok=True)
-        if not resized:
-            return None, True  # Pillow couldn't help
-        new_dims = _decode_pixels(resized)
-        if triggered_by == "bytes":
-            # Byte budget is binding — bytes must shrink; and the resizer may return an
-            # over-cap blob (long side freezes at the 64px short-side floor) → still 400.
-            ok = len(resized) < len(url) and (new_dims is None or max(new_dims) <= max_dimension)
-        elif new_dims is not None:
-            # Dimension cap is binding: accept a byte-larger re-encode if now within cap.
-            ok = max(new_dims) <= max_dimension
-        else:
-            # Can't verify dimensions: fall back to the bytes-must-shrink gate so we never
-            # accept an unverifiable byte-larger blob.
-            ok = len(resized) < len(url)
-        return (resized, False) if ok else (None, True)
-    except Exception as exc:
-        logger.warning("image-shrink recovery: re-encode failed — %s", exc)
-        return None, triggered_by is not None
-
-
-def _source_to_data_url(source: Any) -> Optional[str]:
-    """Anthropic ``{"type": "base64", ...}`` image source → data URL, else None."""
-    if not isinstance(source, dict) or source.get("type") != "base64":
-        return None
-    data = source.get("data")
-    if not isinstance(data, str) or not data:
-        return None
-    media_type = str(source.get("media_type") or "image/jpeg").strip()
-    return f"data:{media_type if media_type.startswith('image/') else 'image/jpeg'};base64,{data}"
-
-
-def _write_data_url_to_source(source: dict, data_url: str) -> dict:
-    """Return a NEW source dict carrying the re-encoded payload.
-    Copy-on-write: parts may be shared with the persistent history, so mutating in place would store the
-    degraded image; the caller replaces the part."""
-    header, _, data = data_url.partition(",")
-    return {**source, "type": "base64", "media_type": _data_url_mime(header), "data": data}
-
-
 def try_shrink_image_parts_in_messages(api_messages: list, *, max_dimension: int = 8000) -> bool:
     """Re-encode oversized native image parts to recover from image-too-large errors.
     Mutates ``api_messages`` in place. Returns True if any part was replaced, False if nothing to shrink or
@@ -4336,7 +4240,7 @@ def try_shrink_image_parts_in_messages(api_messages: list, *, max_dimension: int
     unshrinkable_oversized = 0
 
     def _shrink(url: Any) -> tuple:
-        return _shrink_data_url(url, max_dimension=max_dimension, resize_fn=_resize_image_for_vision)
+        return shrink_data_url(url, max_dimension=max_dimension, resize_fn=_resize_image_for_vision)
 
     for msg in api_messages:
         if not isinstance(msg, dict):
@@ -4354,9 +4258,9 @@ def try_shrink_image_parts_in_messages(api_messages: list, *, max_dimension: int
             replacement = None
             if ptype == "image":
                 source = part.get("source")
-                resized, unshrinkable = _shrink(_source_to_data_url(source) or "")
+                resized, unshrinkable = _shrink(source_to_data_url(source) or "")
                 if resized and isinstance(source, dict):
-                    replacement = {**part, "source": _write_data_url_to_source(source, resized)}
+                    replacement = {**part, "source": write_data_url_to_source(source, resized)}
             elif ptype in {"image_url", "input_image"}:
                 image_value = part.get("image_url")
                 # OpenAI chat.completions: {"image_url": {"url": "data:..."}}
@@ -4382,7 +4286,7 @@ def try_shrink_image_parts_in_messages(api_messages: list, *, max_dimension: int
                 unshrinkable_oversized += 1
         if new_content is not None:
             msg["content"] = new_content
-    target_mb = _IMAGE_SHRINK_TARGET_BYTES / (1024 * 1024)
+    target_mb = IMAGE_SHRINK_TARGET_BYTES / (1024 * 1024)
     if changed_count:
         logger.info("image-shrink recovery: re-encoded %d image part(s) to fit under %.0f MB", changed_count, target_mb)
     if unshrinkable_oversized:

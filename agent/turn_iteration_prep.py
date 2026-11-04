@@ -379,7 +379,20 @@ def begin_iteration(
             original_user_message = (
                 f"{original_user_message}\n\n" f"User correction during the turn: {_redirect_text}"
             )
+        # ADR-6 D11: a redirect wins over a TTSR rewind that crossed it.
+        _redirect_coordinator = getattr(agent, "ttsr_coordinator", None)
+        if _redirect_coordinator is not None:
+            _redirect_coordinator.drop_pending_rewind()
         agent._persist_session(messages, conversation_history)
+
+    # ADR-6 D12: a discarded response is replaced by one hidden reminder before the retry. A
+    # user stop that landed meanwhile wins and drops the rewind (D11).
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None and coordinator.has_pending_rewind():
+        if agent._interrupt_requested:
+            coordinator.drop_pending_rewind()
+        elif coordinator.deliver_rewind(agent, messages):
+            agent._persist_session(messages, conversation_history)
 
     # Reset per-turn checkpoint dedup so each iteration can take one snapshot.
     agent._checkpoint_mgr.new_turn()
@@ -504,6 +517,25 @@ def apply_retry_restarts(
         api_call_count -= 1
         agent.iteration_budget.refund()
         _retry.restart_with_redirected_messages = False
+        return _verdict("continue")
+
+    if _retry.restart_with_ttsr_messages:
+        restart_count += 1
+        coordinator = getattr(agent, "ttsr_coordinator", None)
+        if restart_count > max_retries:
+            # The rule keeps re-arming: deliver the pending reminder (so the already-published
+            # ``ttsr.triggered`` never lacks its injection) and end the turn (ADR-6 D11).
+            _turn_exit_reason = "ttsr_restart_limit_exceeded"
+            logger.warning(
+                "TTSR rewind restart limit (%s) exceeded; delivering the pending reminder and "
+                "ending the turn.", max_retries,
+            )
+            if coordinator is not None and coordinator.deliver_rewind(agent, messages):
+                agent._persist_session(messages, conversation_history)
+            return _verdict("break")
+        api_call_count -= 1
+        agent.iteration_budget.refund()
+        _retry.restart_with_ttsr_messages = False
         return _verdict("continue")
 
     if interrupted:

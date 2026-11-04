@@ -160,6 +160,17 @@ def perform_api_call(
         else:
             interrupted = True
         return _verdict("break")
+    # ADR-6 P3: a response that returned before the abort was observed is still discarded. The
+    # final scan also catches cross-line matches throttled between deltas and non-streaming.
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        coordinator.check_final_response(agent, response, streaming=_use_streaming)
+    if getattr(agent, "_ttsr_rewind_requested", False) and not getattr(
+            agent, "_interrupt_requested", False):
+        thinking_spinner = stop_thinking_spinner(agent, thinking_spinner)
+        agent._ttsr_rewind_requested = False
+        _retry.restart_with_ttsr_messages = True
+        return _verdict("break")
     return _verdict("fallthrough")
 
 
@@ -188,8 +199,25 @@ def handle_api_interrupt(
     # cancellation bit, let the outer loop rebuild. Never materialize incomplete
     # signed/encrypted reasoning items.
     if agent._has_pending_redirect() and agent.clear_interrupt(preserve_redirect=True):
+        # ADR-6 D11: the redirect wins; any rewind that crossed it is dropped.
+        agent._ttsr_rewind_requested = False
+        coordinator = getattr(agent, "ttsr_coordinator", None)
+        if coordinator is not None:
+            coordinator.drop_pending_rewind()
         _retry.restart_with_redirected_messages = True
         return ApiInterruptVerdict("break", thinking_spinner, interrupted, final_response)
+    # ADR-6 D11: a passive TTSR rewind is not a user stop — no partial row, no placeholder,
+    # no persist; the outer loop refunds the iteration and retries after the reminder.
+    if getattr(agent, "_ttsr_rewind_requested", False) and not getattr(
+            agent, "_interrupt_requested", False):
+        agent._ttsr_rewind_requested = False
+        _retry.restart_with_ttsr_messages = True
+        return ApiInterruptVerdict("break", thinking_spinner, interrupted, final_response)
+    # A user stop wins over a pending rewind (ADR-6 D11).
+    agent._ttsr_rewind_requested = False
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        coordinator.drop_pending_rewind()
     api_elapsed = time.time() - api_start_time
     agent._vprint(f"{agent.log_prefix}⚡ Interrupted during API call.", force=True)
     interrupted = True

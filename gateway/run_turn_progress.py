@@ -927,16 +927,15 @@ class GatewayTurnProgressMixin:
         })
 
     def combined_tool_start_callback(self, call_id, tool_name, args):
-        """Compose the voice ack + native task-card start consumers."""
+        """Compose the voice ack + native task-card start consumers.
+
+        TTSR tool matching moved to ``run_tool_round`` (ADR-6 D10): this callback runs after
+        persistence/execution and cannot prevent side effects.
+        """
         holder = getattr(self._ctx, "agent_holder", None)
         if local_viewer_turn(self):
             from gateway import local_viewer_events
             local_viewer_events.note_tool_start(self, call_id, tool_name, args)
-            coordinator = getattr(holder[0] if holder else None, "ttsr_coordinator", None)
-            if coordinator is not None:
-                matched = coordinator.match_tool_start(call_id, tool_name, args)
-                if matched:
-                    local_viewer_events.publish_ttsr_triggered(self, matched)
         start_payload = _tool_lifecycle_payload(call_id, tool_name, args)
         # ADR-2 D1: the provider response that requested this call carries its own usage.
         from agent.turn_usage import step_usage
@@ -1079,6 +1078,10 @@ class GatewayTurnProgressMixin:
         from gateway.run import _prepare_gateway_status_message, _redact_gateway_user_facing_secrets, _send_or_update_status_coro
         from gateway.warning_notifications import is_warning_status, render_notification
         ctx = self._ctx
+        # ADR-5 D4: a real commit's block is published before the two status-suppression gates
+        # below; platform noise rules may hide the status line but must not swallow the event.
+        if event_type == "compacted" and local_viewer_turn(self):
+            self._publish_compaction_summary()
         if ctx.mute_notification_reply or not self._status_live():
             return
         # Lifecycle diagnostics (including provider fallback notices) are UI affordances for a
@@ -1108,6 +1111,23 @@ class GatewayTurnProgressMixin:
                 fut.add_done_callback(self._track_future_cleanup_id)
         render_notification(present, platform=ctx.source.platform, user_config=ctx.user_config,
                             diagnostic=is_warning_status(event_type, message))
+
+    def _publish_compaction_summary(self) -> None:
+        """ADR-5 D4: publish the single record ``_commit_compaction`` left for this commit.
+
+        The slot is cleared on read and reset at every attempt start, so the abort path's
+        ``compacted`` terminal edge publishes nothing. Returns silently when the commit had no
+        Hermes carrier row (plugin/native compression).
+        """
+        holder = self._ctx.agent_holder
+        agent = holder[0] if holder else None
+        payload = getattr(agent, "_last_compaction_display", None) if agent is not None else None
+        if not isinstance(payload, dict):
+            return
+        agent._last_compaction_display = None
+        from gateway.local_viewer_events import publish_compaction_summary
+
+        publish_compaction_summary(self._publish_execution, payload)
 
 
 def local_viewer_turn(runner) -> bool:

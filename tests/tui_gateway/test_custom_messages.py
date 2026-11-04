@@ -96,6 +96,7 @@ def test_custom_fields_survive_the_durable_round_trip(tmp_path):
 @pytest.mark.parametrize("custom_type,attribution,expected", [
     ("advisor", "agent", "developer"),
     ("todo-reminder", "agent", "developer"),
+    ("ttsr-injection", "agent", "developer"),
     ("skill-prompt", "user", "user"),
     ("model-switch", "agent", None),
 ])
@@ -293,18 +294,23 @@ def test_transcript_capabilities_cover_the_d6_catalog():
         else:
             assert capability["status"] in {"ready", "partial"}, block_id
             assert capability["events"] or capability["fields"], block_id
-    # The producers landed by P1-P3 are ready; the ADR-3/5/9 blocks stay unsupported.
-    for block_id in ("adviser", "skill_invocation", "tool_execution", "notice", "ttsr_notification"):
+    # The producers landed by P1-P3 are ready; the ADR-3/5 blocks stay unsupported.
+    for block_id in ("adviser", "skill_invocation", "tool_execution", "notice", "ttsr_notification",
+                     "late_diagnostics"):
         assert blocks[block_id]["status"] == "ready", block_id
         assert blocks[block_id]["fields"], block_id
     assert blocks["tool_execution"]["events"] == ["tool.start", "tool.progress", "tool.complete"]
     assert blocks["notice"]["events"] == ["transcript.notice"]
-    assert blocks["compaction_summary"]["status"] == "partial"
-    for block_id in ("recap", "late_diagnostics", "background_tan"):
+    assert blocks["compaction_summary"]["status"] == "ready"
+    assert blocks["compaction_summary"]["fields"] == ["text", "details"]
+    for block_id in ("recap", "background_tan"):
         assert blocks[block_id]["supported"] is False, block_id
         assert blocks[block_id]["needs"], block_id
     assert blocks["ttsr_notification"]["supported"] is True
     assert blocks["ttsr_notification"]["events"] == ["ttsr.triggered"]
-    assert blocks["late_diagnostics"]["events"] == ["diagnostics.late"]
+    # ADR-9 P1: one durable custom row, announced live as transcript.custom.
+    assert blocks["late_diagnostics"]["supported"] is True
+    assert blocks["late_diagnostics"]["events"] == ["transcript.custom"]
+    assert blocks["late_diagnostics"]["fields"] == ["custom_type", "details", "row_id"]
     assert blocks["background_tan"]["events"] == [
         "tangent.dispatched", "tangent.complete", "message.start"]

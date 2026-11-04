@@ -23,6 +23,7 @@ from agent.memory_context import build_memory_context_block, sanitize_context
 from agent.memory_provider import is_trivial_prompt
 from agent.message_content import flatten_message_text
 from agent.lsp.deferred import forward_to_agent as forward_lsp_verdicts
+from agent.lsp.deferred import pop_for_agent as pop_lsp_verdicts
 from agent.plugin_live_notes import pop_plugin_notices
 from agent.skills_index_delta import stage_skills_index_note
 from agent.prompt_refresh import refresh_warm_prompt
@@ -976,8 +977,17 @@ def _merge_gateway_notes(
     """Must-deliver per-turn notes ride the user-message injection channel (one-shot) so the
     ephemeral system prompt stays byte-stable: the gateway's staged notes, plugin go-live notices no
     tool result carried, then the surface-switch correction. Multimodal (list) content can't take the
-    string sidecar — append a durable text part instead."""
-    forward_lsp_verdicts(agent)  # late LSP verdicts on last turn's edits ride the plugin-notice queue
+    string sidecar — append a durable text part instead. ADR-9: a custom-message session gets last
+    turn's late LSP verdicts as their own row after this turn's user message, never folded into it."""
+    from agent.lsp import delivery as lsp_delivery
+
+    if lsp_delivery.custom_messages_enabled():
+        late_notes = pop_lsp_verdicts(agent)
+        if late_notes:
+            index = current_turn_user_idx + 1 if 0 <= current_turn_user_idx < len(messages) else len(messages)
+            lsp_delivery.insert_row(agent, messages, late_notes, index)
+    else:
+        forward_lsp_verdicts(agent)  # legacy: verdicts ride the plugin-notice queue
     _turn_notes = "\n\n".join(
         part for part in (consume_gateway_turn_context_notes(agent), pop_plugin_notices(agent),
                           consume_surface_switch_note(agent),
@@ -1391,6 +1401,9 @@ def build_turn_context(
             )
 
     _persist_turn_start(agent, messages, conversation_history, pending_cli_message)
+    # ADR-9: a late-diagnostics row inserted above is durable now; announce it once (never before).
+    from agent.lsp import delivery as lsp_delivery
+    lsp_delivery.notify_ready(agent)
     # Turn clock: the row exists now, so a resumed session seeds step_seq/turn_seq exactly.
     from scheduler.agent_hooks import on_turn_start
 

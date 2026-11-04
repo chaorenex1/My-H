@@ -21,7 +21,8 @@
 **范围内**：面板需要的每一个读/写 RPC、实时事件、能力声明、profile/终端作用域、契约生成与测试。
 
 **非目标**：
-- omp 专属后端（OMFG、cleanse、ratchet、prewalk、auto-graph、in-process extensions）。
+- omp 专属后端（cleanse、ratchet、prewalk、in-process extensions；OMFG 走 skill、auto-graph 走客户端，
+  均非网关后端，见 ADR-12）。
 - 桌面/网页独有面板（Kanban 看板、Bot Mode、Bot Screen、多窗口、富媒体预览）。
 - 终端渲染能力（mermaid/SVG/内联图等）——那些是客户端 `pi-tui` 的事。
 
@@ -167,7 +168,7 @@ jobs/agents hub/MCP/SSH/STT/TTS/live/extensions hooks/工作树/树-分支-回�
 | Changelog | `runtime.describe` | — | A | E | runtime.describe does not carry a version yet (E); the changelog content is client-side |
 | Debug selector | `runtime.describe`、`session.info` | — | A | — |  |
 | BTW panel / history | `btw.history` | `prompt.btw` | A | — | 答案落 `<profile>/session/btw/<session>.jsonl` |
-| OMFG | — | — | — | — | no Hermes backend: the omp rule-forging workflow has no gateway equivalent (P6) |
+| OMFG | — | — | — | — | rule-forging skill on the rules/TTSR stack (ADR-12); no gateway backend, panel stays unsupported |
 | Plan review / save / TOC | `session.plan.read` | `session.plan.save`、`session.plan.approve` | A | — | 方法已直服；`session.plan.updated` 属 P4 |
 | Annotation overlay | — | — | — | — | no annotation backend; storage and protocol are undesigned (P6) |
 | Pause screen | `session.control.read` | `session.freeze`（新，ADR-1）、`delegation.pause` | A | — | `delegation.pause` 只挡新 spawn；在跑冻结由 `session.freeze` 承担（ADR-1，已落地）：停在回合顶、每次 API 请求前与工具批开始前的安全边界，Stop 立即解开 |
@@ -438,14 +439,14 @@ Todo 提醒的旧判断以 ADR-2 为准。
 | Background TAN | 现状：本机 `/tan` 随 §0.3 删除（`TanCommandController`/`sendCustomMessage` 不在 `omp-ui/src`）；网关的 `background.complete{task_id,text}` 是 `/bg` 的结果文本，语义不同。**决定见 ADR-3**：网关 `/tan` + 父 transcript 快照 clone + `tangent_dispatch`/`async_result` 行，本机实现不恢复；实现前本行保持 `部分` | `BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE` 渲染器仍在 `@oh-my-pi/pi-tui`，但当前无 producer；`background.complete` 未处理，且不能填进派发状态条 | 部分 |
 | Skill 调用 | `command.dispatch` 返回 `{type:"skill", name, message, display}`（`gateway/session_commands._skill_directive`、`tui_gateway/methods_tools._dispatch_skill`）；快照把 `/skill …` 扩展行投影成 `role:"custom"` + `custom_type:"skill-prompt"` + `details{name,path,args,prompt,lineCount}`（ADR-10 P5，wire 文本是调用式，正文在 `details.prompt`） | `#gatewayPrompt` 只提交 `type:"send"`，其余 type 直接返回 false —— `/skill-*` 这一次提交不产生回合；`rowToAgentMessage` 只读 `custom_type`/`details`；本机 `skill-command.ts` 走 `promptCustomMessage`，而 `AgentSession` 只有 `prompt()` 在挂网关时转 `#gatewayPrompt`（`#dispatchCustomPrompt` 仍跑本机 agent loop，会绕过 Hermes） | 待接 |
 | 自定义/hook 消息 | `agent.print`（压缩、子代理完成、错误、预算等 `_print_fn` 行）、`command.output`、`notification.show`；Hermes hooks 是服务端策略，没有 renderer 侧 widget 注册 | `addMessageToChat` 需要 `role:"custom"`/`"hookMessage"`；`rowToAgentMessage` 丢弃；`gateway-session.ts` 显式 `case "agent.print": return`。可展示的文本应先映射成通知行，不要伪造 custom entry | 无 producer |
-| 压缩摘要 | 快照把 compaction carrier 投影成 `display_content`，但 `display_kind="hidden"` 的独立 summary 在 `_history_to_messages` 被丢弃；合并进用户回合的 carrier 只保留真实尾部内容，退化成普通 user/assistant 行。ADR-10 P2 后：`session.resume` 传 `include_compaction:true` 时，独立 handoff 投影成 `role:"compaction_summary"`（无 counter 时客户端缺省 `tokensBefore=0` 并省略徽标；tokens/method/boundary 待 ADR-5 P1 盖章后从 `details.compaction` 读取），默认不传仍与今天逐字一致；实时只有 `status.update{kind:compacting…}` 与 `agent.print` 的压缩行 | `#compacting` 只影响输入排队；`CompactionSummaryMessageComponent` 读 `role:"compactionSummary"` entry。`status.update` 不能拼成摘要 | 部分 |
-| Recap | 无。`review.summary` 是后台 review（`agent/background_review.py`、`gateway/session_refine.py`），不是 omp 的 idle recap；`/recap` 是本地 CLI 计算（`hermes_cli/session_recap.py`），网关无事件 | `RecapNotice` 由本机 recap 引擎触发。不得用 `review.summary` 冒充 | 无 producer |
+| 压缩摘要 | ADR-5 P1：`ContextCompressor.compress()` 在承载行（standalone 或 merged）盖 `display_metadata.compaction`——`tokens_before`/`tokens_after` 为消息级 `estimate_messages_tokens_rough`、`token_method="estimate_rough"`、`method` 为 Hermes 摘要来源。`session.resume` 只在 `include_compaction:true` 时投影 `role:"compaction_summary"`（omp-ui 已传）：standalone 不再重复正文，merged 是“分隔条 + 真实尾部内容”；旧行无 stamp 时不出 `details`（不估算）。`compaction.summary` 事件在真实提交后发布：回合内由 `_status_callback_sync`（先于状态噪声抑制），手动 `session.mutate{compress}` 由 mutation 的 `finally` 发布；payload 与行的 `details.compaction` 同源，`boundary_row_id` 供客户端去重。默认不传参的 `display_messages` 逐字不变 | `rowToAgentMessage` 从 `details.compaction` 读 `tokensBefore/tokensAfter/method`；`#onCompactionSummary` 追加 `#messages` 并按 `boundary_row_id` 与快照合并；`CompactionSummaryMessageComponent` 画分隔条/disclosure；`status.update` 仍是 notice，不拼摘要 | 已接（local） |
+| Recap | ADR-5 P3：canonical `recap.generate{session_id}`（`gateway/session_recap.py`）在 owner 侧确认 idle（无排队/在跑 admission、无待答 prompt）、尾消息是生成型 assistant 且该尾未 recap 过，然后用会话当前模型的 cache-parity fork 跑一次不落库的 ephemeral side turn（`agent/recap.py`；prompt 逐句移植 omp `recap-user.md` + `side-channel-no-tools.md`，回复折叠重复行并截到 4 KiB），返回 `{text, generated_at, skipped?}`。没有 transcript 行、没有事件、不写 DB、不改上下文；`review.summary`（后台 review）与本地 `/recap`（`hermes_cli/session_recap.py`）仍是别的功能 | `RecapNotice` 由客户端自己的 idle 定时器（`omp-ui/src/modes/idle-recap.ts`：`agent_end` 武装、草稿/在跑/排队/压缩/切换抑制，回复后再复查）在拿到文本后经 `EventController.presentIdleRecap` 单行化/280 列截断直挂 `chatContainer`，不进 `#messages` | 已接（P3/P4） |
 | Todo 提醒 | ADR-10 P3：stop gate（`agent/todo_reminder.py`）在交互 surface 追加 durable reminder 行并发一次 `todo.reminder{todos,attempt,max_attempts,row_id}`；`todo.updated` 仍是任务快照（供 HUD） | `rowToAgentMessage`/`#onTodoReminder` 按 `custom_type:"todo-reminder"` + `details` 画 `TodoReminderComponent`，`row_id` 合并快照 | 已接 |
-| TTSR 通知 | ADR-6 P1：`gateway/local_viewer_events.publish_ttsr_triggered` 在工具执行前发 `ttsr.triggered{name,description,content}`；匹配到 `patch`/`write_file` 的规则正文作为隐藏 user reminder 在批次后注入 | `ttsr_triggered` 是本机事件；`#onTtsrTriggered` 挂 `TtsrNotificationComponent`，live tail 合并 | 已接（local） |
-| Late diagnostics | `tool.complete.result` 内的 `lsp_diagnostics`（`tools/file_operations.py` 的 WriteResult）随编辑/写入卡展示；没有 turn-end 诊断事件 | 独立块由本机 `LATE_DIAGNOSTICS_MESSAGE_TYPE` 触发。诊断已在工具卡内，不另造块 | 无 producer |
+| TTSR 通知 | ADR-6 P1/P2/P3：`gateway/local_viewer_events.publish_ttsr_triggered` 在工具执行前发 `ttsr.triggered{name,description,content}`；匹配 `patch`/`write_file` 的 regex 或 `astCondition`（ast-grep CLI，缺失时 AST-only 规则 unsupported）规则正文作为隐藏 user reminder 在批次后注入。P3 另在流式文本/思考与最终工具参数命中 `interruptMode` 时被动中止请求，发 live-only `message.rewind`，并在重试前注入 `ttsr-interrupt` reminder | `ttsr_triggered` 是本机事件；`#onTtsrTriggered` 挂 `TtsrNotificationComponent`，live tail 合并；`#onMessageRewind` 丢弃 draft 与 live streaming block，下一次 delta 重建 | 已接（local） |
+| Late diagnostics | ADR-9 P1：写预算内未返回的 verdict 在 `agent/lsp/deferred.py` 排队，三个投递点（下一工具结果/turn end/下一用户 turn）为 `custom_messages` 会话追加 `role:"custom"` + `custom_type:"lsp-late-diagnostic"` + `details.files[{path,summary,errored,messages}]`，并发 `transcript.custom{message}`（仅 local viewer 且 `client:"omp-ui"`）；快照/resume 由同一行重建。内联 `lsp_diagnostics` 留在编辑/写入卡，不另造块。P2：Semgrep 与 LSP 同写预算、同一 `deferred` 队列、按 path 合并进同一行；内联结果走 `semgrep_diagnostics`（`lsp_diagnostics` 保持 LSP-only） | `#customBlock` 按 `custom_type` 走 `routeLateDiagnostics` + `LateDiagnosticsMessageComponent`；`#onTranscriptCustom` 按 `row_id` 合并 live 与快照 | 已接（local） |
 | Cache miss 标记 | ADR-10 P3：`message.complete.step_usage`/`tool.start.step_usage` 给出本步 `input/cache_read/cache_write/cost_usd`；`message.complete.usage` 保持 session 累计 | 客户端把 `step_usage` 写进该条 assistant `message.usage`，`detectCacheInvalidation` 读 `usage.cacheRead`；缺失不回落累计值 | 已接 |
 | Served model 标记 | ADR-10 P3：`message.complete.served_model`/`requested_model` 取自 turn result（`agent/served_model.py`）；`session.info.fallback_model` 仍是回退模型，不是 served | 客户端把 `served_model` 写入 `AssistantMessage.upstreamModel`，`ServedModelTracker.check` 触发；缺失保持 undefined | 已接 |
-| 被剥离的工具调用 | 无。Hermes 服务端投影直接不返回隐藏行/压缩祖先，不标“剥离” | `strippedToolCalls` 标记来自本机 context build（`session-context.ts`） | 无 producer |
+| 被剥离的工具调用 | 网关 display 投影（`tui_gateway/session_history._history_to_messages`）按批次 uid 配对；闭合批次有缺结果时插入 `role:"custom"` + `custom_type:"stripped-tool-calls"` + `details.count`，落在该批次最后一条 tool 行之后；`running` 会话不结算尾部批次 | `#customBlock` 挂 `StrippedToolCallsPlaceholder`；`rowToAgentMessage` 规整 `details.count` | 已接 |
 | Reaction | 文本派生（回复以 emoji 开头）与网关无关，照旧；显式 `message.reaction{row_id, reactions, role}`（`tools/react_to_message_tool.py`，local-viewer 经 `gateway/local_desktop_ui.py` 发布）与 `reaction{kind}`（白名单）；快照行不带 reactions | `pickReactionTarget`/`splitReaction` 已接文本派生；`message.reaction`/`reaction` 未处理，工具反应不画、resume 不还原 | 部分 |
 | 工具执行 | 实时 `tool.start{args, context, labels}`/`tool.progress`/`tool.complete{result, summary, inline_diff, todos}`；快照 tool 行有 `name`/`args`/`labels`/`content`/`is_error`（ADR-10 P2：`content` 由 `include_tool_content` 三态控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影） | `handleNotification` → `tool_execution_start/update/end`；`projectToolResult`；`rowToAgentMessage` 读 `content`/`args`/`labels`/`is_error`/`row_id`，resume 卡与 live 同形 | 部分 |
 | Bash 执行 | 本机 `#executeBashCommand` → `AgentSession.executeBash`（`BashController`），不经网关；结果只写本机 `SessionManager` | `BashExecutionComponent` 本机渲染；网关会话看不到该命令与输出，resume 后消失 | 部分 |
@@ -507,8 +508,9 @@ Todo 提醒的旧判断以 ADR-2 为准。
 **P4 校准（2026-11-03，ADR-10 D6/D8.4）**：`runtime.describe.transcript_blocks` 现在覆盖 plan
 §2.3.2 的区块目录：角色项仍由 `TRANSCRIPT_ROLES` 派生，新增 `adviser`（`message.adviser`）、
 `skill_invocation`（durable 行）、`tool_execution`（`tool.start`/`tool.progress`/`tool.complete`）、
-`notice`（`transcript.notice`）、`ttsr_notification`（`ttsr.triggered`，ADR-6 P1）五个已生产区块；
-`recap`/`late_diagnostics`/`background_tan` 按 ADR-5/9/3 报 `supported:false` + `needs`，网关不发对应行/事件；
+`notice`（`transcript.notice`）、`ttsr_notification`（`ttsr.triggered`，ADR-6 P1）五个已生产区块，
+外加 ADR-9 P1 的 `late_diagnostics`（`supported:true`，事件 `transcript.custom`）；
+`recap`/`background_tan` 按 ADR-5/3 报 `supported:false` + `needs`，网关不发对应行/事件。
 `compaction_summary` 仍为 `partial`（仅 `include_compaction:true` 时投影，`tokensBefore` 缺省 0）。
 omp-ui 删除手写的 `GATEWAY_PENDING_TRANSCRIPT_BLOCKS`；`connectGatewayOmpSession` 在 create/resume
 后非阻塞读一次 `runtime.describe`，缓存 `transcript_blocks` 并暴露 `transcriptBlock(id)`。
@@ -693,7 +695,7 @@ custom。客户端（omp-ui、Ink）只读 `custom_type`/`details`；Desktop rew
 | **E 扩展** | 字段/参数/事件不足 | `model.options`、`session.list`、`session.history`、`process.list`、`session.mutate{branch.summarize}` |
 | **G 能力协商** | `runtime.describe.panels` 广告 A + L | 所有面板 |
 | **C 客户端** | 无网关改动，`src` 内接线 | copy、hotkeys、changelog、context 渲染、theme 预览（omp 主题） |
-| **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | OMFG、cleanse、ratchet、prewalk、auto-graph、in-process extensions、annotation、collab、desktop-only 面板（§10）；pause freeze-all 已决定为 A（ADR-1），转入 P7 |
+| **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | cleanse、in-process extensions、annotation、collab、desktop-only 面板（§10）；pause freeze-all 已决定为 A（ADR-1），转入 P7；OMFG 走 skill、auto-graph 走客户端、ratchet/prewalk 不做，均已由 ADR-12 收口 |
 
 注：本表的 **N** 只覆盖 `docs/omp-ui-panels.json` 里面板实际调用的方法；附录 B 的 36 个 N 档
 命令是 omp 命令表的完整对齐契约（多数由客户端派生或尚无 producer），不参与面板覆盖门。
@@ -980,7 +982,7 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 | **多窗口 / pane / 浮动** | 桌面 pane shell；终端有 tmux/zellij | ① 用宿主多路复用器还是网关 ② fork 语义（新会话/同会话）③ 焦点/尺寸同步 | A. 客户端集成 tmux/zellij；B. 网关 pane 注册；C. 不做 | `/fork pane` 在支持的宿主可用；无宿主时给出提示 |
 | **富媒体预览** | 终端无通用图片/视频/PDF/HTML | ① 终端能力协商（kitty/sixel/iterm）② 远程媒体获取（`media.fetch`?）③ 降级文本 ④ 尺寸/缓存 | A. 内联图 + 文本降级；B. 仅文本；C. 新 media RPC | 支持的终端渲染图片；不支持的终端有可读降级 |
 | **Autoresearch / cleanse** | omp 专属 agent 后端 | ① 是否移植后端（研究循环、cleanse checkers）② 与 Hermes 工具/权限模型的冲突 ③ 成本/安全 | A. 移植为 Hermes 工具/技能；B. 明确不做；C. 只读报告 | 决策记录 + 若移植则有工具契约与预算控制 |
-| **OMFG / ratchet / prewalk / auto-graph** | omp 专属 agent 工作流 | ① 是否有 Hermes 等价（hooks/plugins/skills）② 规则锻造的存储/校验 ③ 预算/安全 | A. 映射到 hooks/skills；B. 不做；C. 新后端 | 决策记录；若映射则用现有 hooks/skills 契约 |
+| **OMFG / ratchet / prewalk / auto-graph** | **已决定（ADR-12，2026-11-04）**：OMFG → skill + 现有 rules/TTSR；auto-graph → 纯客户端接线；ratchet/prewalk → 不做，保持 `unsupported` | —（见 `docs/adr/ADR-12-omp-agent-workflows.md`） | **A / B / B / A**（顺序同左列） | 见 ADR-12 §验收；OMFG 由 skill 提供，非网关后端 |
 | **Tern 原生 Surface / Warp 桥** | 终端宿主协议，非网关 | ① 宿主检测 ② 降级策略 ③ 是否值得维护 | A. 客户端可选支持；B. 不做 | 非宿主终端无副作用 |
 
 设计轨道的产出物：每项一份 ADR（问题、约束、选项、决定、验收），落在 `docs/adr/` 或本文件追加；
@@ -991,10 +993,13 @@ Skill 调用、Reaction、Transcript 选择器、`include_tools`、Todo 提醒�
 ADR-4（Eval 执行）见 `docs/adr/ADR-4-eval-execution.md`，取代 §2.3.2.1 第 452 行把 Eval 判为“网关没有共享
 kernel”的判断；ADR-5（Recap 与压缩摘要）见 `docs/adr/ADR-5-recap-and-compaction.md`，取代 §2.3.2.1 中
 「压缩摘要」「Recap」两行的 `无 producer` 判断（默认快照不变，新投影按 `include_compaction` 显式请求）；
+P1（盖章 / merged 投影 / `compaction.summary` 事件 / 客户端 opt-in）、P2（`collapseCompacted` 渲染期省略）、
+P3（`recap.generate` + 共用 ephemeral side turn）、P4（客户端 idle 定时器 + `RecapNotice`）均已落地；
 ADR-6（TTSR 通知）见 `docs/adr/ADR-6-ttsr-notification.md`，取代 §2.3.2.1 中「TTSR 通知」的
 `无 producer` 判断；ADR-10（Transcript 区块由网关生产）见
 `docs/adr/ADR-10-gateway-transcript-blocks.md`，收口 §2.3.2.1 的 custom 行、工具行、
-`session.history` 参数与 capability 清单（P1/P2/P3 已落地）。
+`session.history` 参数与 capability 清单（P1/P2/P3 已落地）；ADR-12（omp 专属 agent 工作流）见
+`docs/adr/ADR-12-omp-agent-workflows.md`，收口 §10 的 OMFG / ratchet / prewalk / auto-graph 行。
 
 ### 10.1 ADR-1：Pause freeze-all = 会话内冻结在跑执行（`session.freeze`）
 

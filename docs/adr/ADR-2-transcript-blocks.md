@@ -13,7 +13,14 @@
   `docs/adr/ADR-5-recap-and-compaction.md` 取代（`include_compaction` 为显式参数，默认 payload 不变）。
 - **D9** 的 **TTSR** 一项：由 `docs/adr/ADR-6-ttsr-notification.md` 取代。
 - **D9** 的 **Background TAN** 一项：由 `docs/adr/ADR-3-background-tan.md` 取代。
-- D9 其余项（独立 late-diagnostics、被剥离工具调用、collab prompt、reply write、自定义/hook 消息）不变。
+- D9 其余项（独立 late-diagnostics、collab prompt、reply write、自定义/hook 消息）不变。
+
+**校准（被剥离工具调用，2026-11-04）**：D9 的“被剥离工具调用”不再是“无 producer”。
+`tui_gateway/session_history._history_to_messages` 按 `_tool_call_uids` / `_tool_call_uid` 配对
+assistant 批次与 tool 行；闭合批次仍有未配对调用时，在该批次最后一条 tool 行之后插入
+`role:"custom"` + `custom_type:"stripped-tool-calls"` + `details.count`。`running` 会话不结算
+尾部未闭合批次（调用可能正在执行）。`gateway/panel_inventory.py` 的
+`stripped_tool_calls` 座位同步翻为 ready。
 
 **校准（2026-11-02，对照当前工作树）**：D1 改用独立的 `_last_step_usage`/`_last_step_cost_usd`
 （`_last_turn_usage` 的“最近一次 usage”语义被其它消费者依赖，不得为每步语义清空）；D3 的 callback
@@ -126,7 +133,7 @@ display 投影必须移除模型侧 handoff），`display_kind="hidden"` 的行�
 决定：保持现状——压缩只留 `agent.print` / `status.update` 通知行，不合成摘要块。理由：模型侧
 handoff 文本不应进用户 transcript，且 `display_messages` 同时服务 Desktop，新增行型是跨客户端行为变化。
 
-**已取代**：本决定由 `docs/adr/ADR-5-recap-and-compaction.md` D1–D5 取代（`include_compaction` 为显式
+**已取代**：本决定由 `docs/adr/ADR-5-recap-and-compaction.md` D1–D6 取代（`include_compaction` 为显式
 参数，默认 false，不传参客户端 payload 逐字不变）；此处仅保留历史判断。
 
 ### D5. Transcript 选择器 / rewind：新增客户端入口，不新增方法

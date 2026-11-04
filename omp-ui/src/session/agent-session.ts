@@ -300,6 +300,13 @@ export class AgentSession {
 					this.sessionManager.appendMessage(event.message);
 				}
 				break;
+			case "compaction_summary":
+				// ADR-5 D6: a committed boundary is a transcript entry. Without it in the replay
+				// ledger, a rebuild (settings toggle, theme change, cancel) drops the live divider
+				// and `display.collapseCompacted` finds no boundary to collapse to. Resume/switch
+				// re-seeds this ledger from the snapshot, so the row is never duplicated.
+				this.sessionManager.appendMessage(event.message);
+				break;
 			case "model_changed":
 				this.#applyGatewayModel();
 				break;

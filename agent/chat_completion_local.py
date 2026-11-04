@@ -36,6 +36,18 @@ def stale_giveup() -> int:
     return env_int("HERMES_STREAM_STALE_GIVEUP", 5)
 
 
+def _rejects_stream_options(exc: BaseException) -> bool:
+    """A 400/422 whose body names ``stream_options`` as an unknown/extra field: strict
+    OpenAI-compatible endpoints (Azure AI Foundry MaaS, Pydantic ``extra_forbidden``) reject
+    the usage extension outright (#9705). Distinct from "stream not supported", which flips
+    the whole session to non-streaming."""
+    if getattr(exc, "status_code", None) not in (400, 422):
+        return False
+    body = f"{getattr(exc, 'body', '') or ''} {exc}".lower()
+    return "stream_options" in body and any(
+        k in body for k in ("extra", "not supported", "unrecognized", "unexpected", "unknown"))
+
+
 def _local_server_answers(agent) -> bool:
     """True when the llama-server behind *agent* answers ``/health`` within a few seconds."""
     parts = urlsplit(str(getattr(agent, "base_url", "") or ""))

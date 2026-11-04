@@ -714,7 +714,7 @@
       "title": "OMFG",
       "status": "unsupported",
       "supported": false,
-      "note": "no Hermes backend: the omp rule-forging workflow has no gateway equivalent (P6)",
+      "note": "no gateway backend: rule forging is provided by the rule-forging skill on the rules/TTSR stack (ADR-12)",
       "methods": [],
       "events": []
     },

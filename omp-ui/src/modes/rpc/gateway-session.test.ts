@@ -393,6 +393,21 @@ describe("custom row projection", () => {
 		})
 	})
 
+	test("a stripped-tool-calls row keeps its count", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "custom",
+			text: "",
+			custom_type: "stripped-tool-calls",
+			display: true,
+			details: { count: 2 },
+			attribution: "agent",
+			timestamp: 1
+		} as never)
+		if (message?.role !== "custom") throw new Error("expected custom")
+		expect(message.customType).toBe("stripped-tool-calls")
+		expect(message.details).toEqual({ count: 2 })
+	})
+
 	test("display:false still projects; the renderer decides visibility", () => {
 		const message = GatewayOmpSession.rowToAgentMessage({
 			role: "custom",
@@ -536,8 +551,83 @@ describe("history and session params", () => {
 		expect(gatewayResumeParams("sid")).toEqual({
 			session_id: "sid",
 			display_projection: true,
-			include_tool_content: "full"
+			include_tool_content: "full",
+			include_compaction: true
 		})
+	})
+})
+
+describe("compaction summary", () => {
+	test("a resumed row reads the counters and method from details.compaction", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "compaction_summary",
+			text: "summary body",
+			row_id: 7,
+			timestamp: 11,
+			details: {
+				compaction: {
+					tokens_before: 256000,
+					tokens_after: 20000,
+					token_method: "estimate_rough",
+					method: "llm_summary",
+					boundary_row_id: 7
+				}
+			}
+		} as TranscriptMessage)
+		expect(message).toEqual({
+			role: "compactionSummary",
+			summary: "summary body",
+			tokensBefore: 256000,
+			tokensAfter: 20000,
+			method: "llm_summary",
+			timestamp: 11
+		})
+	})
+
+	test("a pre-stamp row has no badge", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "compaction_summary", text: "old summary", timestamp: 1
+		} as TranscriptMessage)
+		if (message?.role !== "compactionSummary") throw new Error("expected a compaction row")
+		expect(message.tokensBefore).toBe(0)
+		expect(message.tokensAfter).toBeUndefined()
+		expect(message.method).toBeUndefined()
+	})
+
+	test("the live event appends one entry and merges a repeated boundary", () => {
+		const { session, events } = harness()
+		const payload = {
+			text: "summary body",
+			tokens_before: 256000,
+			tokens_after: 20000,
+			token_method: "estimate_rough",
+			method: "llm_summary",
+			trigger: "pre_api",
+			timestamp: 12,
+			boundary_row_id: 9
+		}
+		session.handleNotification({ type: "compaction.summary", payload })
+		session.handleNotification({ type: "compaction.summary", payload })
+
+		const emitted = events.filter((event) => event.type === "compaction_summary")
+		expect(emitted).toHaveLength(1)
+		expect(session.messages.filter((message) => message.role === "compactionSummary")).toHaveLength(1)
+		const message = (emitted[0] as Extract<AgentSessionEvent, { type: "compaction_summary" }>).message
+		expect(message).toMatchObject({
+			role: "compactionSummary", summary: "summary body", tokensBefore: 256000, tokensAfter: 20000,
+			method: "llm_summary", timestamp: 12
+		})
+	})
+
+	test("an empty event is ignored; an unanchored one still renders once", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "compaction.summary", payload: { text: "", tokens_before: 1 } })
+		session.handleNotification({
+			type: "compaction.summary",
+			payload: { text: "no row", tokens_before: 1, boundary_row_id: null }
+		})
+		expect(events.filter((event) => event.type === "compaction_summary")).toHaveLength(1)
+		expect(session.messages.filter((message) => message.role === "compactionSummary")).toHaveLength(1)
 	})
 })
 
@@ -660,6 +750,54 @@ describe("gateway block events", () => {
 			attempt: 1,
 			maxAttempts: 3
 		})
+	})
+
+	test("transcript.custom merges the live row by row_id and projects custom details", () => {
+		const { session, events } = harness()
+		const payload = {
+			message: {
+				role: "custom",
+				text: "<system-notice>Diagnostics for the files you edited</system-notice>",
+				custom_type: "lsp-late-diagnostic",
+				display: true,
+				display_only: false,
+				attribution: "agent",
+				details: {
+					files: [{ path: "C:/w/a.py", summary: "1 error(s)", errored: true, messages: ["C:/w/a.py:1:1 [error] [ty] boom"] }]
+				},
+				row_id: 77,
+				timestamp: 2
+			}
+		}
+		session.handleNotification({ type: "transcript.custom", payload })
+		session.handleNotification({ type: "transcript.custom", payload })
+		const ends = events.filter((event) => event.type === "message_end")
+		expect(ends).toHaveLength(1)
+		const end = ends[0]!
+		if (end.message.role !== "custom") throw new Error("expected custom")
+		expect(end.message.customType).toBe("lsp-late-diagnostic")
+		expect(end.message.details).toMatchObject({
+			files: [{ path: "C:/w/a.py", summary: "1 error(s)", errored: true }]
+		})
+	})
+
+	test("a transcript.custom row already in the snapshot is not appended twice", () => {
+		const snapshotRow = {
+			role: "custom",
+			text: "diagnostics",
+			custom_type: "lsp-late-diagnostic",
+			display: true,
+			details: { files: [] },
+			row_id: 77,
+			timestamp: 1
+		}
+		const { session, events } = harness({ messages: [snapshotRow as never] })
+		session.handleNotification({
+			type: "transcript.custom",
+			payload: { message: { ...snapshotRow, text: "diagnostics again" } }
+		})
+		expect(events.filter((event) => event.type === "message_end")).toHaveLength(0)
+		expect(session.initialMessages()).toHaveLength(1)
 	})
 
 	test("step_usage feeds the assistant message, not the cumulative usage", () => {
@@ -802,6 +940,24 @@ describe("gateway block events", () => {
 		})
 		expect(session.messages).toEqual([])
 		expect(events).toEqual([])
+	})
+})
+
+describe("compaction state", () => {
+	test("status edges are projected once per transition for the idle recap timer", () => {
+		const { session, events } = harness()
+		session.handleNotification({ type: "status.update", payload: { kind: "compacting" } })
+		session.handleNotification({ type: "status.update", payload: { kind: "compacting" } })
+		session.handleNotification({ type: "status.update", payload: { kind: "compacted" } })
+		session.handleNotification({ type: "status.update", payload: { kind: "compressing" } })
+		session.handleNotification({ type: "status.update", payload: { kind: "ready" } })
+		expect(events).toEqual([
+			{ type: "compaction_state_changed", compacting: true },
+			{ type: "compaction_state_changed", compacting: false },
+			{ type: "compaction_state_changed", compacting: true },
+			{ type: "compaction_state_changed", compacting: false }
+		])
+		expect(session.compacting).toBe(false)
 	})
 })
 

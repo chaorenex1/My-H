@@ -85,6 +85,7 @@ import { resolveComposerHint } from "@oh-my-pi/pi-tui/prompt/composer-hints";
 import { hintUsage } from "../utils/usage-counter";
 import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
+import { IdleRecap } from "./idle-recap";
 import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import { clearMermaidCache } from "@oh-my-pi/pi-tui/theme/mermaid-cache";
 import { type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
@@ -92,9 +93,9 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import { onTerminalAppearanceChange, onThemeChange, setMarkdownMermaidRendering, setSymbolPreset, startMacOSAppearanceReprobeFallback, theme, warmHighlighter } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, InteractiveModeInitOptions, RenderSessionContextOptions, ResumeSessionOptions, SessionPickHandler, ShowStatusOptions, SelectOnlyModelSelectorOptions, SubmittedUserInput } from "./types";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
-import { materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
+import { compactedTranscriptStart, materializeImageChipLinks, UiHelpers } from "./utils/ui-helpers";
 
-import { askTimeoutMs, cfgAutocompleteMaxVisible, cfgComposerPredictions, cfgComposerShape, cfgComposerTokenRate, cfgDisplayAdvisorCollapsedLines, cfgDisplayCacheMissMarker, cfgDisplayCollapseCompacted, cfgDisplayHideToolActivity, cfgDisplayPinnedAgents, cfgDisplayShowTokenUsage, cfgDisplayShowTurnTime, cfgDisplaySubagentLivePreview, cfgGitEnabled, cfgRecapEnabled, cfgRecapIdleSeconds, cfgShowHardwareCursor, cfgSpellingAutocomplete, cfgSpellingAutocorrect, cfgSpellingTypoDetection, cfgStartupQuiet, cfgStatusLineCompactThinkingLevel, cfgStatusLineContextLine, cfgStatusLineLeftSegments, cfgStatusLinePreset, cfgStatusLineRightSegments, cfgStatusLineSegmentOptions, cfgStatusLineSeparator, cfgStatusLineSessionAccent, cfgStatusLineShowHookStatus, cfgStatusLineTransparent, cfgSymbolPreset, cfgTerminalProgramStatus, cfgTerminalShowImages, cfgTuiHyperlinks, cfgTuiImeSafeCursor, cfgTuiMaxInlineImages, cfgTuiAutoGraph, cfgTuiMouse, cfgTuiRenderMermaid, cfgTuiRenderSvg, cfgTuiResizeScrollback, cfgTuiCompleteScrollback, cfgTuiTextSizing, cfgTuiTight, cfgTuiTitleSpinner, cfgTuiTitleState, cfgTuiVimMode, cfgTuiVimModeDisplay } from "./settings";
+import { askTimeoutMs, cfgAutocompleteMaxVisible, cfgComposerPredictions, cfgComposerShape, cfgComposerTokenRate, cfgDisplayAdvisorCollapsedLines, cfgDisplayCacheMissMarker, cfgDisplayCollapseCompacted, cfgDisplayHideToolActivity, cfgDisplayPinnedAgents, cfgDisplayShowTokenUsage, cfgDisplayShowTurnTime, cfgDisplaySubagentLivePreview, cfgGitEnabled, cfgShowHardwareCursor, cfgSpellingAutocomplete, cfgSpellingAutocorrect, cfgSpellingTypoDetection, cfgStartupQuiet, cfgStatusLineCompactThinkingLevel, cfgStatusLineContextLine, cfgStatusLineLeftSegments, cfgStatusLinePreset, cfgStatusLineRightSegments, cfgStatusLineSegmentOptions, cfgStatusLineSeparator, cfgStatusLineSessionAccent, cfgStatusLineShowHookStatus, cfgStatusLineTransparent, cfgSymbolPreset, cfgTerminalProgramStatus, cfgTerminalShowImages, cfgTuiHyperlinks, cfgTuiImeSafeCursor, cfgTuiMaxInlineImages, cfgTuiAutoGraph, cfgTuiMouse, cfgTuiRenderMermaid, cfgTuiRenderSvg, cfgTuiResizeScrollback, cfgTuiCompleteScrollback, cfgTuiTextSizing, cfgTuiTight, cfgTuiTitleSpinner, cfgTuiTitleState, cfgTuiVimMode, cfgTuiVimModeDisplay } from "./settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgModelRoles } from "../config/model-settings";
@@ -539,6 +540,9 @@ export class InteractiveMode {
 		requestRender: () => this.ui.requestRender(),
 	};
 	readonly #eventController: EventController;
+	readonly #idleRecap: IdleRecap;
+	/** Set once `init` finished: the idle recap must not arm into a half-built UI. */
+	#idleRecapReady = false;
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #selectorController: SelectorController;
@@ -782,6 +786,12 @@ export class InteractiveMode {
 		this.#selectorController = new SelectorController(this);
 		this.#inputController = new InputController(this);
 		this.#uiHelpers = new UiHelpers(this);
+		// ADR-5 D7/D9: the client owns the idle timer and the draft/view suppression; the authority
+		// only generates. The recap mounts as a live notice, never as a transcript entry.
+		this.#idleRecap = new IdleRecap(session, this.settings, {
+			isBlocked: () => !this.#idleRecapReady || this.isShuttingDown || this.editor.getText().trim() !== "",
+			onRecap: text => this.#eventController.presentIdleRecap(text),
+		});
 		this.#subscribeToAgent();
 	}
 
@@ -890,6 +900,8 @@ export class InteractiveMode {
 		);
 		this.#applyUiSettingChanges(cfgLiveUiSettings.get(this.settings), cfgLiveUiSettings.get(this.settings));
 		this.#subscribeToAgent();
+		this.#idleRecapReady = true;
+		this.#idleRecap.refresh();
 	}
 	async getUserInput(): Promise<SubmittedUserInput> {
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
@@ -1512,8 +1524,18 @@ export class InteractiveMode {
 		// session entries for the whole session, so entries for compacted-away
 		// history would otherwise pin their components' rendered layout caches
 		// forever — exactly the memory a collapsed compaction used to release.
+		// The replay walks the same ledger slice `renderSessionContext` walks.
+		const replayLedger = this.sessionManager.getMessages();
 		const retained = new WeakMap<AgentMessage, Component>();
-		for (const message of context.messages) {
+		for (
+			let index = compactedTranscriptStart(
+				replayLedger,
+				cfgDisplayCollapseCompacted.get(this.settings),
+			);
+			index < replayLedger.length;
+			index += 1
+		) {
+			const message = replayLedger[index];
 			const component = this.transcriptMessageComponents.get(message);
 			if (component) retained.set(message, component);
 		}
@@ -2010,6 +2032,7 @@ export class InteractiveMode {
 		for (const unsubscribe of this.#eventBusUnsubscribers) unsubscribe();
 		this.#eventBusUnsubscribers = [];
 		this.#eventController.dispose();
+		this.#idleRecap.dispose();
 		this.statusLine.dispose();
 		if (this.#resizeHandler) {
 			process.stdout.removeListener("resize", this.#resizeHandler);
@@ -2025,6 +2048,7 @@ export class InteractiveMode {
 			this.#ownsStartedUi = false;
 		}
 		this.isInitialized = false;
+		this.#idleRecapReady = false;
 	}
 
 	async #quitHostOwned(code: number): Promise<void> {
@@ -2492,8 +2516,12 @@ export class InteractiveMode {
 
 	/** Resume a session from the gateway list: pair a connection on it and re-seed the transcript. */
 	async handleResumeSession(sessionId: string, _options?: ResumeSessionOptions): Promise<void> {
+		// ADR-5 D7: a recap armed for the session being left must never land on the new one.
+		this.#idleRecap.invalidate();
 		const switched = await this.session.switchGatewaySession(sessionId);
 		if (!switched) return;
+		// An `agent_end` from the old gateway can land while the new connection is being paired.
+		this.#idleRecap.invalidate();
 		this.resetTranscript();
 		this.sessionManager.reset(this.session.gateway?.initialMessages() ?? []);
 		await this.renderInitialMessages({ preserveExistingChat: true });
@@ -2544,6 +2572,11 @@ export class InteractiveMode {
 
 	waitForSubmissionDispatches(): Promise<void> {
 		return this.#inputController.waitForSubmissionDispatches();
+	}
+
+	/** ADR-5 D7: the composer's composing state changed; re-evaluate the idle recap. */
+	refreshIdleRecap(): void {
+		this.#idleRecap.refresh();
 	}
 
 	handleImagePaste(): Promise<boolean> {

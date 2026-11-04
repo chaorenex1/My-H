@@ -55,6 +55,49 @@ def test_refresh_file_makes_new_facts_visible(code_home, tmp_path):
         assert ci.status()["index_status"] == "patched"
 
 
+def test_refresh_file_semgrep_returns_the_current_findings(code_home, tmp_path, monkeypatch):
+    """ADR-9 D8: an explicit refresh with ``semgrep=true`` returns what the scan just observed on
+    the current bytes (previously the return value was dropped)."""
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    root = _repo(tmp_path)
+    finding = {
+        "path": "mod.py", "rule_id": "python.lang.security.eval", "severity": "error",
+        "message": "Unsafe use of eval.", "start_line": 1, "start_column": 1,
+        "end_line": 1, "end_column": 5,
+    }
+    monkeypatch.setattr(
+        "hermes_codegraph.analysis.semgrep_scan",
+        lambda *a, **k: {"status": "ok", "findings": [finding]},
+    )
+    limits = CodeGraphLimits(semgrep_enabled=True, semgrep_mode="auto")
+    with CodeIntelligence.open(root=root, limits=limits) as ci:
+        ci.index()
+        (root / "mod.py").write_text("eval('1')\n", encoding="utf-8")
+        result = ci.refresh_file("mod.py", semgrep=True)
+
+    assert result["semgrep"]["status"] == "ok"
+    assert result["semgrep"]["results"][0]["rule_id"] == "python.lang.security.eval"
+    assert result["semgrep"]["results"][0]["start_line"] == 1
+
+
+def test_refresh_file_semgrep_reports_disabled_without_a_scan(code_home, tmp_path, monkeypatch):
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    root = _repo(tmp_path)
+    calls = []
+    monkeypatch.setattr("hermes_codegraph.analysis.semgrep_scan",
+                        lambda *a, **k: calls.append(1) or {"status": "ok", "findings": []})
+    with CodeIntelligence.open(root=root, limits=CodeGraphLimits()) as ci:
+        ci.index()
+        result = ci.refresh_file("mod.py", semgrep=True)
+
+    assert result["semgrep"] == {"status": "disabled", "findings": 0}
+    assert calls == []  # the master switch is off: `refresh_file(semgrep=true)` does not scan
+
+
 def test_apply_evidence_rejects_bad_input_and_writes_nothing(code_home, tmp_path):
     from hermes_codegraph.exceptions import EvidenceRejectedError, GraphConflictError
 

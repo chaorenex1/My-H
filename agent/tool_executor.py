@@ -1149,9 +1149,10 @@ def _commit_tool_result(
     # string-safe fallback so a rejected image result never poisons history.
     _tool_content = agent._tool_result_content_for_active_model(function_name, persisted_result)
     tool_message = make_tool_result_message(function_name, _tool_content, tool_call_id, effect_disposition=effect_disposition)
-    # A plugin that went live during this turn, and late LSP verdicts on this session's earlier edits,
-    # are told on this new row (outside any untrusted-data wrapper).
-    lsp_deferred.forward_to_agent(agent)
+    # Plugin go-live rides this row; ADR-9 late verdicts get their own row after it (flush below).
+    custom_late_rows = lsp_deferred.custom_rows_enabled()
+    if not custom_late_rows:
+        lsp_deferred.forward_to_agent(agent)
     plugin_live_notes.attach_to_tool_message(agent, tool_message)
     # Prepare presentation data before the append. The emitting completion callback
     # stays below the durability fence; raw tool/model content remains unchanged.
@@ -1170,6 +1171,8 @@ def _commit_tool_result(
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
+    if custom_late_rows and (late_notes := lsp_deferred.pop_for_agent(agent)):
+        lsp_deferred.deliver_notes(agent, messages, late_notes)
 
     if not blocked:
         # ``tool.completed`` projects AFTER the canonical append + flush so resume can

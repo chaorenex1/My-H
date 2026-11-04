@@ -340,7 +340,10 @@ export class InputController {
 		editor.onDequeue = () => this.handleDequeue();
 
 		editor.onChange = text => {
+			const wasComposing = (this.#draftText ?? "").trim() !== "";
 			this.#draftText = text;
+			// ADR-5 D7: a draft suppresses the idle recap; clearing it re-arms the stretch.
+			if (wasComposing !== (text.trim() !== "")) this.ctx.refreshIdleRecap();
 		};
 
 		editor.clearCustomKeyHandlers();

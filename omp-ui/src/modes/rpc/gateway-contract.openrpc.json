@@ -13550,6 +13550,70 @@
         "title": "CommandsChangedPayload",
         "type": "object"
       },
+      "CompactionSummaryPayload": {
+        "additionalProperties": false,
+        "description": "ADR-5 D4: a committed compaction boundary, from the same carrier row ``session.resume``\nprojects as ``role:\"compaction_summary\"`` (``agent/compaction_display.py``). Counters are the\nmessage-level ``estimate_messages_tokens_rough`` values, never the committed-shape re-estimate.\n``trigger`` is why this attempt ran (``idle``/``pre_api``/``overflow``/``manual``/...);\n``boundary_row_id`` is the durable carrier row a snapshot uses to merge with this event.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "tokens_before": {
+            "title": "Tokens Before",
+            "type": "integer"
+          },
+          "tokens_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tokens After"
+          },
+          "token_method": {
+            "title": "Token Method",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "number"
+          },
+          "boundary_row_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Boundary Row Id"
+          }
+        },
+        "required": [
+          "text",
+          "tokens_before",
+          "token_method",
+          "method",
+          "trigger",
+          "timestamp"
+        ],
+        "title": "CompactionSummaryPayload",
+        "type": "object"
+      },
       "CompletePathParams": {
         "additionalProperties": false,
         "description": "``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` /\n``session_id`` pick the directory the listing resolves against.",
@@ -26843,6 +26907,45 @@
         "title": "MessageReactionPayload",
         "type": "object"
       },
+      "MessageRewindPayload": {
+        "additionalProperties": false,
+        "description": "``gateway.local_viewer_events.publish_message_rewind`` (ADR-6 D13).\n\nLive-only: the discarded assistant draft is not a transcript row, so a client removes its\nstreaming block and reopens on the next delta. ``segment`` is the retry's fresh counter.",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Id"
+          },
+          "segment": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Segment"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "MessageRewindPayload",
+        "type": "object"
+      },
       "MessageStartPayload": {
         "additionalProperties": false,
         "description": "``message.start``. Empty from the TUI gateway's emitters and for an ordinary admission;\n``gateway/session_authority._stamp_claim`` adds an automation admission's async-result card\n(``session_automation.admission_display``: a background-process completion) and its model\ntext, so a viewer that did not submit the turn paints the same header the submitter would.",
@@ -37016,6 +37119,70 @@
           "session_id"
         ],
         "title": "ReadRangeRequestParams",
+        "type": "object"
+      },
+      "RecapGenerateParams": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "RecapGenerateParams",
+        "type": "object"
+      },
+      "RecapGenerateResult": {
+        "additionalProperties": false,
+        "description": "ADR-5 D8: an empty ``text`` with ``skipped`` naming the guard; otherwise the recap line.",
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "number"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "enum": [
+                  "busy",
+                  "no_new_turn",
+                  "no_agent",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skipped"
+          }
+        },
+        "required": [
+          "text",
+          "generated_at"
+        ],
+        "title": "RecapGenerateResult",
         "type": "object"
       },
       "RecordRepoItem": {
@@ -51131,6 +51298,20 @@
         "title": "TranscriptBlockCapability",
         "type": "object"
       },
+      "TranscriptCustomPayload": {
+        "additionalProperties": false,
+        "description": "ADR-9 D4: one already-durable ``role:\"custom\"`` row, projected exactly as\n``session.resume``/``session.history`` would project it (``row_id`` is required for merging).",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/TranscriptMessage"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "TranscriptCustomPayload",
+        "type": "object"
+      },
       "TranscriptMessage": {
         "additionalProperties": true,
         "description": "One transcript row as the gateway PROJECTS it for renderers (``session_history._history_to_messages``):\n``text``, the durable ``row_id`` rewind targets, and for tool rows raw ``content``, ``tool_call_id``,\n``name``, ``context`` and ``args``. Custom blocks carry ``custom_type`` + ``details``; a synthetic\nuser/assistant row (auto-continue, failed turn, steer) carries ``synthetic_kind`` and never a\ncustom block. Assistant detail sidecars (``reasoning``, \u2026) ride as extra keys.",
@@ -55314,6 +55495,24 @@
       }
     },
     {
+      "name": "recap.generate",
+      "summary": "One idle recap over the session's live conversation, for the client's own idle timer: a cache-parity side turn that persists nothing, emits no event and never touches the transcript. `skipped` when the owner refuses (busy, no new turn, no resident agent, failure).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/RecapGenerateParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/RecapGenerateResult"
+        }
+      }
+    },
+    {
       "name": "rollback.session_diff",
       "summary": "The classic CLI's /diff session: everything changed since the session's earliest retained checkpoint, as data for its terminal renderer.",
       "params": [
@@ -56268,6 +56467,18 @@
       ]
     },
     {
+      "name": "compaction.summary",
+      "summary": "A real compaction commit: the summary body plus the attempt's token estimate and method.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/CompactionSummaryPayload"
+          }
+        }
+      ]
+    },
+    {
       "name": "connection.request",
       "summary": "A connection operation opened on this session; the desktop renders its card.",
       "params": [
@@ -56467,6 +56678,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/MessageReactionPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "message.rewind",
+      "summary": "The live assistant draft was discarded (TTSR stream rewind); drop it and reopen.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/MessageRewindPayload"
           }
         }
       ]
@@ -57127,6 +57350,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/ToolStartPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "transcript.custom",
+      "summary": "A durable custom transcript row injected live; omp-ui merges it by row_id and renders it with the same component a resume snapshot uses.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/TranscriptCustomPayload"
           }
         }
       ]

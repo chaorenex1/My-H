@@ -45,7 +45,8 @@ def _(rid, params: dict) -> dict:
                     history = db.get_messages_as_conversation(
                         row_session, include_ancestors=True, include_row_ids=True)
     messages = _history_to_messages(history, profile_home=session.get("profile_home"),
-                                    include_tool_content=include_tool_content)
+                                    include_tool_content=include_tool_content,
+                                    running=bool(session.get("running")))
     from tui_gateway.history_paging import history_page
     page, entries, next_cursor, outline = history_page(messages, after=after, limit=limit,
                                                        include_outline=include_outline)

@@ -6,7 +6,8 @@
 Decisions、Workers AI Clef、`max_questions` 分片、`judgglob` / `judggrep` 语义 find 工具与
 `$HERMES_HOME/judgment/eval/` 判定文件；**P3** TTSR `question` 规则（依赖 ADR-6 P1）；**P4** 图像
 判定与 `box`；**P5** 判定日志面板（dashboard `/judgment`）。P3 已落地：`question` 规则在 assistant
-消息完成后判定（`noul` + 0.7 阈值），复用 ADR-6 的 `ttsr.triggered` 与隐藏 reminder，客户端不画假通知。
+消息/工具轮次完成后判定（`noul` + 0.7 阈值），复用 ADR-6 的 `ttsr.triggered` 与隐藏 reminder，客户端
+不画假通知。
 P4 已落地：`JudgmentImage`/`BoxQuestion`/`BoxAnswer`、四类 wire 的图像编码、Jev 尺寸 fitting 与
 box 反映射、图像感知的缓存身份、`judgment.images` 默认开启、文本 vision 显式 opt-in、CLI `--image`。
 
@@ -193,8 +194,9 @@ Workers AI 或“判定 API”概念；provider profile（`providers/base.py:142
 先例，但没有 judgment cache。`hermes_state_wal.py:275` 明确要求新数据库不要用 WAL（当前捆绑 SQLite
 3.50.4 的 WAL-reset 风险），本 ADR 遵守。
 
-**TTSR 还没有运行时**：ADR-6 状态是“实现未开始”；P1 的规则匹配、隐藏 reminder、`ttsr.triggered`
-都没有落地。因此本 ADR 的 P3 必须排在 ADR-6 P1 之后，不能在本 ADR 里夹带 TTSR 运行时。
+**TTSR 还没有运行时（决策时，2026-11-03）**：当时 ADR-6 P1 尚未落地；P1 的规则匹配、隐藏 reminder、
+`ttsr.triggered` 都还没有。因此本 ADR 的 P3 必须排在 ADR-6 P1 之后，不能在本 ADR 里夹带 TTSR
+运行时。P1/P3 现已落地（见顶部状态），本条保留为当时的依赖理由。
 
 ### 3. 直接照搬会错的地方
 
@@ -663,7 +665,9 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 
 - 配置 `ttsr.judge`：`auto`（默认，仅当 `has_native_judge()` 为真）、`on`（允许文本候选）、`off`
   （不判定）。`question` 规则在 `auto` 且没有 native 时仍注册，但不发判定（与 omp 一致）。
-- 在 assistant 消息 `stopReason` 不是 `aborted`/`error` 后，对每个 output 发一次判定：所有候选规则的
+- 在 assistant 消息 `stopReason` 不是 `aborted`/`error` 后，对每个 output 发一次判定（output 包括
+  完成的 reply/reasoning 与工具调用的 `{path,digest}`；工具调用判定在工具结果落盘后执行，避免阻塞
+  工具执行）：所有候选规则的
   `question` 作为 `noul` 问题（id `q0..qN`），state 为 `{"output": subject, "content": content}`；
   `content` 截到 **56,000 字符**。按最密的代码/JSON 约 2 chars/token 估算，这是 ~28k tokens，给 Jev 的
   ~33k 上限留 ~5k 余量；Hermes 没有 Jev tokenizer，不假装精确。同一 output 的规则共享一次 state 计费。
@@ -757,10 +761,12 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 
 - 不实现 ADR-4 D11.5 的 eval 内核桥/prelude；该桥落地时调用本引擎，判定文件由本 ADR 写。
 - 不移植 auto-prewalk/auto-thinking、title drift/unexpected-stop、`omp stats`、git TUI staging、`/omfg`：
-  Hermes 没有对应功能或已有别的启发式，先有消费者再谈判定。
+  Hermes 没有对应功能或已有别的启发式，先有消费者再谈判定。**（`/omfg` 项已由 ADR-12 D1–D3
+  取代：改为 rule-forging skill + rules/TTSR，判定引擎与本条其它项不变，2026-11-04。）**
 - 不把 `goal_judge`、`monitor`、approval classifier 迁到 typed judgment：它们各自有提示词/JSON/超时
   语义，迁移会改变行为；需要时另立 ADR。
-- 不做 `question` 规则的流式中断/回滚：ADR-6 P3 的 stream rewind 另立 ADR。
+- 不做 `question` 规则的流式中断/回滚：判定只在消息完成后进行；ADR-6 P3 的 stream rewind 只覆盖
+  `condition`/`astCondition` 规则（ADR-6 D9–D14）。
 - 不做 transcript 行，也不新增通用实时事件；UI 只有 dashboard `/judgment` 面板、CLI，以及 ADR-4 D11.5
   batch 落地后的 omp-ui `judgment.batch_progress`（喂现有 HUD）。不新增客户端组件。
 - 不新增通用 `judge` 模型工具：模型只能调用 D14 的两个受限、只读工具。
@@ -1234,15 +1240,16 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 - **依赖 omp catalog 的 kind/max-questions 规则**：Hermes 没有 catalog kind；显式配置是唯一可靠的
   来源。端点上限（如 Workers AI 64）作为路由默认值内置。
 - **在本 ADR 实现 eval 内核桥/prelude，或移植 auto-prewalk/auto-thinking/git staging/omfg**：eval 桥
-  由 ADR-4 D11.5 拥有、落地时调用本引擎；其余没有 Hermes 消费者。
+  由 ADR-4 D11.5 拥有、落地时调用本引擎；其余没有 Hermes 消费者。**（omfg 的 `/omfg` 项已由
+  ADR-12 改为 skill 路线；本 ADR 仍不实现它。）**
 - **P1–P3 做图像/box**：图像/box 是 P4 的明确交付，不是“没有消费者就砍掉”；P1–P3 遇到带图请求
   直接报 `JudgmentValidationError`，避免半实现。
 - **缓存 WAL 或 usage 表**：WAL 与仓库 SQLite 约束冲突；usage 表与 session ledger 双计。
 - **用 `response_format`/JSON 代替关键词解析**：文本判定的目标是任意聊天模型（含小模型），关键词 +
   严格解析是 omp 已验证的路径；JSON mode 在部分 provider 上不可用，且无法保留“one-hot 文本”语义。
   结构化输出保留为后续显式替代，不是默认。
-- **在流式中判定/中断**：TTSR judged rule 只在完整 output 上判定；流式中断属于 ADR-6 P3 的 stream
-  rewind，不在本 ADR 夹带。
+- **在流式中判定/中断**：TTSR judged rule 只在完整 output 上判定；流式中断由 ADR-6 P3/D9–D14 拥有，
+  且只覆盖 `condition`/`astCondition` 规则，不在本 ADR 夹带。
 - **会话模型自动兜底**：主模型通常是昂贵对话模型，后台判定不得静默使用；需要时显式配置。
 - **自己实现 llama.cpp/模型下载/监督**：D13 复用 `hermes_cli/local_runtime`，只加 `LocalChatBackend`。
 - **在 `/judgment` 面板显示 state/问题/答案正文或密钥**：面板只显示计数、哈希、来源/模型、usage；

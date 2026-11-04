@@ -57,9 +57,7 @@ TRANSCRIPT_ROLES: tuple[TranscriptRoleSpec, ...] = (
     _spec(TranscriptRole.branch_summary, "seated", "text", "from_id",
           needs="branch boundaries (from_id) on the flat transcript rows",
           reason="the flat messages table has no branch edge"),
-    _spec(TranscriptRole.compaction_summary, "partial", "text", "tokens_before",
-          needs="a `tokensBefore` column on the summary row",
-          reason="summary text exists; tokens_before defaults to 0"),
+    _spec(TranscriptRole.compaction_summary, "produced", "text", "details"),
 )
 
 # The eleven renderer roles, in table order: the generated client union and the role seat subset.

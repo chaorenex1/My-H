@@ -170,6 +170,9 @@ function customRowToMessage(row: TranscriptMessage): CustomMessage | undefined {
 			maxAttempts: asNumber(source.max_attempts) ?? asNumber(source.maxAttempts) ?? 0
 		}
 	}
+	if (customType === "stripped-tool-calls" && details) {
+		shaped = { count: asNumber(details.count) ?? 0 }
+	}
 	return {
 		role: "custom",
 		customType,
@@ -243,12 +246,17 @@ function hookRow(row: TranscriptMessage, text: string, timestamp: number): Agent
 }
 
 function compactionRow(row: TranscriptMessage, text: string, timestamp: number): AgentMessage {
-	// ADR-10 P5: counters ride `details.compaction`; a pre-stamp row defaults to 0.
+	// ADR-5 D3: counters and method ride `details.compaction`; a pre-stamp row has neither, so the
+	// component draws no badge. `row["tokens_before"]` stays as old-payload compatibility only.
 	const stamp = asRecord(asRecord(row.details)?.compaction);
+	const tokensAfter = asNumber(stamp?.tokens_after);
+	const method = asString(stamp?.method);
 	return {
 		role: "compactionSummary",
 		summary: text,
 		tokensBefore: asNumber(stamp?.tokens_before) ?? asNumber(row["tokens_before"]) ?? 0,
+		...(tokensAfter !== undefined ? { tokensAfter } : {}),
+		...(method !== undefined ? { method } : {}),
 		timestamp
 	};
 }
@@ -1009,11 +1017,16 @@ export class GatewayOmpSession {
 		// Seat: contract-only until the gateway stop gate emits it (ADR-2 D11).
 		"todo.reminder": payload => this.#onTodoReminder(payload),
 		"transcript.notice": payload => this.#onTranscriptNotice(payload),
+		// ADR-9 D4: a durable custom row injected live; merged by row_id with the resume snapshot.
+		"transcript.custom": payload => this.#onTranscriptCustom(payload),
+		// ADR-5 D4: a committed compaction boundary; merged with the resume snapshot by row id.
+		"compaction.summary": payload => this.#onCompactionSummary(payload),
 		"session.reclaimed": payload => this.#onTextNotice(payload, "warning", "session"),
 		"session.resume_progress": payload => this.#onResumeProgress(payload),
 		"approval.cancelled": payload => this.#onApprovalCancelled(payload),
 		"notice": payload => this.#onNotice(payload),
 		"ttsr.triggered": payload => this.#onTtsrTriggered(payload),
+		"message.rewind": () => this.#onMessageRewind(),
 		"error": payload => this.#onErrorNotice(payload)
 	}
 
@@ -1039,7 +1052,7 @@ export class GatewayOmpSession {
 	}
 
 	#onTurnEnd(payload: Record<string, unknown>): void {
-		this.#compacting = false
+		this.#setCompacting(false)
 		const message = asRecord(payload.message)
 		this.#emit({
 			type: "turn_end",
@@ -1206,7 +1219,26 @@ export class GatewayOmpSession {
 
 	#onStatusUpdate(payload: Record<string, unknown>): void {
 		const kind = (asString(payload.kind) ?? "").toLowerCase()
-		if (kind.includes("compact")) this.#compacting = !kind.includes("done") && !kind.includes("end")
+		if (kind === "compressing") {
+			this.#setCompacting(true)
+			return
+		}
+		if (kind === "ready") {
+			// `session.compress` pins "compressing" and always releases with a generic "ready".
+			if (this.#compacting) this.#setCompacting(false)
+			return
+		}
+		if (!kind.includes("compact")) return
+		const done =
+			kind.includes("done") || kind.includes("end") || kind.includes("compacted") || kind.includes("compressed")
+		this.#setCompacting(!done)
+	}
+
+	/** ADR-5 D7: the idle recap drops its stretch on either edge of a compaction pass. */
+	#setCompacting(compacting: boolean): void {
+		if (this.#compacting === compacting) return
+		this.#compacting = compacting
+		this.#emit({ type: "compaction_state_changed", compacting })
 	}
 
 	#onNotice(payload: Record<string, unknown>): void {
@@ -1226,6 +1258,12 @@ export class GatewayOmpSession {
 			}))
 			.filter(rule => rule.name.length > 0)
 		if (rules.length > 0) this.#emit({ type: "ttsr_triggered", rules })
+	}
+
+	/** ADR-6 D13: the gateway discarded the live draft; the retry reopens it via `message.start`. */
+	#onMessageRewind(): void {
+		this.#draft = undefined
+		this.#emit({ type: "message_rewind" })
 	}
 
 	#onErrorNotice(payload: Record<string, unknown>): void {
@@ -1264,6 +1302,49 @@ export class GatewayOmpSession {
 		this.#messages.push(message)
 		this.#emit({ type: "message_start", message })
 		this.#emit({ type: "message_end", message })
+	}
+
+	/** ADR-9 D4: one live custom row, projected exactly like a resumed snapshot row. */
+	#onTranscriptCustom(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("late_diagnostics")) return
+		const row = asRecord(payload.message)
+		if (!row) return
+		const message = GatewayOmpSession.rowToAgentMessage(row as unknown as TranscriptMessage)
+		if (message?.role === "custom") this.#emitCustomMessage(message, asNumber(row.row_id))
+	}
+
+	/**
+	 * ADR-5 D4/D6: one committed compaction boundary. It is a real entry (omp's summary is a
+	 * transcript entry, so `/copy` and tree see it), projected through the same row mapper the
+	 * resume snapshot uses. `boundary_row_id` merges it with the snapshot copy, whichever arrives
+	 * first; `#rowMessages` is keyed by durable row id for exactly that.
+	 */
+	#onCompactionSummary(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("compaction_summary")) return
+		const text = asString(payload.text)
+		if (!text) return
+		const boundaryRowId = asNumber(payload.boundary_row_id)
+		if (boundaryRowId !== undefined && this.#rowMessages.has(boundaryRowId)) return
+		const row = {
+			role: "compaction_summary",
+			text,
+			timestamp: asNumber(payload.timestamp) ?? now(),
+			...(boundaryRowId !== undefined ? { row_id: boundaryRowId } : {}),
+			details: {
+				compaction: {
+					tokens_before: asNumber(payload.tokens_before) ?? 0,
+					tokens_after: asNumber(payload.tokens_after),
+					token_method: asString(payload.token_method) ?? "estimate_rough",
+					method: asString(payload.method) ?? "llm_summary",
+					boundary_row_id: boundaryRowId
+				}
+			}
+		} as TranscriptMessage
+		const message = GatewayOmpSession.rowToAgentMessage(row)
+		if (!message) return
+		if (boundaryRowId !== undefined) this.#rowMessages.set(boundaryRowId, message)
+		this.#messages.push(message)
+		this.#emit({ type: "compaction_summary", message })
 	}
 
 	#onAdviserMessage(payload: Record<string, unknown>): void {
@@ -1547,7 +1628,9 @@ export function gatewayResumeParams(sessionId: string): Record<string, unknown> 
 	return {
 		session_id: sessionId,
 		display_projection: true,
-		include_tool_content: "full"
+		include_tool_content: "full",
+		// ADR-5 D6: the divider is opt-in and this viewer renders it.
+		include_compaction: true
 	}
 }
 

@@ -16,7 +16,7 @@ ADR-3/5/6/9 的 `background_tan`/`recap`/`ttsr_notification`/`late_diagnostics` 
 `connectGatewayOmpSession` 非阻塞读取 `runtime.describe.transcript_blocks` 并暴露
 `transcriptBlock(id)`；非角色区块的 live 挂载点（`transcript.notice`/`message.adviser`/
 `todo.reminder`）只挂载显式 `supported:true` 的区块，角色行照常按 D10 渲染；
-`compaction_summary` 保持 `partial`）；**P5 已落地**（2026-11-03：wire 删除 `display_kind`/
+`compaction_summary` 保持 `partial`，ADR-5 P1 已升为 `produced`）；**P5 已落地**（2026-11-03：wire 删除 `display_kind`/
 `display_metadata`，`TranscriptMessage`/`HistoryEntry` 不再携带；自定义区块一律 `role:"custom"` +
 `custom_type`/`details`，旧 marker 行由网关投影时归一；合成行改用 `synthetic_kind`（`auto_continue`/
 `failed_turn`/`steer`）与 `live_steered`；compaction counters 移到 `details.compaction`；
@@ -107,6 +107,7 @@ legacy_role: str          # 回投影用；不进入模型上下文
 | `advisor` | `{"notes":[{"note":str,"severity":"nit"\|"concern"\|"blocker","advisor"?:str,"turn"?:int}],"severity"?:str,"label"?:str}` | false |
 | `skill-prompt` | `{"name":str,"path":str,"args"?:str,"prompt":str,"lineCount":int}` | false |
 | `todo-reminder` | `{"todos":[{"content":str,"status":"pending"\|"in_progress"\|"completed"\|"abandoned"\|"blocked"}],"attempt":int,"max_attempts":int}` | false |
+| `ttsr-injection` | `{"rules":[str],"matched"?:{<name>:<excerpt>}}`（ADR-6 P1 工具提醒只有 `rules`；P3 interrupt 另带 `matched` 摘录） | false |
 | `model-switch` / `personality-switch` / `process-complete` / `async-delegation-complete` / `internal-notification` | `{"level":"info"\|"warning"\|"error","source":str}` | true |
 | `auto-continue` / `failed-turn` | 不转 custom；保留 legacy user/assistant 行（auto-continue 是模型可见的续跑 note，failed-turn 是失败 notice） | — |
 
@@ -128,7 +129,7 @@ legacy_role: str          # 回投影用；不进入模型上下文
 - 客户端不再解析 `text` 反解 notes/name/todos；只读 `details`。缺 `details` 时只渲染 text-only
   通用块。
 - `display_only:true` 只用于纯展示标记（model-switch 等）；`display_only:false` 的
-  adviser/skill/todo 才走 D9 的 custom→developer/user 转换。`auto-continue`/`failed-turn`
+  adviser/skill/todo/ttsr-injection 才走 D9 的 custom→developer/user 转换。`auto-continue`/`failed-turn`
   不转 custom，保持原 user/assistant 行，避免丢掉模型可见的续跑/失败信息。
 - `details`/`display_only`/`legacy_role` 是 display-only/内部字段，不进入 provider 请求。
 
@@ -386,7 +387,7 @@ D1 的五个 `custom_type` + `details.level`。
 `custom_message`（该 entry 重建后的消息角色才是 `custom`）；自定义区块在 wire 上只有
 `role:"custom"` 一种表示。完整 transcript 角色全集见 D10；客户端直接使用该角色名。
 
-- **行形状**：D1 的字段；message-bearing 的 adviser/skill-prompt/todo-reminder 为
+- **行形状**：D1 的字段；message-bearing 的 adviser/skill-prompt/todo-reminder/ttsr-injection 为
   `display_only:false`，通知/操作行为 `display_only:true`。
 - **两个开关**：
   - **模型侧 session 标志 `custom_messages`**：create 时解析并持久化到 session state；决定
@@ -402,7 +403,7 @@ D1 的五个 `custom_type` + `details.level`。
   `role:"custom"` 行，以及仍为 `user`/`assistant` + message-bearing legacy
   `display_kind` 的旧行；**不能只匹配 role**。规则与 omp `convertToLlm` 一致：
   - `display_only:true` 的纯展示标记 → 丢弃（不进入模型上下文）；`auto-continue`/`failed-turn` 不走此转换；
-  - 默认 message-bearing（adviser/todo 等）→ `developer`；
+  - 默认 message-bearing（adviser/todo/ttsr-injection 等）→ `developer`；
   - `custom_type:"skill-prompt"`/`"collab-prompt"` 且 `attribution:"user"` → `user`；
   - 普通 custom 含 image 块 → 文本 `developer` + 图片 `user`；user 归因 skill prompt 不拆分；
   - `display:false` 仍进入模型上下文；`display` 只控制 UI。
@@ -417,6 +418,7 @@ D1 的五个 `custom_type` + `details.level`。
 | `advisor` | `agent` | false | `developer` |
 | `skill-prompt` | `user` | false | `user` |
 | `todo-reminder` | `agent` | false | `developer` |
+| `ttsr-injection` | `agent` | false | `developer` |
 | `model-switch`/`personality-switch`/`process-complete`/`async-delegation-complete`/`internal-notification` | `agent` | true | 不进入模型 |
 | `auto-continue` | `user` | — | 不转 custom；legacy user 行仍进入模型 |
 | `failed-turn` | `assistant` | — | 不转 custom；legacy assistant 行保留 |
@@ -495,7 +497,7 @@ block 座位，不是角色。生成器只
 | `python_execution` | seated | 无 `$` 模式 / REPL 单元格 |
 | `file_mention` | seated | `@file` 只并进 user 文本，无独立行 |
 | `branch_summary` | seated | 扁平 `messages` 表没有 `fromId`/分支边界 |
-| `compaction_summary` | partial | 摘要文本有；`tokensBefore` 缺省 `0`（counter 来自 ADR-5 的 `display_metadata.compaction`，未盖章时为 0）；仅 `include_compaction:true` 时投影（tokens/method/boundary 与 merged carrier 的第二条 entry 由 ADR-5 P1 补齐） |
+| `compaction_summary` | partial → **produced**（ADR-5 P1） | 摘要文本 + `display_metadata.compaction` 盖章；仅 `include_compaction:true` 时投影；merged carrier 追加第二条 entry，实时另有 `compaction.summary` |
 
 **座位规则**：
 
@@ -597,7 +599,7 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 | 模型 | `agent/turn_context.py::build_api_messages` | 按 D11 角色表转换 + `convert_custom_messages_for_api`；读 **session** 标志；custom→developer/user；未知角色丢弃 |
 | 字段 | `agent/message_metadata.py` | `custom_type`/`display`/`details`/`attribution` 加入 persistence-only |
 | 契约 | `tui_gateway/contracts/sessions.py::HistoryEntry/SessionHistoryParams/Result` | `custom_type`/`display`/`details`/`attribution`/`legacy_role`/`content`/`args`/`labels`/`tool_call_id`/`name`/`context`/`is_error`/`include_*`/`project_custom_messages`；`display_metadata` 仅 legacy，P5 删除 |
-| 契约 | `tui_gateway/contracts/canonical_sessions.py::CanonicalResumeParams` | `include_tool_content`（`none`/`text`/`full`，默认 `none`）；`include_compaction`（ADR-5 D2 的 resume-only 投影参数，默认 `false`）；`project_custom_messages` 与 `custom_messages` 的落点见 D9 |
+| 契约 | `tui_gateway/contracts/canonical_sessions.py::CanonicalResumeParams` | `include_tool_content`（`none`/`text`/`full`，默认 `none`）；`include_compaction`（ADR-5 D3 的 resume-only 投影参数，默认 `false`）；`project_custom_messages` 与 `custom_messages` 的落点见 D9 |
 | 契约 | `tui_gateway/contracts/events.py` | `transcript.notice`、`todo.reminder` |
 | 契约 | `tui_gateway/contracts/canonical.py::RuntimeDescribeResult` | `transcript_blocks` |
 | 投影 | `tui_gateway/session_history.py::_history_to_messages` | D1 补投影、D4 entries、D5 `is_error`/content；`project_custom_messages`/`include_tool_content` 默认 false/none |
@@ -674,8 +676,8 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 10. `rowToAgentMessage` 与 `addMessageToChat` 都以 `default: message satisfies never` 收尾；
     新增角色未补分支时 typecheck 失败；`seated` 角色适配器返回 `undefined`、渲染器分支不可达。
 11. `seated` 角色在 `transcript_blocks[role]` 报 `supported:false` 且带 `needs`，网关不发对应行/事件；
-    `compaction_summary` 为 `partial`，只在 `include_compaction:true` 时出现，`tokensBefore=0` 时正常
-    渲染且省略徽标；不传该参数的 payload 与今天逐字一致。
+    `compaction_summary` 由 ADR-5 P1 升为 `produced`（仅 `include_compaction:true` 时出现）；未盖章的
+    老行 `tokensBefore=0` 时正常渲染且省略徽标；不传该参数的 payload 与今天逐字一致。
 12. `bashExecution`/`pythonExecution`/`fileMention`/`hookMessage` 的渲染分支逐行对照
     `chat-transcript-builder.ts`，没有新布局、折叠或键位分支。
 13. 每个角色按 D11 表转换：`custom` 的 user 归因 skill/collab → `user`、其余 → `developer`、

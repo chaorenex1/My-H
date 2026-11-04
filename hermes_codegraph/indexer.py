@@ -261,7 +261,7 @@ class Indexer:
         }
 
     def _run_semgrep(
-        self, scan_result: ScanResult, snapshot_hash: str
+        self, scan_result: ScanResult, snapshot_hash: str, *, include_findings: bool = False
     ) -> dict[str, Any]:
         from .analysis import semgrep_scan
 
@@ -325,12 +325,17 @@ class Indexer:
                     "error": str(result.get("error") or result.get("reason") or "")[:2000],
                 },
             )
-        return {
+        payload = {
             "status": result.get("status"),
             "findings": len(findings),
             "mode": result.get("mode"),
             "install_hint": result.get("install_hint"),
         }
+        if include_findings:
+            # ``refresh_file`` hands the model the findings it just observed on the current bytes
+            # (ADR-9 D8); the indexed run keeps the compact count.
+            payload["results"] = findings
+        return payload
 
     def _enhance_semantic(self) -> dict[str, Any]:
         from .semantic import enhance

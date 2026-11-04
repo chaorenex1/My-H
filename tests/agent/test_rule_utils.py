@@ -138,10 +138,13 @@ def test_duplicate_frontmatter_names_are_ambiguous(rule_env):
 def test_check_reports_missing_description_and_bad_regex(rule_env):
     home, project = rule_env
     _write(home, "rules/blank.md", "---\ncondition: '(' \n---\n\n")
-    _write(home, "rules/good.md", "---\ndescription: ok\ncondition: 'Box::leak'\n---\nBody\n")
+    _write(home, "rules/good.md",
+           "---\ndescription: ok\ncondition: 'Box::leak'\ninterruptMode: never\n---\nBody\n")
 
     problems = rule_utils.check_rules(rule_utils.discover_rules(project_dir=project))
     issues = {(problem["rule_id"], problem["issue"].split(":")[0]) for problem in problems}
     assert ("blank", "missing description") in issues
     assert ("blank", "invalid condition regex") in issues
+    assert any(rule_id == "blank" and issue.startswith("missing interruptMode")
+               for rule_id, issue in issues)
     assert not any(rule_id == "good" for rule_id, _issue in issues)

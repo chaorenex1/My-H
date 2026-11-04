@@ -20,7 +20,8 @@ from typing import Literal
 from pydantic import Field
 
 from .base import JsonValue, Payload, WireEnum
-from .common import MessageReaction, PlanGauge, SessionLiveInfo, SubagentStatus, ToolLabel, ToolLabelKind, Usage
+from .common import (MessageReaction, PlanGauge, SessionLiveInfo, SubagentStatus, ToolLabel, ToolLabelKind,
+                     TranscriptMessage, Usage)
 from .config_free_tier_control import FreeTierChallengePayload, SessionControlSnapshot
 from .protocol import (
     MAX_FRAME_BYTES,
@@ -274,6 +275,18 @@ class TranscriptNoticePayload(Payload):
 
 event("transcript.notice", TranscriptNoticePayload,
       doc="A deduped one-shot transcript notice; omp-ui ignores agent.print/status.update for these lines.")
+
+
+class TranscriptCustomPayload(Payload):
+    """ADR-9 D4: one already-durable ``role:"custom"`` row, projected exactly as
+    ``session.resume``/``session.history`` would project it (``row_id`` is required for merging)."""
+
+    message: TranscriptMessage
+
+
+event("transcript.custom", TranscriptCustomPayload,
+      doc="A durable custom transcript row injected live; omp-ui merges it by row_id and renders it "
+          "with the same component a resume snapshot uses.")
 
 
 class TurnStatus(WireEnum):
@@ -535,6 +548,27 @@ class ReviewSummaryPayload(Payload):
 event("review.summary", ReviewSummaryPayload, doc="Background review of the last turn finished.")
 
 
+class CompactionSummaryPayload(Payload):
+    """ADR-5 D4: a committed compaction boundary, from the same carrier row ``session.resume``
+    projects as ``role:"compaction_summary"`` (``agent/compaction_display.py``). Counters are the
+    message-level ``estimate_messages_tokens_rough`` values, never the committed-shape re-estimate.
+    ``trigger`` is why this attempt ran (``idle``/``pre_api``/``overflow``/``manual``/...);
+    ``boundary_row_id`` is the durable carrier row a snapshot uses to merge with this event."""
+
+    text: str
+    tokens_before: int
+    tokens_after: int | None = None
+    token_method: str
+    method: str
+    trigger: str
+    timestamp: float
+    boundary_row_id: int | None = None
+
+
+event("compaction.summary", CompactionSummaryPayload,
+      doc="A real compaction commit: the summary body plus the attempt's token estimate and method.")
+
+
 class AgentPrintPayload(Payload):
     """A session-authority local-viewer turn: one line the agent printed through ``_print_fn``
     (subagent completion, compaction, errors, budget notices), which main's classic CLI rendered
@@ -569,6 +603,22 @@ class TtsrTriggeredPayload(Payload):
 
 event("ttsr.triggered", TtsrTriggeredPayload,
       doc="A TTSR rule matched this local viewer's turn; render the notification component.")
+
+
+class MessageRewindPayload(Payload):
+    """``gateway.local_viewer_events.publish_message_rewind`` (ADR-6 D13).
+
+    Live-only: the discarded assistant draft is not a transcript row, so a client removes its
+    streaming block and reopens on the next delta. ``segment`` is the retry's fresh counter.
+    """
+
+    reason: str
+    message_id: str | None = None
+    segment: int | None = None
+
+
+event("message.rewind", MessageRewindPayload,
+      doc="The live assistant draft was discarded (TTSR stream rewind); drop it and reopen.")
 
 
 # ── tools ─────────────────────────────────────────────────────────────────────────────────────

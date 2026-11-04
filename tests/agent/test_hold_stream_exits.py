@@ -116,7 +116,8 @@ def test_provider_error_after_a_capped_fragment_delivers_only_the_rewrite(held):
 def test_answer_sent_back_by_a_late_lsp_verdict_stays_out_of_history(held, monkeypatch):
     from agent.lsp import deferred
 
-    verdicts = [[("app.py", "app.py:3: error: name 'deploy' is not defined")]]
+    verdicts = [[("app.py", deferred.Note(text="app.py:3: error: name 'deploy' is not defined",
+                                          baseline_text=None))]]
     monkeypatch.setattr(deferred, "settle_for_agent", lambda agent, **_: verdicts.pop() if verdicts else [])
     result, shown, displayed, server, db = held([Text(ATTEMPT), Text(RAW)])
     assert result["final_response"] == REWRITE

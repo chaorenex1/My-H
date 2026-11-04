@@ -1593,16 +1593,23 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             return verify_error
 
         lint_result = self._check_lint_delta(path, pre_content=pre_content, post_content=content)
-        # LSP diagnostics are a separate channel, fired only when the syntax tier is
-        # clean (no point asking an LSP about a file that won't parse).
+        content_sha = hashlib.sha256(content_bytes).hexdigest()
+        # LSP + Semgrep diagnostics are separate channels, fired only when the syntax tier is
+        # clean (no point asking a scanner about a file that won't parse). Semgrep starts first so
+        # both share the one write budget (ADR-9 D8); it also carries this write's digest so a
+        # verdict about bytes another session replaced is dropped.
         lsp_diagnostics: Optional[str] = None
+        semgrep_diagnostics: Optional[str] = None
         if lint_result.success or lint_result.skipped:
+            semgrep_handle = self._begin_semgrep(path, content_sha)
             lsp_diagnostics = self._maybe_lsp_diagnostics(
                 path, pre_content=pre_content, post_content=content, started=started) or None
+            semgrep_diagnostics = self._finish_semgrep(semgrep_handle, started=started) or None
         return WriteResult(
             bytes_written=len(content_bytes), dirs_created=dirs_created, verified=content_verified,
-            _content_sha256=hashlib.sha256(content_bytes).hexdigest(),
-            lint=lint_result.to_dict() if lint_result else None, lsp_diagnostics=lsp_diagnostics)
+            _content_sha256=content_sha,
+            lint=lint_result.to_dict() if lint_result else None, lsp_diagnostics=lsp_diagnostics,
+            semgrep_diagnostics=semgrep_diagnostics)
 
     # --- PATCH (replace mode) -----------------------------------------------
 
@@ -1690,6 +1697,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             note="\n".join(n for n in (*correction_notes, boundary_note([strategy])) if n) or None,
             # From the internal write_file call, whose baseline was the pre-patch content.
             lsp_diagnostics=write_result.lsp_diagnostics,
+            semgrep_diagnostics=write_result.semgrep_diagnostics,
             _writes=[(path, hashlib.sha256(data).hexdigest(), write_result._content_sha256)])
 
     def patch_v4a(self, patch_content: str) -> PatchResult:

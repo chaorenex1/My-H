@@ -15,8 +15,10 @@ import { INTENT_FIELD } from "../../vendor/wire/src/index.ts";
 import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
+import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
 import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
+import { previewLine, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
@@ -148,6 +150,12 @@ export class EventController {
 			case "ttsr_triggered":
 				this.#handleTtsrTriggered(event);
 				return;
+			case "message_rewind":
+				this.#handleMessageRewind();
+				return;
+			case "compaction_summary":
+				this.#handleCompactionSummary(event.message);
+				return;
 			case "model_changed":
 			case "thinking_level_changed":
 				this.ctx.statusLine.invalidate();
@@ -235,6 +243,14 @@ export class EventController {
 
 	#handleTurnEnd(): void {
 		this.#resetReadGroup();
+		this.ctx.ui.requestRender();
+	}
+
+	/** ADR-5 D6: a committed compaction boundary is already in the session's message list; only
+	 *  its transcript block is missing. No streaming state, no turn accounting. */
+	#handleCompactionSummary(message: Extract<AgentSessionEvent, { type: "compaction_summary" }>["message"]): void {
+		this.#resetReadGroup();
+		this.ctx.addMessageToChat(message);
 		this.ctx.ui.requestRender();
 	}
 
@@ -349,6 +365,27 @@ export class EventController {
 		this.ctx.streamingComponent = undefined;
 		this.ctx.streamingMessage = undefined;
 		this.ctx.statusLine.invalidate();
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * ADR-5 D9: the idle recap is a live component, not a transcript entry. One line, truncated by
+	 * the same helper and length omp uses; the component owns the `※ recap:` prefix and styling.
+	 */
+	presentIdleRecap(reply: string): void {
+		const recap = previewLine(reply, TRUNCATE_LENGTHS.RECAP);
+		if (recap) this.ctx.present(new RecapNotice(recap));
+	}
+
+	/** ADR-6 D13: the discarded draft is not history; remove the live block, reopen on next delta. */
+	#handleMessageRewind(): void {
+		const streaming = this.ctx.streamingComponent;
+		if (streaming) {
+			this.ctx.chatContainer.removeChild(streaming);
+			streaming.markTranscriptBlockFinalized();
+		}
+		this.ctx.streamingComponent = undefined;
+		this.ctx.streamingMessage = undefined;
 		this.ctx.ui.requestRender();
 	}
 

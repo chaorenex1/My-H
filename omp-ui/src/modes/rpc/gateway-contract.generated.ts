@@ -5435,6 +5435,16 @@ export interface ContextUsage {
   context_window?: number | null
   percent?: number
 }
+export interface RecapGenerateParams {
+  session_id: string
+  profile?: string | null
+}
+/** ADR-5 D8: an empty ``text`` with ``skipped`` naming the guard; otherwise the recap line. */
+export interface RecapGenerateResult {
+  text: string
+  generated_at: number
+  skipped?: 'busy' | 'no_new_turn' | 'no_agent' | 'failed' | null
+}
 export interface RollbackSessionDiffParams {
   session_id: string
   profile?: string | null
@@ -6515,6 +6525,10 @@ export interface TranscriptNoticePayload {
   source: string
   row_id?: number | null
 }
+/** ADR-9 D4: one already-durable ``role:"custom"`` row, projected exactly as ``session.resume``/``session.history`` would project it (``row_id`` is required for merging). */
+export interface TranscriptCustomPayload {
+  message: TranscriptMessage
+}
 /** ``prompt_turn._complete_turn_payload`` / ``session_auto_continue._emit_terminal_turn_error`` / ``agent_callbacks._mirror_subagent_to_child`` (child watch mirror: ``text`` only) / ``compute_host_bridge`` (``text`` + ``status``). */
 export interface MessageCompletePayload {
   text?: string | unknown
@@ -6672,6 +6686,17 @@ export interface ReactionPayload {
 export interface ReviewSummaryPayload {
   text: string
 }
+/** ADR-5 D4: a committed compaction boundary, from the same carrier row ``session.resume`` projects as ``role:"compaction_summary"`` (``agent/compaction_display.py``). Counters are the message-level ``estimate_messages_tokens_rough`` values, never the committed-shape re-estimate. ``trigger`` is why this attempt ran (``idle``/``pre_api``/``overflow``/``manual``/...); ``boundary_row_id`` is the durable carrier row a snapshot uses to merge with this event. */
+export interface CompactionSummaryPayload {
+  text: string
+  tokens_before: number
+  tokens_after?: number | null
+  token_method: string
+  method: string
+  trigger: string
+  timestamp: number
+  boundary_row_id?: number | null
+}
 /** A session-authority local-viewer turn: one line the agent printed through ``_print_fn`` (subagent completion, compaction, errors, budget notices), which main's classic CLI rendered through ``_agent_status_print``. */
 export interface AgentPrintPayload {
   text: string
@@ -6685,6 +6710,12 @@ export interface TtsrRulePayload {
   name: string
   description?: string | null
   content?: string | null
+}
+/** ``gateway.local_viewer_events.publish_message_rewind`` (ADR-6 D13). Live-only: the discarded assistant draft is not a transcript row, so a client removes its streaming block and reopens on the next delta. ``segment`` is the retry's fresh counter. */
+export interface MessageRewindPayload {
+  reason: string
+  message_id?: string | null
+  segment?: number | null
 }
 /** ``tool_progress._on_tool_start`` (+ ``agent_callbacks._mirror_subagent_to_child`` rows with ``preview`` and empty ``args``). ``todos``/``revision`` are NOT set by the emitter; kept optional because tool.start rows may pass through connector redaction unchanged. */
 export interface ToolStartPayload {
@@ -7876,6 +7907,8 @@ export interface CanonicalRpcMethods {
   /** Hand a still-queued admission's text to the running turn's agent as a steer. The admission reads 'started' with that turn (pending snapshots mark it 'steering') and never runs on its own; it settles terminal 'steered' when the turn completes with its text, else 'interrupted' (its completion frame says 'cancelled', as an interrupted turn's does); a text the turn never consumed goes back to its queue place. Refusals: admission_started, session_idle, steer_unavailable (no agent to take it: the admission stays queued), unsupported_control, not_found. */
   'prompt.steer_queued': { params: CanonicalSteerQueuedParams; result: AdmissionStatus }
   'prompt.submit': { params: CanonicalSubmitParams; result: CanonicalSubmitResult }
+  /** One idle recap over the session's live conversation, for the client's own idle timer: a cache-parity side turn that persists nothing, emits no event and never touches the transcript. `skipped` when the owner refuses (busy, no new turn, no resident agent, failure). */
+  'recap.generate': { params: RecapGenerateParams; result: RecapGenerateResult }
   /** The classic CLI's /diff session: everything changed since the session's earliest retained checkpoint, as data for its terminal renderer. */
   'rollback.session_diff': { params: RollbackSessionDiffParams; result: RollbackSessionDiffResult }
   /** Owner identity and the canonical capabilities a client may rely on. */
@@ -7976,6 +8009,7 @@ export const CANONICAL_RPC_METHODS = [
   'prompt.resolve_unknown',
   'prompt.steer_queued',
   'prompt.submit',
+  'recap.generate',
   'rollback.session_diff',
   'runtime.describe',
   'session.automation',
@@ -8091,6 +8125,8 @@ export interface BackendGatewayEventMap {
   'command.output': CommandOutputPayload
   /** The available slash-command catalog may have changed; refetch it. */
   'commands.changed': CommandsChangedPayload
+  /** A real compaction commit: the summary body plus the attempt's token estimate and method. */
+  'compaction.summary': CompactionSummaryPayload
   /** A connection operation opened on this session; the desktop renders its card. */
   'connection.request': ConnectionRequestPayload
   /** One transition or the settlement of an open connection operation. */
@@ -8125,6 +8161,8 @@ export interface BackendGatewayEventMap {
   'message.interim': MessageInterimPayload
   /** The agent reacted to a message; paint it live. */
   'message.reaction': MessageReactionPayload
+  /** The live assistant draft was discarded (TTSR stream rewind); drop it and reopen. */
+  'message.rewind': MessageRewindPayload
   /** A turn began streaming; an automation turn carries its async-result card. */
   'message.start': MessageStartPayload
   /** The MoA aggregator started. */
@@ -8235,6 +8273,8 @@ export interface BackendGatewayEventMap {
   'tool.progress': ToolProgressPayload
   /** A tool call began (stable id + full args). */
   'tool.start': ToolStartPayload
+  /** A durable custom transcript row injected live; omp-ui merges it by row_id and renders it with the same component a resume snapshot uses. */
+  'transcript.custom': TranscriptCustomPayload
   /** A deduped one-shot transcript notice; omp-ui ignores agent.print/status.update for these lines. */
   'transcript.notice': TranscriptNoticePayload
   /** A TTSR rule matched this local viewer's turn; render the notification component. */
@@ -8266,6 +8306,7 @@ export const GATEWAY_EVENT_TYPES = [
   'btw.complete',
   'command.output',
   'commands.changed',
+  'compaction.summary',
   'connection.request',
   'connection.update',
   'cron.changed',
@@ -8283,6 +8324,7 @@ export const GATEWAY_EVENT_TYPES = [
   'message.delta',
   'message.interim',
   'message.reaction',
+  'message.rewind',
   'message.start',
   'moa.aggregating',
   'moa.phase',
@@ -8338,6 +8380,7 @@ export const GATEWAY_EVENT_TYPES = [
   'tool.output_risk',
   'tool.progress',
   'tool.start',
+  'transcript.custom',
   'transcript.notice',
   'ttsr.triggered',
   'turn.end',

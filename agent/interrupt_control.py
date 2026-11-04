@@ -26,6 +26,16 @@ USER_INTERRUPT_REASONS = frozenset({_REASON_HARD_STOP, _REASON_NEW_MESSAGE, _REA
 _REASON_GATEWAY_SHUTDOWN = "gateway shutdown"
 
 
+def stream_abort_requested(agent) -> bool:
+    """True when the in-flight request must stop: a user stop or a TTSR stream rewind.
+
+    TTSR aborts are passive (ADR-6 D11): they never set ``_interrupt_requested``, so provider
+    loops can use this one predicate without turning the turn into a user stop.
+    """
+    return bool(getattr(agent, "_interrupt_requested", False)
+                or getattr(agent, "_ttsr_rewind_requested", False))
+
+
 def interrupt_issuer(agent) -> Optional[str]:
     """Slug of the system producer behind the pending interrupt, or ``None`` for a human stop."""
     reason = getattr(agent, "_tool_interrupt_reason", None)
@@ -167,6 +177,9 @@ def _ic_signal_tool_workers(agent, active: bool, **kw) -> None:
 class InterruptControlMixin:
     """interrupt()/hard_interrupt()/clear_interrupt()/steer()/redirect() (see module docstring)."""
 
+    def _stream_abort_requested(self) -> bool:
+        return stream_abort_requested(self)
+
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
         tool_reason: Optional[str] = None, require_generation: Optional[int] = None,
@@ -296,6 +309,7 @@ class InterruptControlMixin:
                 return False
             self._interrupt_requested = False
             self._interrupt_message = self._tool_interrupt_reason = None
+            self._ttsr_rewind_requested = False
             getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
             if not preserve_redirect:
                 self._pending_redirect = None

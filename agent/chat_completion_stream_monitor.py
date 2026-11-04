@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from agent import chat_completion_wait_notice as wn
+from agent.interrupt_control import stream_abort_requested
 from agent.model_metadata import is_local_endpoint
 from agent.proxy_bypass import is_loopback_host
 from agent.sleep_clock import SleepWatch
@@ -296,7 +297,7 @@ class StreamingWaitMonitor:
                 self._mon.wait_notice.reset()
                 self._kill_stale_stream(_stale_elapsed)
             self._check_stream_lifetime()
-            if self.agent._interrupt_requested:
+            if stream_abort_requested(self.agent):
                 self._abort_for_interrupt(_stale_elapsed)
                 return
 

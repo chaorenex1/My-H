@@ -215,10 +215,7 @@ def _dispatch(ci: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
     if action == "coverage":
         return ci.get_coverage(symbol_id, limit=limit)
     if action == "diagnostics":
-        return ci.get_diagnostics(
-            path=args.get("path"), rule=args.get("rule"),
-            severity=args.get("severity"), limit=limit,
-        )
+        return _diagnostics(ci, args, limit)
     if action == "changes":
         return ci.get_changes(
             symbol_id, from_revision=args.get("from_revision"),
@@ -229,6 +226,25 @@ def _dispatch(ci: Any, action: str, args: dict[str, Any]) -> dict[str, Any]:
             symbol_id, budget_tokens=_int(args.get("budget_tokens"), 6000)
         )
     return {"error": f"unsupported action {action!r}"}
+
+
+def _diagnostics(ci: Any, args: dict[str, Any], limit: int) -> dict[str, Any]:
+    """``diagnostics``: scan the named path live when possible, else return the stored graph and
+    label the source so the model never reads stored findings as the current file's bytes."""
+    requested_path = args.get("path")
+    if isinstance(requested_path, str) and requested_path.strip():
+        live = ci.get_live_diagnostics(
+            path=requested_path.strip(), rule=args.get("rule"),
+            severity=args.get("severity"), limit=limit,
+        )
+        if live is not None:
+            return live
+    payload = ci.get_diagnostics(
+        path=args.get("path"), rule=args.get("rule"),
+        severity=args.get("severity"), limit=limit,
+    )
+    payload["source"] = "stored_graph"
+    return payload
 
 
 def _int(value: Any, default: int) -> int:

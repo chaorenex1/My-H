@@ -43,7 +43,62 @@ class ToolRoundVerdict:
     _turn_exit_reason: Any
     truncated_tool_call_retries: Any
     current_turn_user_idx: Any
+    api_call_count: Any = None
     result: Optional[dict[str, Any]] = None
+
+
+def _handle_ttsr_tool_interrupt(
+    agent: Any, coordinator: Any, assistant_message: Any, messages: Any,
+    conversation_history: Any,
+) -> str:
+    """``"continue"`` (discard + refund), ``"break"`` (limit hit) or ``""`` (no hit)."""
+    if not coordinator.match_tool_calls(agent, assistant_message):
+        return ""
+    agent._ttsr_restart_count = int(getattr(agent, "_ttsr_restart_count", 0)) + 1
+    if agent._ttsr_restart_count > int(getattr(agent, "_api_max_retries", 3)):
+        if coordinator.deliver_rewind(agent, messages):
+            agent._persist_session(messages, conversation_history)
+        return "break"
+    agent.iteration_budget.refund()
+    return "continue"
+
+
+def _append_invalid_batch_results(
+    agent: Any, assistant_message: Any, invalid_calls: list, messages: Any,
+) -> None:
+    """Error-result unknown tool calls, then drop them from execution."""
+    from agent.conversation_loop import _invalid_tool_name_error_content
+
+    for tool_call in invalid_calls:
+        append_message(messages, {
+            "role": "tool",
+            "name": tool_call.function.name,
+            "tool_call_id": coalesce_tool_call_id(tool_call),
+            "content": _invalid_tool_name_error_content(
+                tool_call.function.name, agent.valid_tool_names),
+        })
+    assistant_message.tool_calls = [
+        tc for tc in assistant_message.tool_calls if tc.function.name in agent.valid_tool_names]
+
+
+def _refund_execute_code_only(agent: Any, assistant_message: Any) -> None:
+    if {tc.function.name for tc in assistant_message.tool_calls} == {"execute_code"}:
+        agent.iteration_budget.refund()
+
+
+def _persist_tool_turn(agent: Any, messages: Any, conversation_history: Any) -> Any:
+    """Flush the staged tool-call turn before any side effect; classify a failure."""
+    try:
+        return agent._flush_messages_to_session_db(messages, conversation_history)
+    except Exception as exc:  # health: allow BLE001 -- persistence failure is classified, not swallowed
+        from hermes_state import classify_persistence_error
+
+        agent._last_persistence_error_cause = classify_persistence_error(exc)
+        logger.warning(
+            "Incremental tool-call persistence failed before execution (session=%s): %s",
+            agent.session_id or "none", exc,
+        )
+        return False
 
 
 def run_tool_round(
@@ -57,15 +112,20 @@ def run_tool_round(
     durability invariant: resume must see the executed block if a destructive tool restarts
     Hermes; a failed canonical append ends the turn rather than running tools from
     process-only state."""
-    from agent.conversation_loop import _invalid_tool_name_error_content
+    _current_api_call_count = api_call_count
 
-    def _verdict(action: str, result: Optional[dict[str, Any]] = None) -> ToolRoundVerdict:
+    def _verdict(
+        action: str, result: Optional[dict[str, Any]] = None, *,
+        api_call_count: Any = None,
+    ) -> ToolRoundVerdict:
         return ToolRoundVerdict(
             action=action, messages=messages, conversation_history=conversation_history,
             active_system_prompt=active_system_prompt, compression_attempts=compression_attempts,
             final_response=final_response, failed=failed, _turn_exit_reason=_turn_exit_reason,
             truncated_tool_call_retries=truncated_tool_call_retries,
-            current_turn_user_idx=current_turn_user_idx, result=result,
+            current_turn_user_idx=current_turn_user_idx,
+            api_call_count=api_call_count if api_call_count is not None else _current_api_call_count,
+            result=result,
         )
 
     if not agent.quiet_mode:
@@ -101,6 +161,18 @@ def run_tool_round(
     # before it is staged (idempotent for already-normalized ids).
     normalize_provider_tool_call_ids(assistant_message.tool_calls)
 
+    # ADR-6 D10: match final tool arguments BEFORE staging/persistence. A hit discards the
+    # whole response: no assistant/tool row, no side effect, no tool.start/tool.complete.
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        _ttsr_action = _handle_ttsr_tool_interrupt(
+            agent, coordinator, assistant_message, messages, conversation_history)
+        if _ttsr_action == "break":
+            _turn_exit_reason = "ttsr_restart_limit_exceeded"
+            return _verdict("break")
+        if _ttsr_action == "continue":
+            return _verdict("continue", api_call_count=_current_api_call_count - 1)
+
     # Mixed batch: the assistant message keeps EVERY emitted call (each tool_call needs a
     # matching result) while only valid ones dispatch.
     _invalid_batch_calls = [
@@ -117,33 +189,11 @@ def run_tool_round(
 
     # Mixed batch: error-result invalid calls and drop them from execution.
     if _invalid_batch_calls:
-        for tc in _invalid_batch_calls:
-            append_message(messages, {
-                "role": "tool",
-                "name": tc.function.name,
-                "tool_call_id": coalesce_tool_call_id(tc),
-                "content": _invalid_tool_name_error_content(
-                    tc.function.name, agent.valid_tool_names
-                ),
-            })
-        assistant_message.tool_calls = [
-            tc for tc in assistant_message.tool_calls if tc.function.name in agent.valid_tool_names
-        ]
+        _append_invalid_batch_results(agent, assistant_message, _invalid_batch_calls, messages)
 
     # Persist the tool-call turn before any tool side effects so resume sees the executed
     # block if a destructive tool restarts Hermes.
-    try:
-        _tool_turn_persisted = agent._flush_messages_to_session_db(messages, conversation_history)
-    except Exception as exc:
-        _tool_turn_persisted = False
-        from hermes_state import classify_persistence_error
-        agent._last_persistence_error_cause = classify_persistence_error(exc)
-        logger.warning(
-            "Incremental tool-call persistence failed before execution "
-            "(session=%s): %s",
-            agent.session_id or "none",
-            exc,
-        )
+    _tool_turn_persisted = _persist_tool_turn(agent, messages, conversation_history)
 
     if _tool_turn_persisted is False:
         # Canonical append failed: never project the row or run tools from process-only
@@ -207,8 +257,7 @@ def run_tool_round(
     agent._stream_needs_break = True
     # Refund the iteration when the ONLY tool was execute_code (programmatic tool
     # calling) — cheap RPC-style calls shouldn't eat the budget.
-    if {tc.function.name for tc in assistant_message.tool_calls} == {"execute_code"}:
-        agent.iteration_budget.refund()
+    _refund_execute_code_only(agent, assistant_message)
 
     _ptc = compress_after_tool_results(
         agent, messages=messages, system_message=system_message, user_message=user_message,

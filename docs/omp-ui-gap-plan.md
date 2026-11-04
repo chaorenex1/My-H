@@ -432,8 +432,9 @@ Fork 到 pane/window、worktree/move/多根目录、加密分享链接/collab �
 会话 focus 到子代理、实时语音可视化 + TTS 闪避、auto-thinking、model roles/presets/`@role`、
 `/plan` 评审/保存/TOC、OMFG/Cleanse/Ratchet/Prewalk/Auto-graph、屏幕录制 `/rec`、Warp/Tern 集成。
 
-其中 **OMFG、Cleanse、Ratchet、Prewalk、Auto-graph** 归入 **待设计（D）**：Hermes 没有等价后端，
-设计要点、方案选项与退出条件见 `omp-ui-panels-gateway-plan.md` §10；Advisor / Model roles /
+其中 **Cleanse** 仍归入 **待设计（D）**；**OMFG、Ratchet、Prewalk、Auto-graph** 已由
+**ADR-12** 收口（OMFG → skill，Auto-graph → 客户端接线，Ratchet/Prewalk 不做），设计要点、方案选项
+与退出条件见 `omp-ui-panels-gateway-plan.md` §10；Advisor / Model roles /
 Auto-thinking 在 Hermes 有部分等价物（MoA/refine、模型与配置选择）。**Model roles 已接通**：
 `/models` 经 `model.roles.get` / `model.roles.set` 读写 `auxiliary.<task>`，`default` 角色走 `session.setModel`，
 导入角色 `task`→`delegation`、`advisor`→`adviser`（`tui_gateway/methods_model_roles.py`）；

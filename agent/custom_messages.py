@@ -34,7 +34,8 @@ DISPLAY_ONLY_CUSTOM_TYPES = frozenset({
     "model-switch", "personality-switch", "process-complete",
     "async-delegation-complete", "internal-notification",
 })
-MESSAGE_CUSTOM_TYPES = frozenset({"advisor", "skill-prompt", "todo-reminder", "collab-prompt"})
+MESSAGE_CUSTOM_TYPES = frozenset({"advisor", "skill-prompt", "todo-reminder", "collab-prompt", "ttsr-injection",
+                                  "lsp-late-diagnostic"})
 
 # Rows that stay legacy user/assistant turns even in a custom-message session (D9/D11).
 LEGACY_ROLE_DISPLAY_KINDS = frozenset({"auto_continue", "failed_turn", "steer", "hidden"})

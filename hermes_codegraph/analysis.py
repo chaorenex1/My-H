@@ -17,6 +17,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 30.0
+# One-file scans on the immediate paths (a write's edit check, an explicit diagnostics query on a
+# named path) share this bound: a cold ``--config auto`` scan may fetch rules, and the caller must
+# never wait for it synchronously (ADR-9 D8).
+IMMEDIATE_TIMEOUT_S = 15.0
 MAX_FINDINGS = 2000
 
 

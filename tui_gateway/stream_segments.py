@@ -53,6 +53,18 @@ class TurnSegments:
         self.offset = 0
         return stamp
 
+    def rewind(self) -> dict[str, Any]:
+        """Drop the live draft and open a fresh segment for the retry (ADR-6 D13).
+
+        The discarded text block is not sealed: the client removes the live block, and the
+        retry's deltas carry a new ``segment`` so they cannot dedupe against the dead one.
+        """
+        self.text_block_index = None
+        self._text_parts = []
+        self.segment += 1
+        self.offset = 0
+        return {"message_id": self.message_id, "segment": self.segment}
+
     def open_text_block(self) -> int | None:
         """Start the segment's text block; returns its content_index, or None when already open."""
         if self.text_block_index is not None:

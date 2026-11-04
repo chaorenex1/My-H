@@ -155,10 +155,10 @@ def _kanban_stop_nudge(agent, messages) -> Optional[str]:
 _MAX_LSP_TURN_END_NOTES = 3
 
 
-def _late_lsp_verdicts(agent) -> Optional[str]:
+def _late_lsp_verdicts(agent) -> Optional[list]:
     """Language-server verdicts on this turn's edits that no tool result carried yet (the edit was the
     last tool call; a one-shot run has no next turn to carry them): waits briefly for checks still
-    running (``agent.lsp.deferred.settle_for_agent``) and returns them as a message for the model."""
+    running (``agent.lsp.deferred.settle_for_agent``) and returns the queued ``(path, Note)`` pairs."""
     issued = getattr(agent, "_lsp_turn_end_notes", 0)
     if not isinstance(issued, int) or issued >= _MAX_LSP_TURN_END_NOTES:
         return None
@@ -169,12 +169,7 @@ def _late_lsp_verdicts(agent) -> Optional[str]:
     except Exception:
         logger.debug("late LSP verdict check failed", exc_info=True)
         return None
-    if not notes:
-        return None
-    body = "\n\n".join(text for _path, text in notes)
-    return ("[System note: the language server reported problems in files you edited this turn, after "
-            "those tool results had returned. Fix them if they are real, then give your final answer.]\n\n"
-            + body)
+    return notes or None
 
 
 def _append_interim_answer(agent, final_msg, messages, conversation_history, flush_fail_msg: str) -> None:
@@ -272,15 +267,30 @@ def apply_stop_gates(
             ),
         )
 
-    _lsp_note = _late_lsp_verdicts(agent)
-    if _lsp_note:
+    _late_notes = _late_lsp_verdicts(agent)
+    if _late_notes:
         agent._lsp_turn_end_notes = getattr(agent, "_lsp_turn_end_notes", 0) + 1  # int: checked above
         final_msg["finish_reason"] = "verification_required"
         _append_interim_answer(
             agent, final_msg, messages, conversation_history, "late-LSP interim flush failed"
         )
-        # A durable row (no scaffolding flag): it is never stripped, so no sent byte changes later.
-        append_message(messages, {"role": "user", "content": _lsp_note})
+        from agent.lsp import delivery as lsp_delivery
+
+        if lsp_delivery.custom_messages_enabled():
+            # ADR-9 D1/D3: a real custom row (developer to the model, a diagnostics card to omp-ui).
+            lsp_delivery.deliver(agent, messages, _late_notes, conversation_history)
+        else:
+            body = "\n\n".join(note.legacy_text for _path, note in _late_notes)
+            # A durable row (no scaffolding flag): it is never stripped, so no sent byte changes later.
+            source = ("diagnostics reported" if any(note.semgrep_text for _path, note in _late_notes)
+                      else "the language server reported")
+            append_message(messages, {
+                "role": "user",
+                "content": (
+                    f"[System note: {source} problems in files you edited this turn, "
+                    "after those tool results had returned. Fix them if they are real, then give your "
+                    "final answer.]\n\n" + body),
+            })
         agent._session_messages = messages
         logger.debug("late LSP verdicts delivered before the final answer (%d)", agent._lsp_turn_end_notes)
         return StopGateVerdict(

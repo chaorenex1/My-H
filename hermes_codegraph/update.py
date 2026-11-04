@@ -61,7 +61,6 @@ def refresh_file(
     semgrep: bool = False,
 ) -> dict[str, Any]:
     from .indexer import Indexer
-
     rel_path = _validated_path(repository, path)
     descriptor = registry.by_path(rel_path)
     if descriptor is None:
@@ -92,11 +91,18 @@ def refresh_file(
     indexer._resolve()
     if semantic:
         indexer._enhance_semantic()
-    if semgrep and limits.semgrep_enabled and limits.enabled:
-        from .scanner import ScanResult
+    semgrep_result = None
+    if semgrep:
+        if limits.semgrep_enabled and limits.enabled:
+            from .scanner import ScanResult
 
-        scan_result = ScanResult(files=[scanned])
-        indexer._run_semgrep(scan_result, _snapshot_hash(client, repository))
+            scan_result = ScanResult(files=[scanned])
+            # ADR-9 D8: the explicit ``semgrep=true`` query returns what the scan just observed on
+            # the current bytes, not a graph lookup that may describe an older revision.
+            semgrep_result = indexer._run_semgrep(
+                scan_result, _snapshot_hash(client, repository), include_findings=True)
+        else:
+            semgrep_result = {"status": "disabled", "findings": 0}
     snapshot = _mark_patched(client, repository)
     indexer._write_run(
         kind="refresh_file",
@@ -107,13 +113,16 @@ def refresh_file(
         snapshot_hash=snapshot,
         finished_at=datetime.now(UTC).isoformat(),
     )
-    return {
+    payload = {
         "status": "patched",
         "path": rel_path,
         "action": prepared.action,
         "snapshot_hash": snapshot,
         "analysis_run_id": indexer.run_key,
     }
+    if semgrep_result is not None:
+        payload["semgrep"] = semgrep_result
+    return payload
 
 
 def delete_file(

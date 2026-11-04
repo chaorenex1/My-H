@@ -15,8 +15,10 @@ from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List
 
+from agent.interrupt_control import stream_abort_requested
 from agent.stream_single_writer import claim_stream_writer, stream_writer_is_current
 from agent.transports.hermes_tools_mcp_server import HERMES_TOOLS_MCP_SERVER_NAME
+from agent.ttsr_stream_hooks import stream_delta, wrap_stream_delta
 from agent.sdk_transform_bypass import bypass_sdk_request_transform
 from agent.stream_diag import buffer_connect_exhausted_notice
 from agent.usage_anchor import set_usage_anchor
@@ -495,6 +497,11 @@ def make_codex_app_server_event_bridge(agent) -> Callable[[dict], None]:
         # (which also feeds the interim-visible-text de-dup comparison), even when a caller reaches this
         # directly (the tool-suppressed content path) rather than through _fire_stream_delta.
         if text:
+            # ADR-6 D10: the app-server bypasses the Hermes stream emitters, so feed TTSR here.
+            coordinator = getattr(agent, "ttsr_coordinator", None)
+            if coordinator is not None:
+                source = "thinking" if attr == "_fire_reasoning_delta" else "text"
+                coordinator.check_stream_delta(agent, source, text)
             agent_cb(attr, f"{attr} raised", args=(text,))
 
     def _fire_agent_message_completed(item: dict) -> None:
@@ -1316,6 +1323,7 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
     def _on_text_delta(text: str) -> None:
         agent._codex_streamed_text_parts.append(text)
         if _writer_is_current():
+            stream_delta(agent, "text", text)
             agent._fire_stream_delta(text)
 
     def _on_event(event: Any) -> None:  # TTFB/activity touch — once per SSE event.
@@ -1349,7 +1357,7 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
         # status "completed"); raise so the watchdog's TimeoutError is seen.
         if not _request_is_current():
             raise TimeoutError("Codex Responses stream request retired before terminal response")
-        return bool(agent._interrupt_requested)
+        return stream_abort_requested(agent)
 
     def _open_codex_stream(next_api_kwargs: dict[str, Any]):
         from hermes_cli.providers import is_actual_route
@@ -1469,7 +1477,7 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
     for attempt in range(max_stream_retries + 1):
         if not _request_is_current():
             raise TimeoutError("Codex Responses stream request retired before retry")
-        if agent._interrupt_requested:
+        if stream_abort_requested(agent):
             raise InterruptedError("Agent interrupted before Codex stream retry")
         if attempt > 0 and watchdog_state is not None and watchdog_state.phase_aware:
             # One origin for the whole physical attempt: lifecycle frames may change
@@ -1499,7 +1507,9 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                 )
                 final = _consume_codex_event_stream(
                     event_stream, model=model, on_text_delta=_fenced(_on_text_delta),
-                    on_reasoning_delta=_live(agent._fire_reasoning_delta), on_commentary_message=on_commentary_message,
+                    on_reasoning_delta=_live(
+                        wrap_stream_delta(agent, "thinking", agent._fire_reasoning_delta)),
+                    on_commentary_message=on_commentary_message,
                     on_first_delta=_live(on_first_delta) if on_first_delta is not None else None,
                     on_event=_fenced(_on_event), interrupt_check=_interrupt_or_superseded,
                 )
@@ -1534,7 +1544,7 @@ def run_codex_stream(agent, api_kwargs: dict, client: Any = None, on_first_delta
                     continue
                 _log_failure(exc)
                 raise
-            if not agent._interrupt_requested:
+            if not stream_abort_requested(agent):
                 _drain_for_finalizer(event_stream)
             if final.status in {"incomplete", "failed"}:
                 logger.warning("Codex Responses stream terminal status=%s "

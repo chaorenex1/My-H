@@ -219,6 +219,32 @@ def publish_ttsr_triggered(turn, rules) -> bool:
     return turn._publish_execution("ttsr.triggered", {"rules": list(rules)})
 
 
+def publish_compaction_summary(publish, payload) -> bool:
+    """ADR-5 D4: one committed compaction boundary for a local viewer.
+
+    ``publish`` is ``TurnRunner._publish_execution`` for an in-turn commit, or a stream adapter
+    (``event_type, payload``) for the canonical ``session.mutate{compress}`` path.
+    """
+    return publish("compaction.summary", payload)
+
+
+def publish_message_rewind(turn) -> bool:
+    """ADR-6 D13: the live draft was discarded; the retry streams in a fresh segment.
+
+    Advances the turn's ``TurnSegments`` cursor first so the next delta carries the new segment
+    and cannot dedupe against the dead one. Only omp-ui local-viewer turns install a TTSR
+    coordinator, so this emitter never fires for other clients.
+    """
+    payload: dict = {"reason": "ttsr"}
+    owner = getattr(turn, "_approval_owner", None)
+    segments_for = getattr(turn, "_segments_for", None)
+    if owner is not None and callable(segments_for):
+        segments = segments_for(owner[2])
+        if segments is not None:
+            payload.update(segments.rewind())
+    return turn._publish_execution("message.rewind", payload)
+
+
 def note_tool_start(turn, call_id, tool_name=None, args=None) -> None:
     """Monotonic start time of one call (``tool.complete.duration_s``) and, for a write-capable
     tool, the before-state of its local files: the agent fires the start callback BEFORE the tool

@@ -417,4 +417,9 @@ def check_rules(rules: Optional[list[dict[str, Any]]] = None) -> list[dict[str, 
         if meta["interrupt_mode"] and meta["interrupt_mode"] not in INTERRUPT_MODES:
             problems.append({"rule_id": rule_id, "severity": "warning",
                              "issue": f"unknown interruptMode {meta['interrupt_mode']!r}"})
+        elif (meta["condition"] or meta["ast_condition"]) and not meta["interrupt_mode"]:
+            # omp defaults an omitted interruptMode to ``always``; TTSR P1 only supports ``never``.
+            problems.append({"rule_id": rule_id, "severity": "warning",
+                             "issue": "missing interruptMode (omp default is 'always'; TTSR "
+                                      "supports only 'never')"})
     return problems

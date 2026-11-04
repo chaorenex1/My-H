@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from agent import ttsr_runtime
 from agent.rule_utils import parse_rule_text
 from agent.ttsr_runtime import (
     JUDGED_CONTENT_MAX_CHARS,
@@ -28,6 +29,9 @@ def _row(text: str, *, rule_id: str = "rule", source: str = "/project/rules/rule
 
 
 def _rule(text: str, *, rule_id: str = "rule", source: str = "/project/rules/rule.md") -> Any:
+    if "interruptMode" not in text and text.startswith("---"):
+        _head, frontmatter, body = text.split("---", 2)
+        text = f"---{frontmatter}interruptMode: never\n---{body}"
     rows, unsupported = select_rules([_row(text, rule_id=rule_id, source=source)], TtsrSettings())
     assert not unsupported
     assert len(rows) == 1
@@ -37,7 +41,8 @@ def _rule(text: str, *, rule_id: str = "rule", source: str = "/project/rules/rul
 def _coordinator(
     rules: list[Any], *, settings: TtsrSettings | None = None, judge_factory: Any = None,
     native_available: bool = False, injected: set[str] | None = None,
-    session_db: Any = None, publish: Any = None,
+    session_db: Any = None, publish: Any = None, memory_claimed: set[str] | None = None,
+    ast_grep: str | None = None, ast_timeout: float = 2.0,
 ) -> TtsrCoordinator:
     return TtsrCoordinator(
         session_id="s1",
@@ -45,6 +50,9 @@ def _coordinator(
         settings=settings or TtsrSettings(),
         rules=rules,
         injected_names=injected or set(),
+        memory_claimed=memory_claimed if memory_claimed is not None else set(),
+        ast_grep=ast_grep,
+        ast_timeout=ast_timeout,
         judge_factory=judge_factory,
         native_available=native_available,
         session_db=session_db,
@@ -111,6 +119,20 @@ def test_write_and_patch_digests_use_source_text_not_json():
     assert tool_digests("patch", {"mode": "patch", "patch": "*** Begin Patch\n*** End Patch\n"}) == []
 
 
+def test_v4a_scope_gates_each_file_not_the_whole_batch():
+    rule = _rule("---\ncondition: 'any'\nscope: 'tool:edit(*.ts)'\n"
+                 "interruptMode: never\n---\nbody\n")
+    patch = (
+        "*** Begin Patch\n"
+        "*** Update File: a.ts\n@@\n+const x = 1\n"
+        "*** Update File: b.md\n@@\n+any\n"
+        "*** End Patch\n"
+    )
+    coordinator = _coordinator([rule])
+    assert coordinator.match_tool_start(
+        "c1", "patch", {"mode": "patch", "patch": patch}) == []
+
+
 def test_v4a_digest_keeps_added_lines_per_file_and_skips_deletes():
     patch = (
         "*** Begin Patch\n"
@@ -163,7 +185,8 @@ def test_reminder_is_one_hidden_row_after_tool_results_even_on_tool_error():
     coordinator.after_tool_batch(_FakeAgent(), messages, 1)
     assert len(messages) == 3
     row = messages[-1]
-    assert row["role"] == "user" and row["display_kind"] == "hidden"
+    assert row["role"] == "custom" and row["custom_type"] == "ttsr-injection"
+    assert row["display"] is False and row["details"]["rules"] == ["rule"]
     assert "<system-reminder" in row["content"] and "Use unknown." in row["content"]
     assert db.rows["s1"] == {"rule"}
 
@@ -179,21 +202,131 @@ def test_interrupted_batch_delivers_nothing_and_writes_no_repeat_state():
     assert db.rows == {}
 
 
+def test_undelivered_match_stays_claimed_for_the_rest_of_the_turn():
+    rule = _rule("---\ncondition: 'any'\n---\nbody\n")
+    db = _FakeDB()
+    coordinator = _coordinator([rule], session_db=db)
+    assert coordinator.match_tool_start("c1", "write_file", {"path": "a.ts", "content": "any"})
+    coordinator.after_tool_batch(_FakeAgent(interrupted=True), [
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ], 1)
+    # In-memory once suppression without a durable mark: the next batch cannot re-notify.
+    assert coordinator.match_tool_start("c2", "write_file", {"path": "b.ts", "content": "any"}) == []
+    assert db.rows == {}
+
+
+def test_regex_rule_without_interrupt_mode_takes_the_global_default():
+    rows = [_row("---\ncondition: 'x'\n---\nbody\n", rule_id="r")]
+    active, unsupported = select_rules(rows, TtsrSettings())
+    assert not unsupported
+    assert [rule.interrupt_mode for rule in active] == ["always"]
+
+    active, unsupported = select_rules(rows, TtsrSettings(interrupt_mode="never"))
+    assert not unsupported
+    assert [rule.interrupt_mode for rule in active] == ["never"]
+
+    bad = [_row("---\ncondition: 'x'\ninterruptMode: sometimes\n---\nbody\n", rule_id="bad")]
+    active, unsupported = select_rules(bad, TtsrSettings())
+    assert active == []
+    assert unsupported == [("bad", "interruptMode: sometimes")]
+
+
+def test_undelivered_match_is_remembered_across_turns_without_a_durable_row():
+    rule = _rule("---\ncondition: 'any'\n---\nbody\n")
+    db = _FakeDB()
+    memory: set[str] = set()
+    first = _coordinator([rule], session_db=db, memory_claimed=memory)
+    assert first.match_tool_start("c1", "write_file", {"path": "a.ts", "content": "any"})
+    first.after_tool_batch(_FakeAgent(interrupted=True), [
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ], 1)
+    assert db.rows == {}
+
+    second = _coordinator([rule], session_db=db, memory_claimed=memory)
+    assert second.match_tool_start("c2", "write_file", {"path": "b.ts", "content": "any"}) == []
+
+
 def test_unsupported_rules_are_reported_not_silently_dropped():
     rows = [
         _row("---\ncondition: 'x'\ninterruptMode: always\n---\nbody\n", rule_id="a"),
-        _row("---\nastCondition: 'x'\n---\nbody\n", rule_id="b"),
+        _row("---\nastCondition: 'x'\ninterruptMode: never\n---\nbody\n", rule_id="b"),
         _row("---\nquestion: 'Is it bad?'\n---\nbody\n", rule_id="c"),
     ]
     active, unsupported = select_rules(rows, TtsrSettings())
-    assert [rule.name for rule in active] == ["c"]
-    assert [name for name, _reason in unsupported] == ["a", "b"]
+    assert [rule.name for rule in active] == ["a", "c"]
+    assert [name for name, _reason in unsupported] == ["b"]
+    assert "ast-grep CLI unavailable" in unsupported[0][1]
+
+
+def test_ast_only_rule_is_unsupported_without_the_cli():
+    row = _row("---\nastCondition: 'const $A: any = $B'\ninterruptMode: never\n---\nbody\n",
+               rule_id="ast")
+    active, unsupported = select_rules([row], TtsrSettings())
+    assert active == []
+    assert unsupported == [("ast", "ast-grep CLI unavailable (hermes pm install ast-grep)")]
+
+
+def test_ast_only_rule_matches_when_the_cli_is_available(monkeypatch):
+    row = _row("---\nname: ast\nastCondition: 'const $A: any = $B'\ninterruptMode: never\n"
+               "scope: 'tool:write(*.ts)'\n---\nbody\n", rule_id="ast")
+    active, unsupported = select_rules([row], TtsrSettings(), ast_available=True)
+    assert not unsupported
+    assert [rule.name for rule in active] == ["ast"]
+
+    seen: list[tuple[str, str, str, str, float]] = []
+
+    def _fake_match(executable, pattern, source, lang, *, timeout):
+        seen.append((executable, pattern, source, lang, timeout))
+        return True
+
+    monkeypatch.setattr(ttsr_runtime, "ast_match", _fake_match)
+    coordinator = _coordinator(active, ast_grep="/fake/ast-grep")
+    assert coordinator.match_tool_start(
+        "c1", "write_file", {"path": "a.ts", "content": "const x: any = 1"})
+    assert seen and seen[0][0] == "/fake/ast-grep"
+    assert seen[0][1] == "const $A: any = $B" and seen[0][3] == "ts"
+
+
+@pytest.mark.parametrize("path", ["Makefile", "notes.md", "notes.txt"])
+def test_ast_rule_skips_a_path_without_a_language(monkeypatch, path):
+    row = _row("---\nname: ast\nastCondition: 'const $A: any = $B'\ninterruptMode: never\n"
+               "scope: 'tool:write'\n---\nbody\n", rule_id="ast")
+    active, _ = select_rules([row], TtsrSettings(), ast_available=True)
+    monkeypatch.setattr(ttsr_runtime, "ast_match",
+                        lambda *_a, **_kw: pytest.fail("ast-grep must not run without a language"))
+    coordinator = _coordinator(active, ast_grep="/fake/ast-grep")
+    assert coordinator.match_tool_start(
+        "c1", "write_file", {"path": path, "content": "any"}) == []
+
+
+def test_mixed_regex_and_ast_rule_survives_a_missing_ast_backend():
+    row = _row("---\nname: both\ncondition: 'any'\nastCondition: 'const $A = $B'\n"
+               "interruptMode: never\n---\nbody\n", rule_id="both")
+    active, unsupported = select_rules([row], TtsrSettings())
+    assert not unsupported
+    assert [rule.name for rule in active] == ["both"]
+    coordinator = _coordinator(active, ast_grep=None)
+    assert coordinator.match_tool_start(
+        "c1", "write_file", {"path": "a.ts", "content": "any"}) == [{
+            "name": "both", "description": "", "content": "body"}]
+
+
+def test_regex_hit_short_circuits_the_ast_bridge(monkeypatch):
+    row = _row("---\nname: both\ncondition: 'any'\nastCondition: 'const $A = $B'\n"
+               "interruptMode: never\n---\nbody\n", rule_id="both")
+    active, _ = select_rules([row], TtsrSettings(), ast_available=True)
+    monkeypatch.setattr(ttsr_runtime, "ast_match",
+                        lambda *_a, **_kw: pytest.fail("regex hit should not spawn ast-grep"))
+    coordinator = _coordinator(active, ast_grep="/fake/ast-grep")
+    assert coordinator.match_tool_start(
+        "c1", "write_file", {"path": "a.ts", "content": "any"}) == [{
+            "name": "both", "description": "", "content": "body"}]
 
 
 def test_builtin_switch_and_disabled_names_apply(tmp_path):
-    shipped = _row("---\ncondition: 'x'\n---\nbody\n", rule_id="shipped",
+    shipped = _row("---\ncondition: 'x'\ninterruptMode: never\n---\nbody\n", rule_id="shipped",
                    source=str(Path(__file__).resolve().parents[2] / "rules" / "ts-no-any.md"))
-    project = _row("---\ncondition: 'x'\n---\nbody\n", rule_id="project",
+    project = _row("---\ncondition: 'x'\ninterruptMode: never\n---\nbody\n", rule_id="project",
                    source=str(tmp_path / "rules" / "p.md"))
     active, _ = select_rules([shipped, project], TtsrSettings(builtin_rules=False))
     assert [rule.name for rule in active] == ["project"]
@@ -244,7 +377,7 @@ def test_judged_rule_threshold_claim_and_warning():
     assert set(judge.requests[1].questions) == {"q0"}
     assert published == [("ttsr.triggered", {"rules": [{
         "name": "a", "description": "", "content": "Rule body a"}]})]
-    assert messages[-1]["display_kind"] == "hidden"
+    assert messages[-1]["custom_type"] == "ttsr-injection" and messages[-1]["display"] is False
     assert "Rule judge flagged your reply" in messages[-1]["content"]
 
 
@@ -311,12 +444,13 @@ def test_question_rule_can_judge_a_tool_digest():
     assert judge.requests[0].state["output"] == "`write_file` call on `a.ts`"
     assert judge.requests[0].questions["q0"].instructions == "Did the write break the rule?"
     assert published[0][1]["rules"][0]["name"] == "tool-q"
-    assert messages[-1]["display_kind"] == "hidden"
+    assert messages[-1]["custom_type"] == "ttsr-injection" and messages[-1]["display"] is False
     assert "`write_file` call on `a.ts`" in messages[-1]["content"]
 
 
 def test_brace_scope_survives_the_metadata_splitter():
-    row = _row("---\ncondition: 'any'\nscope: 'tool:edit(*.{ts,tsx})'\n---\nbody\n")
+    row = _row("---\ncondition: 'any'\ninterruptMode: never\n"
+               "scope: 'tool:edit(*.{ts,tsx})'\n---\nbody\n")
     active, _ = select_rules([row], TtsrSettings())
     assert active[0].scope.tool_scopes[0].path_pattern == "*.{ts,tsx}"
     coordinator = _coordinator(active)
@@ -338,5 +472,5 @@ def test_question_rule_judges_tool_round_text_after_results():
     assert [r.state["output"] for r in judge.requests] == ["reply", "reasoning"]
     # The warning is appended after the tool result, never between the call and its result.
     assert messages[1]["role"] == "tool"
-    assert messages[-1]["display_kind"] == "hidden"
+    assert messages[-1]["custom_type"] == "ttsr-injection" and messages[-1]["display"] is False
     assert "flagged your reasoning" in messages[-1]["content"]

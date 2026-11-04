@@ -1,4 +1,4 @@
-import type { AgentEvent, ThinkingLevel } from "../vendor/agent/src/index.ts";
+import type { AgentEvent, AgentMessage, ThinkingLevel } from "../vendor/agent/src/index.ts";
 import type { Effort, Usage } from "../vendor/ai/src/index.ts";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
@@ -36,6 +36,16 @@ export type AgentSessionEvent =
 	// ADR-6 D6: a live TTSR notification; never a transcript row, so it has no row id and is
 	// absent after resume. Rules are deduped/merged by the component.
 	| { type: "ttsr_triggered"; rules: { name: string; description?: string; content?: string }[] }
+	// ADR-6 D13: the live assistant draft was discarded by a TTSR rewind; drop it and reopen on
+	// the next delta. Never a transcript row.
+	| { type: "message_rewind" }
+	// ADR-5 D6: one committed compaction boundary. This is a shell event, not omp's local
+	// compaction vocabulary: the entry is already appended to `#messages` and the controller
+	// renders it through the ordinary compaction block.
+	| { type: "compaction_summary"; message: AgentMessage }
+	// ADR-5 D7: the authority started or finished a compaction pass. The idle recap timer treats
+	// both edges as a context change and drops the stretch it was about to recap.
+	| { type: "compaction_state_changed"; compacting: boolean }
 	| { type: "config_warnings_changed" }
 	// Coalesced snapshot of the authority's steering/follow-up queue; emitted whenever it differs
 	// from the last `queue_update` (enqueue, delivery, removal, clear, session switch).

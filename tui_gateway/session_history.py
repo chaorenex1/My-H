@@ -339,6 +339,22 @@ def _custom_message(m: dict, *, text: str) -> dict:
     return msg
 
 
+def custom_row_message(row: dict) -> dict | None:
+    """One stored custom row as its wire shape; live events and snapshots share this projection.
+
+    ADR-9 D4: a live ``transcript.custom`` payload is byte-identical to what ``session.resume``
+    projects, so a client can merge by ``row_id`` instead of keeping a second renderer. ``None`` for
+    a row that does not project to a custom block.
+    """
+    if not isinstance(row, dict):
+        return None
+    role = row.get("role") if isinstance(row.get("role"), str) else ""
+    if not _projects_custom(role, row):
+        return None
+    text = _custom_row_text(role, _coerce_message_text(row.get("content")))
+    return _custom_message(row, text=text)
+
+
 def _projects_custom(role: str, m: dict) -> bool:
     """True for a custom row, or a stored internal marker that projects to a custom block."""
     return role == "custom" or _marker_custom_type(m) is not None
@@ -372,31 +388,26 @@ def _remember_tool_call_args(tool_calls: list, tool_call_args: dict) -> None:
             tool_call_args[tc_id] = (fn["name"], args)
 
 
-def _compaction_summary_projection(m: dict, *, image_urls: bool) -> dict | None:
-    """ADR-10 D10: a STANDALONE compaction handoff as a ``compaction_summary`` row, else None.
+def _compaction_summary_projection(m: dict) -> dict | None:
+    """ADR-5 D3: one compaction carrier as a ``compaction_summary`` entry, else None.
 
-    A merged handoff keeps its recovered live content (today's projection); only a pure handoff
-    has no other display text, so only it becomes the summary block. This is the ADR-10 P2
-    ``partial`` shape: ADR-5 D1/D2 owns the durable ``display_metadata.compaction`` stamp
-    (tokens/method/boundary row) and the merged carrier's second entry. Until that lands the row
-    carries no counters and the client defaults ``tokensBefore`` to 0 (no badge).
+    Both shapes carry the same text: a standalone handoff is nothing but the summary, a merged
+    carrier keeps its recovered live tail in the ordinary projection that follows this entry.
+    Counters come from the durable ``display_metadata.compaction`` stamp; a pre-stamp row emits
+    no ``details`` (the client then shows a bare divider, never an estimated number).
     """
+    from agent.compaction_display import compaction_summary_stamp
     from agent.context_compressor import ContextCompressor, is_compaction_summary_message
 
     if not is_compaction_summary_message(m):
         return None
-    if ContextCompressor.classify_summary_content(m.get("content")) != "standalone":
-        return None
-    text = ContextCompressor._strip_summary_prefix(
-        _coerce_message_text(m.get("content"), image_urls=image_urls))
+    text = ContextCompressor.summary_body_for_display(m)
     if not text.strip():
         return None
     msg = {"role": "compaction_summary", "text": text}
-    metadata = m.get("display_metadata")
-    stamp = metadata.get("compaction") if isinstance(metadata, dict) else None
-    if isinstance(stamp, dict):
-        # ADR-5 D2: the summary row points back at the row it replaced; ADR-10 P5 moved the
-        # counters off the deleted ``display_metadata`` wire field onto ``details``.
+    stamp = compaction_summary_stamp(m)
+    if stamp is not None:
+        # ADR-5 D3: the summary row points back at the durable row it replaced.
         msg["details"] = {"compaction": {**stamp, "boundary_row_id": m.get("_row_id")}}
     ts = m.get("timestamp")
     if isinstance(ts, (int, float)) and ts > 0:
@@ -409,14 +420,18 @@ def _compaction_summary_projection(m: dict, *, image_urls: bool) -> dict | None:
 def _display_row(m: dict, messages: list[dict], *, image_urls: bool, include_compaction: bool) -> dict | None:
     """One stored row after the display projection.
 
-    ADR-10 D10's compaction gate runs first: a standalone handoff is appended as a
-    ``compaction_summary`` row and ``None`` means the row was already emitted.
+    ADR-5 D3's compaction gate runs first: a standalone handoff is appended as a
+    ``compaction_summary`` row and ``None`` means the row was already emitted; a merged carrier
+    appends that row and still projects its recovered live tail below the divider.
     """
     if include_compaction:
-        summary = _compaction_summary_projection(m, image_urls=image_urls)
+        from agent.context_compressor import ContextCompressor
+
+        summary = _compaction_summary_projection(m)
         if summary is not None:
             messages.append(summary)
-            return None
+            if ContextCompressor.classify_summary_content(m.get("content")) == "standalone":
+                return None
     return project_compaction_message_for_display(m)
 
 
@@ -480,7 +495,7 @@ def _skill_block(role: str, content_text: str, m: dict) -> dict | None:
 
 def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: bool = True,
                          include_tool_content: str = "none",
-                         include_compaction: bool = False) -> list[dict]:
+                         include_compaction: bool = False, running: bool = False) -> list[dict]:
     """``image_urls=False`` is the ``inline_images=false`` projection (#116511): image parts render ``[image]``
     so a remote client's history read stays kilobytes instead of re-transmitting every stored attachment.
 
@@ -488,22 +503,30 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
     synthetic user/assistant rows carry ``synthetic_kind``, and ``display_kind``/``display_metadata``
     never leave the gateway. ``include_tool_content`` (ADR-10 D4) is ``none`` (today's whitelist),
     ``text`` or ``full``; ``include_compaction`` (ADR-10 D10) projects standalone compaction handoffs
-    as ``role:"compaction_summary"`` instead of hiding them.
+    as ``role:"compaction_summary"`` instead of hiding them. ``running`` leaves the trailing open
+    batch unsettled (its calls may still be executing); a closed batch whose calls have no result on
+    this transcript emits a display-only ``custom_type:"stripped-tool-calls"`` row after its last
+    projected row, carrying ``details.count``.
     """
     from agent.history_commentary import project_history_commentary
     from agent.message_metadata import withheld_prompt_text
+    from tui_gateway.session_history_stripped import StrippedToolCallsTracker
 
     messages = []
     tool_call_args = {}
+    tracker = StrippedToolCallsTracker(messages)
     for m in history:
         if not isinstance(m, dict):
             continue
         m = _display_row(m, messages, image_urls=image_urls, include_compaction=include_compaction)
         if m is None:
+            tracker.close()
             continue
         role = m.get("role")
         if role not in _HISTORY_ROLES:
+            tracker.close()
             continue
+        tracker.end_batch(role)
         if role == "assistant" and m.get("tool_calls"):
             _remember_tool_call_args(m["tool_calls"], tool_call_args)
         # display_kind="hidden": model-facing scaffolding the "[System:" sniff does not catch (a held
@@ -516,6 +539,7 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             content_text = _coerce_message_text(m.get("content"), image_urls=image_urls)
         if _is_display_hidden_marker(role, content_text):
             continue
+        tracker.start(m)
         if role == "user":
             content_text = _DISCORD_TRIGGERING_NOTE_RE.sub(r"\1", content_text)
             # A pre_llm_call veto stores a placeholder; the transcript shows what the user typed.
@@ -530,7 +554,9 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
             messages.append(_custom_message(m, text=_custom_row_text(role, content_text)))
             continue
         if role == "tool":
-            messages.append(_tool_row_message(m, tool_call_args, include_tool_content))
+            message = _tool_row_message(m, tool_call_args, include_tool_content)
+            messages.append(message)
+            tracker.note_tool(m, message)
             continue
         # A user turn shows its skill invocation, never the expanded body (rewind re-sends by ordinal);
         # the expanded prompt rides ``details.prompt`` so clients never parse text.
@@ -554,6 +580,8 @@ def _history_to_messages(history: list[dict], *, profile_home=None, image_urls: 
         if marker == STEER_DISPLAY_KIND:
             msg["live_steered"] = True
         messages.append(msg)
+        tracker.anchor(msg)
+    tracker.finish(running)
     projected = project_history_commentary(messages, home=profile_home)
     # ADR-10 P5: internal display bookkeeping must never reach a client.
     for message in projected:

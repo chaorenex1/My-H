@@ -9,9 +9,15 @@ import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidatio
 import { BranchSummaryMessageComponent, CompactionSummaryMessageComponent } from "@oh-my-pi/pi-tui/chat/compaction-summary-message";
 import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
+import {
+	type LateDiagnosticsFile,
+	LateDiagnosticsMessageComponent,
+	routeLateDiagnostics
+} from "@oh-my-pi/pi-tui/chat/late-diagnostics-message";
 import type { AdvisorMessageDetails, SkillPromptDetails } from "@oh-my-pi/pi-tui/chat/messages";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
 import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
+import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-tool-calls-placeholder";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
 import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
@@ -33,6 +39,7 @@ import { isRecord } from "../../vendor/utils/src/index.ts";
 import {
 	cfgComposerRecallClearedDrafts,
 	cfgDisplayCacheMissMarker,
+	cfgDisplayCollapseCompacted,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
 	cfgTerminalShowImages,
@@ -54,6 +61,25 @@ export interface RenderInitialMessagesOptions {
 	preserveExistingChat?: boolean;
 	/** Retire the rows already sent to native scrollback. */
 	clearTerminalHistory?: boolean;
+}
+
+/**
+ * ADR-5 D6: index of the newest compaction boundary, or `0` when the replay renders from the
+ * top. `display.collapseCompacted` hides the rows before the boundary — the divider itself and
+ * the retained tail still render. Upstream removed those rows from the live chat container; that
+ * implementation is gone, so the faithful equivalent is a replay-time omission: the ledger,
+ * `/copy`, rewind and `session.history` keep every row, and switching the setting back to inline
+ * rebuilds from the full list. A boundary that lands live (D4's event) collapses on the next
+ * rebuild — resume, session switch or settings change — because the omission belongs to the replay,
+ * not to the live append path.
+ */
+export function compactedTranscriptStart(
+	messages: readonly AgentMessage[],
+	collapse: boolean,
+): number {
+	if (!collapse) return 0;
+	const boundary = messages.findLastIndex(message => message.role === "compactionSummary");
+	return boundary > 0 ? boundary : 0;
 }
 
 /**
@@ -204,36 +230,17 @@ export class UiHelpers {
 	#customBlock(message: CustomMessage<unknown> | Extract<AgentMessage, { role: "hookMessage" }>): Component[] {
 		if (!message.display) return [];
 		const custom = message as CustomMessage<unknown>;
-		const generic = (): Component[] => {
-			const component = new CustomMessageComponent(custom);
-			component.setExpanded(this.ctx.toolOutputExpanded);
-			return [this.#child(component)];
-		};
 		switch (custom.customType) {
-			case "advisor": {
-				const details = custom.details as AdvisorMessageDetails | undefined;
-				if (!details || !Array.isArray(details.notes)) return generic();
-				return [
-					this.#child(
-						createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme)
-					)
-				];
-			}
-			case "skill-prompt": {
-				if (!custom.details) return generic();
-				const skill = new SkillMessageComponent(custom as CustomMessage<SkillPromptDetails>);
-				skill.setExpanded(this.ctx.toolOutputExpanded);
-				return [this.#child(skill)];
-			}
-			case "todo-reminder": {
-				const details = custom.details as
-					| { todos: TodoItem[]; attempt: number; maxAttempts: number }
-					| undefined;
-				if (!details || !Array.isArray(details.todos)) return generic();
-				const reminder = new TodoReminderComponent(details.todos, details.attempt, details.maxAttempts);
-				reminder.setToolActivityVisible(!this.ctx.hideToolActivity);
-				return [this.#child(reminder)];
-			}
+			case "advisor":
+				return this.#advisorCustomBlock(custom);
+			case "skill-prompt":
+				return this.#skillCustomBlock(custom);
+			case "todo-reminder":
+				return this.#todoCustomBlock(custom);
+			case "lsp-late-diagnostic":
+				return this.#lateDiagnosticsCustomBlock(custom);
+			case "stripped-tool-calls":
+				return this.#strippedToolCallsCustomBlock(custom);
 			case "gateway-notice":
 			case "model-switch":
 			case "personality-switch":
@@ -242,8 +249,59 @@ export class UiHelpers {
 			case "internal-notification":
 				return [this.#child(this.#noticeBlock(custom))];
 			default:
-				return generic();
+				return this.#genericCustomBlock(custom);
 		}
+	}
+
+	#genericCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		const component = new CustomMessageComponent(custom);
+		component.setExpanded(this.ctx.toolOutputExpanded);
+		return [this.#child(component)];
+	}
+
+	#advisorCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		const details = custom.details as AdvisorMessageDetails | undefined;
+		if (!details || !Array.isArray(details.notes)) return this.#genericCustomBlock(custom);
+		return [
+			this.#child(createAdvisorMessageCard(details, () => this.ctx.toolOutputExpanded, theme))
+		];
+	}
+
+	#skillCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		if (!custom.details) return this.#genericCustomBlock(custom);
+		const skill = new SkillMessageComponent(custom as CustomMessage<SkillPromptDetails>);
+		skill.setExpanded(this.ctx.toolOutputExpanded);
+		return [this.#child(skill)];
+	}
+
+	#todoCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		const details = custom.details as
+			| { todos: TodoItem[]; attempt: number; maxAttempts: number }
+			| undefined;
+		if (!details || !Array.isArray(details.todos)) return this.#genericCustomBlock(custom);
+		const reminder = new TodoReminderComponent(details.todos, details.attempt, details.maxAttempts);
+		reminder.setToolActivityVisible(!this.ctx.hideToolActivity);
+		return [this.#child(reminder)];
+	}
+
+	/** ADR-9 D5: one component for live and resume; native frames take their own paths. */
+	#lateDiagnosticsCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		const details = custom.details as { files?: LateDiagnosticsFile[] } | undefined;
+		const files = Array.isArray(details?.files) ? details.files : undefined;
+		if (!files) return this.#genericCustomBlock(custom);
+		const unrouted = routeLateDiagnostics(this.ctx.chatContainer.children, files);
+		if (unrouted.length === 0) return [];
+		const diagnostics = new LateDiagnosticsMessageComponent(unrouted);
+		diagnostics.setExpanded(this.ctx.toolOutputExpanded);
+		diagnostics.setToolActivityVisible(!this.ctx.hideToolActivity);
+		return [this.#child(diagnostics)];
+	}
+
+	#strippedToolCallsCustomBlock(custom: CustomMessage<unknown>): Component[] {
+		const details = custom.details as { count?: unknown } | undefined;
+		const count = typeof details?.count === "number" ? details.count : 0;
+		if (count <= 0) return [];
+		return [this.#child(new StrippedToolCallsPlaceholder(count, !this.ctx.hideToolActivity))];
 	}
 
 	#noticeBlock(custom: CustomMessage<unknown>): Component {
@@ -358,7 +416,13 @@ export class UiHelpers {
 		if (options.updateFooter) this.ctx.statusLine.invalidate();
 
 		let turnStartedAt: number | undefined;
-		for (const message of this.ctx.sessionManager.getMessages()) {
+		const messages = this.ctx.sessionManager.getMessages();
+		const replayFrom = compactedTranscriptStart(
+			messages,
+			cfgDisplayCollapseCompacted.get(this.ctx.settings),
+		);
+		for (let index = replayFrom; index < messages.length; index += 1) {
+			const message = messages[index];
 			if (message.role === "assistant") {
 				const [component] = this.addMessageToChat(message, {
 					reuseSettledComponent: options.reuseSettledComponents,

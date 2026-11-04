@@ -140,13 +140,14 @@ async def session_history(connection, ref, params):
     from gateway.session_local_recovery import transcript_target
     # On the loop, as ``attach`` resolves it: a local restore publishes the live entry.
     target = transcript_target(authority, ref)
+    running = authority._handle(ref).execution_state == 'running'
 
     def read():
         from gateway.session_controls import display_projection
         from tui_gateway.history_paging import history_page
         rows = authority.db.get_messages_as_conversation(target, include_ancestors=True, include_row_ids=True)
         messages = display_projection(rows, authority.profile_id,
-                                      include_tool_content=include_tool_content)
+                                      include_tool_content=include_tool_content, running=running)
         page, entries, next_cursor, outline = history_page(messages, after=after, limit=limit,
                                                            include_outline=include_outline)
         leaf_id = max((m['row_id'] for m in messages if isinstance(m.get('row_id'), int)), default=None)

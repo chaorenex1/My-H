@@ -205,3 +205,32 @@ def test_deleted_file_soft_deletes_symbols_and_prune_removes_them(
         assert ci.status()["deleted_symbols"] == 0
     finally:
         ci.close()
+
+
+def test_display_mode_off_does_not_disable_the_index_semgrep_layer(
+    code_home, sample_repo, monkeypatch
+):
+    """ADR-9 D12: ``lsp.display.semgrep.mode`` only gates the write path; ``hermes code index``
+    still runs its Semgrep layer whenever ``code_intel.semgrep.enabled`` is on."""
+    import pytest
+
+    pytest.importorskip("ladybug", reason="the [graph] extra is not installed")
+    pytest.importorskip("tree_sitter", reason="the [codegraph] extra is not installed")
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"lsp": {"display": {"semgrep": {"mode": "off"}}}},
+    )
+    calls = []
+    monkeypatch.setattr(
+        "hermes_codegraph.analysis.semgrep_scan",
+        lambda *a, **k: calls.append(1) or {"status": "ok", "findings": []},
+    )
+    with CodeIntelligence.open(
+        root=sample_repo, limits=CodeGraphLimits(semgrep_enabled=True)
+    ) as ci:
+        result = ci.index()
+
+    assert calls and result["semgrep"]["status"] == "ok"

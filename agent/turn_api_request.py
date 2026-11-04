@@ -118,6 +118,9 @@ def build_request_payload(
     from agent.conversation_loop import _redecorate_prompt_cache_for_provider
 
     agent._reset_stream_delivery_tracking()
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        coordinator.reset_stream_state()
     # Per-attempt first-chunk timestamp so a stale value never leaks into post_api_request.
     agent._last_api_first_chunk_at = None
     # api_messages was built for the primary; a fallback (DeepSeek / Kimi / MiMo) may

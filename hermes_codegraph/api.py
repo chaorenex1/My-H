@@ -7,9 +7,11 @@ repository, and never imports a parser or backend at module import time.
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 from typing import Any
 
+from .analysis import IMMEDIATE_TIMEOUT_S
 from .config import CodeGraphLimits
 from .exceptions import CodeGraphError, CodeGraphUnavailableError, LanguageUnsupportedError
 from .languages import (
@@ -18,6 +20,8 @@ from .languages import (
     install_target_gap,
 )
 from .scanner import RepositoryInfo, resolve_repository
+
+logger = logging.getLogger(__name__)
 
 
 class CodeIntelligence:
@@ -261,6 +265,58 @@ class CodeIntelligence:
             path=path, rule=rule, severity=severity, limit=limit,
         ).to_dict()
 
+    def get_live_diagnostics(
+        self, *, path: str, rule: str | None = None,
+        severity: str | None = None, limit: int = 50,
+    ) -> dict[str, Any] | None:
+        """Scan ``path``'s current bytes with Semgrep and return the findings (ADR-9 D8).
+
+        None when the query cannot be answered live: Semgrep disabled, unavailable, or the path is
+        outside the repository — the caller then falls back to the stored graph and says so.  A live
+        scan never consults ``lsp.display``: explicit tool queries are not the automatic write path.
+        """
+        if not (self.limits.enabled and self.limits.semgrep_enabled):
+            return None
+        from pathlib import Path
+
+        root = Path(self.repository.root)
+        requested = Path(path)
+        absolute = (requested if requested.is_absolute() else root / requested).resolve()
+        try:
+            rel_path = absolute.relative_to(root.resolve())
+        except ValueError:
+            return None
+        if not absolute.is_file():
+            return None
+        from .analysis import semgrep_scan
+
+        try:
+            from hermes_constants import get_hermes_home
+
+            home = get_hermes_home()
+        except Exception:  # health: allow BLE001 -- profile path probe is optional
+            logger.debug("hermes home unavailable for a live Semgrep scan", exc_info=True)
+            return None
+        result = semgrep_scan(absolute.parent, [absolute.name], mode=self.limits.semgrep_mode,
+                              home=home, timeout=IMMEDIATE_TIMEOUT_S)
+        if result.get("status") != "ok":
+            return None
+        findings = [
+            _live_finding(item, rel_path.as_posix())
+            for item in result.get("findings") or []
+            if isinstance(item, dict)
+            and (not severity or str(item.get("severity") or "").lower() == severity.lower())
+            and (not rule or str(item.get("rule_id") or "") == rule)
+        ]
+        findings.sort(key=lambda item: (item["line_number"], item["column_number"]))
+        return {
+            "status": "ok",
+            "source": "live_scan",
+            "path": rel_path.as_posix(),
+            "results": findings[: max(1, min(int(limit), 200))],
+            "total": len(findings),
+        }
+
     def get_changes(
         self, symbol_id: str, *, from_revision: str | None = None,
         to_revision: str | None = None, limit: int = 200,
@@ -445,3 +501,28 @@ def _extras_state() -> tuple[bool, bool, str | None]:
     except Exception:  # health: allow BLE001 -- optional PM store probe; status must work without PM
         target = None
     return graph_available, codegraph_available, target
+
+
+def _live_finding(item: dict[str, Any], rel_path: str) -> dict[str, Any]:
+    """One live Semgrep finding in the stored ``CodeDiagnostic`` shape (paths repo-relative)."""
+    start_line = _positive_int(item.get("start_line"), 1)
+    start_column = _positive_int(item.get("start_column"), 1)
+    return {
+        "file_path": rel_path,
+        "line_number": start_line,
+        "column_number": start_column,
+        "end_line": _positive_int(item.get("end_line"), start_line),
+        "end_column": _positive_int(item.get("end_column"), start_column),
+        "code": str(item.get("rule_id") or ""),
+        "tool": "semgrep",
+        "severity": str(item.get("severity") or "").lower(),
+        "message": str(item.get("message") or ""),
+    }
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default

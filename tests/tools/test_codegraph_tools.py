@@ -108,6 +108,52 @@ def test_code_intel_queries_an_indexed_repo(code_home, tmp_path):
     assert payload["metadata"]["index_status"] == "complete"
 
 
+def test_code_intel_diagnostics_scans_a_named_path_live(code_home, tmp_path, monkeypatch):
+    """ADR-9 D8: an explicit ``diagnostics`` query on a named path scans the current bytes; the
+    stored graph is only a fallback, and the payload says which one answered."""
+    import tools.code_intel_tool as read_tool
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    root = _repo(tmp_path / "repo")
+    with CodeIntelligence.open(root=root, limits=CodeGraphLimits()) as ci:
+        ci.index()
+    monkeypatch.setattr(
+        "hermes_codegraph.analysis.semgrep_scan",
+        lambda *a, **k: {"status": "ok", "findings": [{
+            "path": "mod.py", "rule_id": "python.lang.security.eval", "severity": "error",
+            "message": "Unsafe use of eval.", "start_line": 2, "start_column": 5,
+            "end_line": 2, "end_column": 9,
+        }]},
+    )
+    monkeypatch.setattr(
+        "hermes_codegraph.config.CodeGraphLimits.from_config",
+        classmethod(lambda cls, config=None: CodeGraphLimits(semgrep_enabled=True)),
+    )
+
+    payload = json.loads(read_tool.code_intel_tool(
+        {"action": "diagnostics", "path": "mod.py", "root": str(root)}))
+
+    assert payload["source"] == "live_scan"
+    assert payload["results"][0]["code"] == "python.lang.security.eval"
+    assert payload["results"][0]["line_number"] == 2
+
+
+def test_code_intel_diagnostics_without_a_path_reports_stored_graph(code_home, tmp_path):
+    import tools.code_intel_tool as read_tool
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    root = _repo(tmp_path / "repo")
+    with CodeIntelligence.open(root=root, limits=CodeGraphLimits()) as ci:
+        ci.index()
+
+    payload = json.loads(read_tool.code_intel_tool(
+        {"action": "diagnostics", "root": str(root)}))
+
+    assert payload["source"] == "stored_graph"
+
+
 def test_code_graph_update_refresh_file(code_home, tmp_path):
     import tools.code_graph_update_tool as update_tool
     from hermes_codegraph import CodeIntelligence
@@ -126,3 +172,35 @@ def test_code_graph_update_refresh_file(code_home, tmp_path):
         )
     )
     assert payload["status"] == "patched"
+
+
+def test_code_graph_update_refresh_file_returns_semgrep_findings(code_home, tmp_path, monkeypatch):
+    """ADR-9 D8: ``refresh_file`` with ``semgrep: true`` hands the model the scan's findings (the
+    indexer used to discard them)."""
+    import tools.code_graph_update_tool as update_tool
+    from hermes_codegraph import CodeIntelligence
+    from hermes_codegraph.config import CodeGraphLimits
+
+    root = _repo(tmp_path / "repo")
+    with CodeIntelligence.open(root=root, limits=CodeGraphLimits()) as ci:
+        ci.index()
+    (root / "mod.py").write_text("x = eval('1')\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "hermes_codegraph.analysis.semgrep_scan",
+        lambda *a, **k: {"status": "ok", "findings": [{
+            "path": "mod.py", "rule_id": "python.lang.security.eval", "severity": "error",
+            "message": "Unsafe use of eval.", "start_line": 1, "start_column": 5,
+            "end_line": 1, "end_column": 9,
+        }]},
+    )
+    monkeypatch.setattr(
+        "hermes_codegraph.config.CodeGraphLimits.from_config",
+        classmethod(lambda cls, config=None: CodeGraphLimits(semgrep_enabled=True)),
+    )
+
+    payload = json.loads(update_tool.code_graph_update_tool(
+        {"action": "refresh_file", "path": "mod.py", "semgrep": True, "root": str(root)}))
+
+    assert payload["status"] == "patched"
+    assert payload["semgrep"]["findings"] == 1
+    assert payload["semgrep"]["results"][0]["rule_id"] == "python.lang.security.eval"

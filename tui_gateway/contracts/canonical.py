@@ -289,6 +289,25 @@ canonical_method("session.stats", params=SessionStatsParams, result=SessionStats
                  doc="The session.usage dict on demand: what main's classic CLI read off its agent.")
 
 
+class RecapGenerateParams(Params):
+    session_id: str
+    profile: str | None = None
+
+
+class RecapGenerateResult(Result):
+    """ADR-5 D8: an empty ``text`` with ``skipped`` naming the guard; otherwise the recap line."""
+
+    text: str
+    generated_at: float
+    skipped: Literal["busy", "no_new_turn", "no_agent", "failed"] | None = None
+
+
+canonical_method("recap.generate", params=RecapGenerateParams, result=RecapGenerateResult,
+                 doc="One idle recap over the session's live conversation, for the client's own idle timer: "
+                     "a cache-parity side turn that persists nothing, emits no event and never touches the "
+                     "transcript. `skipped` when the owner refuses (busy, no new turn, no resident agent, failure).")
+
+
 class RollbackSessionDiffParams(Params):
     session_id: str
     profile: str | None = None

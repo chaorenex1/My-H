@@ -17,6 +17,7 @@ still undelivered, which ``agent.turn_stop_gates`` hands to the model as a new m
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 from collections import OrderedDict
 from contextvars import ContextVar
@@ -33,15 +34,50 @@ TURN_END_WAIT = 5.0
 
 
 @dataclass(frozen=True)
-class _Note:
+class Note:
+    """One queued late verdict for ``(owner, path)``.
+
+    ``text``/``files`` are the LSP slot: the model block the legacy delivery paths append
+    (byte-identical to before) and the structured ``details.files`` entries the custom row renders
+    (ADR-9 D2). ``semgrep_text``/``semgrep_files`` are the same fields for the Semgrep source
+    (ADR-9 D8): both sources merge per path inside one row, but keep separate slots so a newer
+    semantic verdict cannot resurrect stale Semgrep findings (and vice versa).
+    """
+
     text: str
     baseline_text: Optional[str]  # pre-edit content the verdict was diffed against
+    files: tuple[dict[str, Any], ...] = ()
+    semgrep_text: str = ""
+    semgrep_files: tuple[dict[str, Any], ...] = ()
+    path: str = ""  # the path the caller wrote, for delivery keys (the queue key is canonical)
+
+    @property
+    def legacy_text(self) -> str:
+        """The text a non-custom session's tool result / turn-end note carries, both sources."""
+        return "\n\n".join(part for part in (self.text, self.semgrep_text) if part)
 
 
-# owner -> {abs path -> note}, oldest owner first
-_QUEUED: OrderedDict[str, OrderedDict[str, _Note]] = OrderedDict()
+# owner -> {canonical path (_path_key) -> note}, oldest owner first
+_QUEUED: OrderedDict[str, OrderedDict[str, Note]] = OrderedDict()
 # owner -> tokens of its checks still running (their verdict lands in _QUEUED or nowhere)
 _PENDING: dict[str, set[object]] = {}
+# (owner, canonical path) -> token of the newest Semgrep scan: an older scan's verdict is stale bytes.
+_SEMGREP_TOKENS: OrderedDict[tuple[str, str], object] = OrderedDict()
+_MAX_SEMGREP_TOKENS = 128
+
+
+def _path_key(path: str) -> str:
+    """Identity of one file in the queue: absolute, symlinks resolved, case-folded on Windows.
+
+    A write can name the same file as ``C:\\Repo\\A.py`` and ``c:\\repo\\a.py`` (or through a
+    symlink); keying by the literal string would queue two notes for one file and paint two cards.
+    The note keeps the caller's path for delivery/display (ADR-9 P3), so the card still matches the
+    tool args that produced it.
+    """
+    try:
+        return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    except (OSError, ValueError):  # an unrepresentable path: never drop the verdict over identity
+        return path
 
 
 @contextlib.contextmanager
@@ -58,49 +94,134 @@ def current_owner() -> Optional[str]:
     return _OWNER.get()
 
 
-def post(owner: str, path: str, text: str, baseline_text: Optional[str]) -> None:
-    """Queue ``text`` (a formatted diagnostics block) for ``owner``.  A note still queued for ``path``
-    (an older check finished while a newer one was starting) is kept in front, with its baseline."""
+def post(owner: str, path: str, text: str, baseline_text: Optional[str],
+         files: Optional[list[dict[str, Any]]] = None) -> None:
+    """Queue the LSP verdict for ``owner``.  A note still queued for ``path`` (an older check finished
+    while a newer one was starting) is kept in front, with its baseline; its Semgrep slot survives
+    untouched.  An empty ``text`` hands the older LSP text back (``restore``)."""
+    entries = tuple(files or ())
+    key = _path_key(path)
     with _LOCK:
         notes = _QUEUED.pop(owner, None) or OrderedDict()
-        older = notes.pop(path, None)
-        if older is not None and older.text != text:
-            text, baseline_text = f"{older.text}\n\n{text}", older.baseline_text
-        notes[path] = _Note(text, baseline_text)
-        while len(notes) > _MAX_PER_OWNER:
-            notes.popitem(last=False)
-        _QUEUED[owner] = notes
-        while len(_QUEUED) > _MAX_OWNERS:
-            _QUEUED.popitem(last=False)
+        older = notes.pop(key, None)
+        semgrep_text, semgrep_files = "", ()
+        if older is not None:
+            semgrep_text, semgrep_files = older.semgrep_text, older.semgrep_files
+            if text:
+                if older.text and older.text != text:
+                    text, baseline_text = f"{older.text}\n\n{text}", older.baseline_text
+            else:
+                text, baseline_text = older.text, older.baseline_text
+            if not entries:  # an empty new set never drops the older structure
+                entries = older.files
+        if text or entries or semgrep_text or semgrep_files:
+            notes[key] = Note(text, baseline_text, entries, semgrep_text, semgrep_files, path)
+        _store(owner, notes)
 
 
-def take(owner: Optional[str], path: str) -> Optional[_Note]:
+def begin_semgrep(owner: Optional[str], path: str) -> object:
+    """Start a Semgrep scan of a freshly written file: invalidate the previous scan's token and drop
+    the stale Semgrep slot (its findings describe bytes this write replaced; ADR-9 D8).  The LSP
+    slot is left in place — the newer LSP check takes it over through :func:`take`."""
+    token = object()
+    if not owner:
+        return token
+    key = _path_key(path)
+    with _LOCK:
+        _SEMGREP_TOKENS.pop((owner, key), None)
+        _SEMGREP_TOKENS[(owner, key)] = token
+        while len(_SEMGREP_TOKENS) > _MAX_SEMGREP_TOKENS:
+            _SEMGREP_TOKENS.popitem(last=False)
+        notes = _QUEUED.get(owner)
+        older = notes.get(key) if notes else None
+        if older is not None and (older.semgrep_text or older.semgrep_files):
+            if older.text or older.files:
+                notes[key] = Note(older.text, older.baseline_text, older.files,
+                                  path=older.path or path)
+            else:
+                notes.pop(key)
+                if not notes:
+                    _QUEUED.pop(owner, None)
+    return token
+
+
+def finish_semgrep(owner: Optional[str], path: str, token: object) -> None:
+    """Retire ``token`` without queueing a verdict (the findings went inline, or there were none)."""
+    if not owner:
+        return
+    key = _path_key(path)
+    with _LOCK:
+        if _SEMGREP_TOKENS.get((owner, key)) is token:
+            _SEMGREP_TOKENS.pop((owner, key), None)
+
+
+def post_semgrep(owner: Optional[str], path: str, token: object, text: str,
+                 files: Optional[list[dict[str, Any]]] = None) -> None:
+    """Queue the Semgrep verdict for ``owner`` unless a newer write of ``path`` superseded this scan.
+    The LSP slot of the same note is preserved, so both sources ride one row."""
+    entries = tuple(files or ())
+    if not owner:
+        return
+    key = _path_key(path)
+    with _LOCK:
+        if _SEMGREP_TOKENS.get((owner, key)) is not token:
+            return
+        _SEMGREP_TOKENS.pop((owner, key), None)
+        notes = _QUEUED.pop(owner, None) or OrderedDict()
+        older = notes.pop(key, None)
+        lsp_text = older.text if older is not None else ""
+        baseline_text = older.baseline_text if older is not None else None
+        lsp_files = older.files if older is not None else ()
+        if lsp_text or lsp_files or text or entries:
+            notes[key] = Note(lsp_text, baseline_text, lsp_files, text or "", entries, path)
+        _store(owner, notes)
+
+
+def _store(owner: str, notes: OrderedDict[str, Note]) -> None:
+    if not notes:
+        return
+    while len(notes) > _MAX_PER_OWNER:
+        notes.popitem(last=False)
+    _QUEUED[owner] = notes
+    while len(_QUEUED) > _MAX_OWNERS:
+        _QUEUED.popitem(last=False)
+
+
+def take(owner: Optional[str], path: str) -> Optional[Note]:
     """Withdraw ``owner``'s undelivered note for ``path``: a newer edit of the file supersedes it and
     diffs against its ``baseline_text``.  The newer check carries it and hands it back to
     :func:`restore` only if it ends with no verdict, so the older errors are not lost."""
     if not owner:
         return None
+    key = _path_key(path)
     with _LOCK:
         notes = _QUEUED.get(owner)
-        return notes.pop(path, None) if notes else None
+        return notes.pop(key, None) if notes else None
 
 
 def restore(owner: Optional[str], path: str, notes) -> None:
-    """Queue ``notes`` (oldest first) withdrawn by :func:`take` again."""
+    """Queue ``notes`` (oldest first) withdrawn by :func:`take` again.  Only the LSP slot is restored:
+    a Semgrep verdict describes bytes the newer write already replaced (``begin_semgrep`` cleared
+    it), so bringing it back would attribute stale findings to the current file."""
     if owner:
         for note in notes:
-            post(owner, path, note.text, note.baseline_text)
+            post(owner, note.path or path, note.text, note.baseline_text, list(note.files))
 
 
-def pop_notes(*owners: Optional[str]) -> list[tuple[str, str]]:
-    """Every queued ``(path, text)`` for ``owners``, oldest first, and clear them."""
-    out: list[tuple[str, str]] = []
+def pop_notes(*owners: Optional[str]) -> list[tuple[str, Note]]:
+    """Every queued ``(path, note)`` for ``owners``, oldest first, and clear them."""
+    out: list[tuple[str, Note]] = []
     with _LOCK:
         for owner in dict.fromkeys(o for o in owners if o):
             notes = _QUEUED.pop(owner, None)
             if notes:
-                out.extend((path, note.text) for path, note in notes.items())
+                out.extend((note.path or key, note) for key, note in notes.items())
     return out
+
+
+def pop_for_agent(agent: Any) -> list[tuple[str, Note]]:
+    """Every queued note owned by ``agent`` (session id first, then task id)."""
+    return pop_notes(*_owners(agent))
 
 
 def track_pending(owner: str) -> object:
@@ -127,9 +248,9 @@ def _owners(agent: Any) -> tuple[Optional[str], ...]:
     return tuple(o if isinstance(o, str) else None for o in owners)
 
 
-def settle_for_agent(agent: Any, timeout: float = TURN_END_WAIT) -> list[tuple[str, str]]:
+def settle_for_agent(agent: Any, timeout: float = TURN_END_WAIT) -> list[tuple[str, Note]]:
     """Turn end: wait up to ``timeout`` for ``agent``'s running checks, then pop every undelivered
-    ``(path, text)`` verdict.  Returns at once when nothing is running."""
+    ``(path, note)`` verdict.  Returns at once when nothing is running."""
     owners = [o for o in dict.fromkeys(_owners(agent)) if o]
     if not owners:
         return []
@@ -141,13 +262,46 @@ def settle_for_agent(agent: Any, timeout: float = TURN_END_WAIT) -> list[tuple[s
 def forward_to_agent(agent: Any) -> None:
     """Move ``agent``'s finished verdicts onto its live-notes queue, which rides the next tool result
     (or the next user turn).  Called right before that tool result is built."""
-    notes = pop_notes(*_owners(agent))
+    notes = pop_for_agent(agent)
     if not notes:
         return
     from agent.plugin_live_notes import queue_plugin_notice
-    for path, text in notes:
-        queue_plugin_notice(agent, f"lsp:{path}", text)
+    for path, note in notes:
+        queue_plugin_notice(agent, f"lsp:{path}", note.legacy_text)
 
 
-__all__ = ["TURN_END_WAIT", "bind_owner", "current_owner", "forward_to_agent", "pop_notes", "post", "restore",
-           "settle_for_agent", "settled", "take", "track_pending"]
+def custom_rows_enabled() -> bool:
+    """True when this session asked for ADR-10 custom rows (omp-ui)."""
+    from agent.lsp.delivery import custom_messages_enabled
+
+    return custom_messages_enabled()
+
+
+def deliver_notes(agent: Any, messages: list, notes: list[tuple[str, Note]],
+                  conversation_history: Any = None) -> Any:
+    """Append, flush and announce one late-diagnostics row (see ``agent.lsp.delivery.deliver``)."""
+    from agent.lsp.delivery import deliver
+
+    return deliver(agent, messages, notes, conversation_history)
+
+
+__all__ = [
+    "TURN_END_WAIT",
+    "Note",
+    "begin_semgrep",
+    "bind_owner",
+    "current_owner",
+    "custom_rows_enabled",
+    "deliver_notes",
+    "finish_semgrep",
+    "forward_to_agent",
+    "pop_for_agent",
+    "pop_notes",
+    "post",
+    "post_semgrep",
+    "restore",
+    "settle_for_agent",
+    "settled",
+    "take",
+    "track_pending",
+]

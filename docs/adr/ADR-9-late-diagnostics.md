@@ -1,68 +1,90 @@
-# ADR-9：Late diagnostics 的移植（`diagnostics.late` ↔ omp `lsp-late-diagnostic`）
+# ADR-9：Late diagnostics 作为 Hermes 的 `lsp-late-diagnostic` custom transcript 行
 
-**状态**：已决定（2026-11-03）。实现未开始。分阶段：**P1** 延迟 verdict 携带结构化
-`files` + `diagnostics.late` 事件 + omp-ui 实时挂载（native 进编辑/写入卡，否则独立块）；
-**P2** 按路径回填原编辑/写入 tool 行、标记 turn-end 已有的 user note 行、标记 carrier tool 行，
-并让 resume 重建；**P3** Semgrep 危险模式诊断作为与 LSP 并列的即时诊断源接入（同一预算/延迟队列/
-工具结果），以及同一 turn 的多条 verdict 合并。P2 依赖 ADR-2 **D8** 的 tool 行
-`display_metadata` 投影与卡片重建。落地前
-`docs/omp-ui-panels-gateway-plan.md` §2.3.2.1 的 Late diagnostics 行保持 `无 producer`（§0.1）；
-客户端不画假块、不把内联诊断伪装成 late block、不用 `notification.show`/`status.update`/`agent.print`
+**状态**：已决定（2026-11-04）。**P1 已落地**（`lsp-late-diagnostic` custom 行、三个投递点、
+`transcript.custom`、omp-ui 渲染、`lsp.display.lsp`）；**P2 已落地**（Semgrep 与 LSP 同预算/同
+`deferred` 队列/同行，`semgrep_diagnostics` 内联字段，`refresh_file(semgrep=true)` 与
+`code_intel(diagnostics, path=...)` 的即时结果，`lsp.display.semgrep`）；**P3 已落地**（同一投递点
+的多条 verdict 合并为一行、`files` 按 `deferred` pop 顺序且同 path 唯一，组内保持 source order、
+壳不二次排序；
+`deferred` 以 `realpath` + Windows `normcase` 作为队列身份，展示/投递仍用调用方的路径；相对写入
+路径按后端 cwd 解析；provider `developer` 角色在 OpenAI/Anthropic 适配器的兼容与内部字段剥离有
+回归；展示/模型行数与字符上限、无效 `lsp.display` 回退与 `hermes lsp status` 输出有回归）。分阶段：**P1** LSP 延迟 verdict 变成
+`role:"custom"` 行（`custom_type:"lsp-late-diagnostic"`），在三个既有投递点追加同一行，发一次
+`transcript.custom` 实时事件，omp-ui 复用 `LateDiagnosticsMessageComponent`，快照/resume 直接由行
+重建；同时接 `lsp.display.lsp`（`off|inline|late|both` + `error|warning`）；**P2** Semgrep 危险模式
+诊断与 LSP 并列（同一 `WRITE_BUDGET`/`deferred` 队列/同一行），内联工具结果与即时查询，并接
+`lsp.display.semgrep`；**P3** 同一 turn 多条 verdict 合并/排序、无效配置回退与展示口径硬化。落地后
+`docs/omp-ui-panels-gateway-plan.md` §2.3.2.1 的 Late diagnostics 行改为 `已接（local）`，
+`gateway/panel_inventory.py` 的 `late_diagnostics` 能力改为 `supported:true`。实现前该行保持原文
+（`无 producer`，§0.1）；客户端不画假块、不用 `notification.show`/`status.update`/`agent.print`
 冒充。
 
-**关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7；
-`docs/appendix-omp-ui-realtime-rpc.md` A.14、A.15；ADR-2（D8 的 tool 行投影、D9 的“无 producer”清单、
-`display_kind`/`display_metadata` 惯例）；ADR-5/ADR-6（对 D9 其它项的转述）；ADR-6 **D1** 的
-`client:"omp-ui"` session 级 opt-in；`hermes_codegraph/analysis.py`（Semgrep 扫描实现）、
-`hermes_codegraph/update.py`、`hermes_codegraph/api.py`、`hermes_codegraph/query.py`、
-`tools/code_graph_update_tool.py`。**本 ADR 不采用 ADR-8 D17 的“仅显式索引 / 写路径不跑”限制**；
-Semgrep 与 LSP 同为即时诊断源，ADR-8 的索引诊断只作为查询面的既有实现保留。
-`agent/lsp/deferred.py`、`agent/lsp/reporter.py`、
-`agent/lsp/edit_check.py`、`tools/file_operations_lint.py`、`agent/tool_executor.py`、
-`agent/turn_stop_gates.py`、`agent/turn_context.py`、`gateway/local_viewer_events.py`、
-`gateway/run_turn_progress.py`、`tui_gateway/contracts/events.py`、
-`tui_gateway/session_history.py`。
+**关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§2.3.2、§2.3.2.1、§4.7、§7；
+`docs/appendix-omp-ui-realtime-rpc.md` A.14、A.15；ADR-10（D1 的 `role:"custom"` +
+`custom_type`/`details`、D8 的客户端单一投影、D9 的模型转换、D11 的 provider 归一化）；ADR-6
+**D1** 的 `client:"omp-ui"` session 级 opt-in；ADR-2 **D9** 的“独立 late-diagnostics”条目；
+ADR-5/ADR-6 对 D9 的转述；ADR-8（D17 的 Semgrep 分层与显式索引限制）。
+`agent/custom_messages.py`、`agent/session_persistence.py`、`hermes_state_messages.py`、
+`agent/lsp/deferred.py`、`agent/lsp/reporter.py`、`agent/lsp/edit_check.py`、`agent/lsp/display.py`、
+`agent/lsp/cli.py`、`hermes_cli/config_defaults.py`,
+`tools/file_operations_lint.py`、`agent/tool_executor.py`、`agent/turn_stop_gates.py`、
+`agent/turn_context.py`、`agent/plugin_events.py`、`tui_gateway/agent_callbacks.py`、
+`gateway/run_turn_runner.py`、`gateway/local_viewer_events.py`、
+`tui_gateway/contracts/events.py`、`tui_gateway/session_history.py`、
+`gateway/panel_inventory.py`；`omp-ui/src/modes/rpc/gateway-session.ts`、
+`omp-ui/src/modes/utils/ui-helpers.ts`；`hermes_codegraph/analysis.py`、
+`hermes_codegraph/update.py`、`tools/code_graph_update_tool.py`、`tools/code_intel_tool.py`；
+`website/docs/user-guide/features/lsp.md`。
 
-**范围**：只讨论 omp-ui ↔ Hermes canonical local gateway。消息平台、Desktop、Ink sidecar、ACP、
-compute-host 的 worker 帧都不设计；不新增模型工具、不改 system prompt、不改 LSP 的检查/节流/预算；
-不把 late diagnostics 变成新的 turn 触发源。`agent/lsp` 的延迟投递语义（谁在何时看到 verdict）由本
-ADR 之外的既有实现负责，本 ADR 只增加展示面。
+**范围**：late custom 行只讨论 omp-ui ↔ Hermes canonical local gateway。消息平台、Desktop、Ink
+sidecar、ACP、compute-host 的 worker 帧都不设计；不新增模型工具、不改 system prompt、不改 LSP 的
+检查/节流/预算。新增 `lsp.display` 展示策略（D12），它只决定诊断面的来源/表面/severity，不改变
+扫描/索引开关；其 `inline`/`severities` 部分作用于所有客户端的 write/patch 工具结果（默认配置下与
+现状逐字一致），`late` custom 行仍只对 omp-ui 生成。
+Late diagnostics **是**模型上下文消息（`display_only:false`），会触发当前 turn 的修复；它**不**在
+turn 已结束后启动一个 idle turn。`agent/lsp` 的延迟投递语义（谁在何时看到 verdict）由本 ADR 之外的
+既有实现负责，本 ADR 只改变“交给模型和展示的形状”。
 
-Semgrep **是**新的即时诊断源，与 LSP 并列：`write_file`/`patch` 的编辑检查同时启动两者，同一
+Semgrep **是**与 LSP 并列的即时诊断源：`write_file`/`patch` 的编辑检查同时启动两者，同一
 `WRITE_BUDGET` 内返回就内联进工具结果，超出预算就进入同一个 `deferred` 队列；模型调用诊断工具时，
 结果作为该 tool 的即时 result 返回。`code_intel.semgrep.enabled` 仍是开关，`mode` 仍决定规则来源；
 不再要求先跑 `hermes code index`/`refresh_file`，也不再沿用 ADR-8 D17 的写路径排除。
 
-**取证口径**：Hermes 侧引用本仓库当前工作树（2026-11-03）。omp 侧源码来自本地 checkout
-`C:\Users\zarag\projects\oh-my-pi`（`@oh-my-pi/pi-coding-agent` 18.14.0）；渲染侧同时核对壳实际安装的
-`omp-ui/node_modules/@oh-my-pi/pi-tui`（18.14.1）。`omp-ui/src/vendor/` 是上游的裁剪副本。本 ADR 不改变
-pi-tui 的渲染分支、文案、折叠与色调；失效清空需要给 `ToolExecutionComponent` 增加一个只清数据的
-`clearLateDiagnostics` seam，这不属于渲染语义改动。
+**取证口径**：Hermes 侧引用本仓库当前工作树（2026-11-04；ADR-10 P1/P5 已落地）。omp 侧源码来自
+本地 checkout `C:\Users\zarag\projects\oh-my-pi`（`@oh-my-pi/pi-coding-agent` 18.14.0）；渲染侧同时
+核对壳实际安装的 `omp-ui/node_modules/@oh-my-pi/pi-tui`（18.14.1）。`omp-ui/src/vendor/` 是上游的
+裁剪副本。本 ADR 不改变 pi-tui 的渲染分支、文案、折叠与色调。
 
 **取代关系（逐条，避免文档互斥）**：
 
-- ADR-2 **D9** 的 **独立 late-diagnostics** 一项（`ADR-2-transcript-blocks.md:215-216`：Hermes 没有等价
-  数据，不造块）由本 ADR 的 D1–D10 取代。D9 的其它项（被剥离工具调用、collab prompt、reply write、
-  自定义/hook 消息）不变。
-- ADR-5:32 与 ADR-6:23 对 D9 的转述中，“独立 late-diagnostics 不变”一句只对本项失效；其余项继续有效。
-- plan §2.3.2.1:445 的 `Late diagnostics | … | 无 producer`：实现 P1 后来源列改为
-  `diagnostics.late`，状态改为 `已接（local）`；P2 完成后 resume 也保留，状态仍为 `已接（local）`。
-  该行“诊断已在工具卡内，不另造块”只描述**内联** verdict；本 ADR 补的是内联之外、写预算耗尽后才到达的
-  verdict，且仍不新增 transcript 行。实现前保持原文。
+- ADR-2 **D9** 的 **独立 late-diagnostics** 一项（`ADR-2-transcript-blocks.md:231-233`：Hermes
+  没有等价数据，不造块）由本 ADR 的 D1–D10 取代。D9 的其它项不变。
+- ADR-5 与 ADR-6 对 D9 的转述中，“独立 late-diagnostics 不变”一句只对本项失效；其余项继续
+  有效。
+- plan §2.3.2.1:445 的 `Late diagnostics | … | 无 producer`：P1/P2 后来源列改为
+  `transcript.custom` + `role:"custom"` 行，状态改为 `已接（local）`。该行“诊断已在工具卡内，不另造
+  块”只描述**内联** verdict；本 ADR 补的是内联之外、写预算耗尽后才到达的 verdict，并且现在**就是**
+  一条真正的 transcript 行。实现前保持原文。
 - plan §2.3.2:403 的 `late-diagnostics-message.ts` 渲染器描述**不变**：组件、折叠行数、展开键位、
-  错误/警告色调都由 pi-tui 决定；变化只在数据生产者与映射层。
-- ADR-2 **D8** 继续适用：`rowToAgentMessage` 读 `display_kind`/`display_metadata`；本 ADR 的 P2 复用
-  该投影，不新增行类型或顶层字段；唯一的投影行为变化是按 `late_diagnostics_carrier.suffix` 做精确
-  尾部剥离，以及让 `display_kind="late_diagnostics"` 的 user 行走 late 分支。
+  错误/警告色调都由 pi-tui 决定；变化只在数据生产者、行与映射层。
+- ADR-10 **D1** 继续是唯一结构：本 ADR 的行走 `role:"custom"` + `custom_type`/`details`/
+  `display`/`display_only`/`attribution`/`legacy_role`；不新增行类型、不写 `display_kind` 作为
+  新 producer 的形状（`display_metadata` 只作为自定义行的持久化信封）。
+- ADR-10 **D9** 的模型转换继续适用：本 ADR 把 `lsp-late-diagnostic` 加入
+  `MESSAGE_CUSTOM_TYPES`，因此该行按 message-bearing custom 映射成 `developer`；`details`/
+  `display`/`attribution` 等在 `PERSISTENCE_ONLY_MESSAGE_FIELDS` 中，永不到达 provider。
 - ADR-6 **D1** 的 `client:"omp-ui"` 是本 ADR 的 session 级门；本 ADR 不新增第二种 opt-in 机制。
   如果 ADR-6 D1 尚未落地，本 ADR 的 P1 随之等待（或作为 D1 的第一个消费者一并落地）。
+- ADR-8 **D17** 的“Semgrep 只在显式索引/`refresh_file` 跑、写路径不跑”**不采用**；Semgrep 与 LSP
+  同为即时诊断源。ADR-8 的索引诊断只作为查询面的既有实现保留。
 
 ## 问题
 
 omp 的 **late diagnostics** 是“编辑/写入工具已经返回之后才到达的 LSP 诊断”的展示面。它同时是
-模型消息和 transcript 区块：模型从 custom message 的 `content` 读到诊断，客户端从 `details.files`
-渲染卡内诊断或独立块。Hermes 已经有“延迟到达的诊断”，但只有模型面，没有对应的结构、事件和客户端
-消费点。两者不是同一条链路，直接照搬会把展示、模型投递、持久化三件事混在一起。
+**模型消息**和 **transcript 区块**：模型从 `role:"custom"` 的 `content` 读到诊断，客户端从
+`details.files` 渲染卡内诊断或独立块。Hermes 已经有“延迟到达的诊断”，但只有模型面，没有对应的
+结构、行和客户端消费点。旧 ADR 试图把它做成“编辑/写入卡的附件 + 独立事件”，绕开了 Hermes 当时
+没有 `custom` 行的事实；这个前提在 ADR-10 P5 之后已经改变。
 
 ### 1. omp 的语义
 
@@ -71,22 +93,38 @@ omp 的 **late diagnostics** 是“编辑/写入工具已经返回之后才到�
 （如 `"2 error(s), 1 warning(s)"`）；`messages` 是已经格式化好的可显示行；`errored` 表示是否含
 severity 1；`isStale()` 在注入时求值，文件被更新 mutation 覆盖就丢弃。
 
-**模型消息**：`buildLateDiagnosticsBatchMessage`（`packages/coding-agent/src/sdk.ts:434-464`）把一批
-entry 合成 `role:"custom"`、`customType:"lsp-late-diagnostic"`、`display:true`、
-`details:{files:[{path,summary,errored,messages}]}` 的消息；`content` 由 `lateDiagnosticTemplate`
-渲染，供模型阅读。消息通过 session 的 `yieldQueue` 注册
-（`sdk.ts:5291-5294`），空闲时 `injectIdle` 走 `agent.prompt(...)`，流式中走
-`injectStreaming`；`isStale` 在真正注入时过滤（`session/yield-queue.ts:43-230`）。所以“late”在 omp
-既是“工具返回后才到”，也是“跨请求注入”：空闲到达会启动一个新 turn。
+**模型消息 + 展示单元**：`buildLateDiagnosticsBatchMessage`
+（`packages/coding-agent/src/sdk.ts:438-464`）把一批 entry 合成：
+
+```text
+role: "custom"
+customType: "lsp-late-diagnostic"      // LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE
+content: <lateDiagnosticTemplate 渲染的 system-notice>
+display: true
+attribution: "agent"
+details: {files: [{path, summary, errored, messages}]}
+```
+
+消息通过 session 的 `yieldQueue` 注册（`sdk.ts:5291-5294`），空闲时 `injectIdle` 走
+`agent.prompt(...)`，流式中走 `injectStreaming`；`isStale` 在真正注入时过滤
+（`session/yield-queue.ts:43-230`）。所以“late”在 omp 既是“工具返回后才到”，也是“跨请求注入”：
+空闲到达会启动一个新 turn。
+
+**模型角色**：omp 的 `convertMessageToLlm`（`packages/agent/src/compaction/messages.ts:214`）把
+`custom`/`hookMessage` 映射成 `developer`；`attribution:"agent"` 保留。也就是说，late diagnostics
+不是纯展示帧，它真的进入模型上下文，下一轮请求就能据此修复。
 
 **持久化**：custom message 进入 session entries，resume 时由
-`ChatTranscriptBuilder#appendCustomMessage` 重建（`packages/tui/src/chat/chat-transcript-builder.ts:606-613`）。
+`ChatTranscriptBuilder#appendCustomMessage` 重建
+（`packages/tui/src/chat/chat-transcript-builder.ts:606-613`），按 `details.files` 重新
+`routeLateDiagnostics`。
 
 **渲染**：
 
-- `LateDiagnosticsMessageComponent`（`packages/tui/src/chat/late-diagnostics-message.ts:69-175`）
-  聚合 `files` 的 `messages`/`summary`/`errored`，复用工具诊断的树渲染器；`summary` 拼进标题，
-  collapsed 最多 5 行（`COLLAPSED_DIAGNOSTICS`），展开跟随全局 tool-output 开关。
+- `LateDiagnosticsMessageComponent`
+  （`packages/tui/src/chat/late-diagnostics-message.ts:69-175`）聚合 `files` 的
+  `messages`/`summary`/`errored`，复用工具诊断的树渲染器；`summary` 拼进标题，collapsed 最多 5 行
+  （`COLLAPSED_DIAGNOSTICS`），展开跟随全局 tool-output 开关。
 - 实时挂载：`routeLateDiagnostics(chatContainer.children, files)` 在 native 渲染下把每个文件交给
   最近的、路径匹配且实现了 `attachLateDiagnostics` 的 tool frame
   （`late-diagnostics-message.ts:38-67`；`tool-execution.ts:993-1013` 用 `displayPath` 比对，
@@ -94,49 +132,67 @@ entry 合成 `role:"custom"`、`customType:"lsp-late-diagnostic"`、`display:tru
   （`modes/utils/ui-helpers.ts:321-334`）。ANSI 路径全部独立成块。
 - 同一文件后续到达的 late 诊断替换该卡上的 `#lateDiagnostics`，不叠加第二块。
 
-### 2. Hermes 现有链路：诊断有了，展示没有
+### 2. Hermes 的现状：有 custom 行，没有 late-diagnostics 行
 
-**内联 vs 延迟**：`write_file` / `patch` 返回前只等 LSP 一个很短的预算（`WRITE_BUDGET = 0.08s`，
-`agent/lsp/edit_check.py:44`；`inline_wait` 取剩余预算）。预算内拿到 verdict，就写进
-`WriteResult.lsp_diagnostics` / `PatchResult.lsp_diagnostics`
-（`tools/file_operations.py:1598-1605`），随 `tool.complete.result` 进入工具卡；预算耗尽则
-`tools/file_operations_lint.py:365-390` 起 done-callback，verdict 进入
-`agent/lsp/deferred.py`。**只有后者是 late**。
+**ADR-10 P5 已落地**：Hermes 现在有 `role:"custom"` 会话行、`custom_type`/`details`/`display`/
+`display_only`/`attribution`/`legacy_role` 六个字段、持久化信封与 provider 转换。关键事实：
 
-**延迟队列**：`deferred.py` 以 `owner`（session id，其次 task id）和绝对路径为键，每个
-`(owner, path)` 只保留一条 `_Note{text, baseline_text}`（`:61-73`）。新编辑 `take` 走旧 note，
-新检查以旧 baseline 做差；旧检查被 supersede 时不 post；没有 verdict 时 `restore`/`carry`
-（`:74-93`、`edit_check.py:134-178`）。“同一文件只报该 session 自己的错误”已有回归测试
-（`tests/agent/lsp/test_write_never_waits_on_lsp.py`）。
+- 生产者只在 `custom_messages:true` 的会话写 `role:"custom"`（ADR-10 D9）；omp-ui 的
+  `session.create` 带 `{client:"omp-ui", custom_messages:true}`
+  （`omp-ui/src/modes/rpc/gateway-session.ts:1534-1541`）。Desktop/Ink 会话保留 legacy 行。
+- `agent/custom_messages.py::project_for_api`（`:193-225`）把 message-bearing custom 映射成
+  `developer`（`skill-prompt`/`collab-prompt` 且 user 归因→`user`）；`display_only:true` 丢弃；
+  `custom_type` 必须在 `MESSAGE_CUSTOM_TYPES`（`:37`）里才会被当作 message-bearing。
+- 持久化：`agent/session_persistence.py:254-260` 把六个字段带进 writer；
+  `hermes_state_messages.py::_message_row_params` 调
+  `agent.custom_messages.storage_metadata` 放进 `display_metadata["_custom_message"]`；读取时
+  `lift_stored_fields` 抬回顶层。`messages.role` 白名单已经包含 `custom`
+  （`hermes_state_runtime.py:834`）。
+- wire：`tui_gateway/session_history.py::_history_to_messages`（`:481`）对 custom 行调用
+  `_custom_message`（`:306`），输出 `role:"custom"` + `custom_type`/`details`/`display`/
+  `display_only`/`attribution`/`legacy_role`/`row_id`；`display_kind`/`display_metadata` 不出网关。
+- 客户端：`rowToAgentMessage`（`omp-ui/src/modes/rpc/gateway-session.ts:552-565`）对 custom 行走
+  `customRowToMessage`；`#emitCustomMessage`（`:1264-1272`）按 `row_id` 去重，live 与快照不会画
+  两块；`addMessageToChat` 的 custom 分支按 `customType` 选组件
+  （`omp-ui/src/modes/utils/ui-helpers.ts:204-241`）。
 
-**投递点**（都是模型面，没有 UI 事件）：
+**LSP 延迟 verdict 的现状**：
 
-1. 下一个工具结果：`agent/tool_executor.py:1160` 在 append 前调用 `forward_to_agent`，note 被
-   `queue_plugin_notice` 放进 live-notes，随后 `attach_to_tool_message` 追加到该 tool result 尾部
-   （`agent/plugin_live_notes.py:30-55`）。
-2. 下一个用户 turn：`agent/turn_context.py:870` 在 turn 开始时把尚未投递的 verdict 并进 plugin
-   notice，随用户消息注入。
-3. turn 结束：`agent/turn_stop_gates.py:154-176` 调 `settle_for_agent`，最多等
-   `TURN_END_WAIT = 5.0s`，把仍未投递的 verdict 作为一条以 `[System note: ...]` 开头、`role:"user"`
-   的 note 返回，由 `apply_stop_gates` append；超过 5s 的 verdict 留给下一个用户 turn。
-
-**只有文本**：`_queue_late_verdict` 用 `report_for_file` 生成
-`<diagnostics file="...">ERROR [l:c] …</diagnostics>`，`deferred.post` 只存字符串和 baseline
-（`tools/file_operations_lint.py:393-417`）。`reporter.py` 的 `_sanitize_field` 会 HTML 转义
-`< > &` 并截断，因为这是要嵌进模型 `<diagnostics>` 块的内容。展示层如果直接复用这段文本，会显示
-`&lt;` 等实体，也会把“模型文本”当成“展示文本”。
-
-**没有 UI 面**：`tui_gateway/contracts/events.py` 没有 diagnostics 事件；`local_viewer_events.wire`
-只装工具/思考/状态/桌面等 sink（`gateway/local_viewer_events.py:34-74`）；omp-ui 的
-`#notificationHandlers` 没有对应条目，未知事件被表查找静默忽略
-（`omp-ui/src/modes/rpc/gateway-session.ts:798-831`）。`LateDiagnosticsMessageComponent` 已在安装的
-pi-tui 中，缺的是数据、事件与挂载。
+- 内联 vs 延迟：`write_file`/`patch` 返回前只等 LSP 一个很短的预算（`WRITE_BUDGET = 0.08s`，
+  `agent/lsp/edit_check.py:45`；`inline_wait` 取剩余预算）。预算内拿到 verdict，就写进
+  `WriteResult.lsp_diagnostics` / `PatchResult.lsp_diagnostics`
+  （`tools/file_operations.py:1598-1605`），随 `tool.complete.result` 进入工具卡；预算耗尽则
+  `tools/file_operations_lint.py:365-390` 起 done-callback，verdict 进入 `agent/lsp/deferred.py`。
+  **只有后者是 late**。
+- 延迟队列：`deferred.py` 以 `owner`（session id，其次 task id）和绝对路径为键，每个
+  `(owner, path)` 只保留一条 `_Note{text, baseline_text}`（`:41-46`）。新编辑 `take` 走旧 note，
+  新检查以旧 baseline 做差；旧检查被 supersede 时不 post；没有 verdict 时 `restore`/`carry`
+  （`:74-93`、`edit_check.py:134-178`）。“同一文件只报该 session 自己的错误”已有回归测试
+  （`tests/agent/lsp/test_write_never_waits_on_lsp.py`）。
+- 投递点（都是模型面，没有 UI 行/事件）：
+  1. 下一个工具结果：`agent/tool_executor.py:1163` 在 append 前调用 `forward_to_agent`，note 被
+     `queue_plugin_notice` 放进 live-notes，随后 `attach_to_tool_message` 追加到该 tool result
+     尾部（`agent/plugin_live_notes.py:30-55`）。
+  2. 下一个用户 turn：`agent/turn_context.py:866-889` 在 turn 开始时把尚未投递的 verdict 并进
+     plugin notice，随用户消息注入。
+  3. turn 结束：`agent/turn_stop_gates.py:158-176` 调 `settle_for_agent`，最多等
+     `TURN_END_WAIT = 5.0s`，把仍未投递的 verdict 作为一条以 `[System note: ...]` 开头、
+     `role:"user"` 的 note 返回，由 `apply_stop_gates` append（`:282`）；超过 5s 的 verdict 留给
+     下一个用户 turn。
+- **只有文本**：`_queue_late_verdict` 用 `report_for_file` 生成
+  `<diagnostics file="...">ERROR [l:c] …</diagnostics>`，`deferred.post` 只存字符串和 baseline
+  （`tools/file_operations_lint.py:395-417`）。`reporter.py` 的 `_sanitize_field` 会 HTML 转义
+  `< > &` 并截断，因为这是要嵌进模型 `<diagnostics>` 块的内容。展示层如果直接复用这段文本，会显示
+  `&lt;` 等实体，也会把“模型文本”当成“展示文本”。
+- **没有 UI 面**：`tui_gateway/contracts/events.py` 没有 late-diagnostics 事件；
+  `gateway/panel_inventory.py:298-303` 仍把 `late_diagnostics` 标为 `UNSUPPORTED`；omp-ui 的
+  `#notificationHandlers`（`gateway-session.ts:979-1025`）没有对应条目，未知事件被表查找静默忽略。
 
 **Semgrep 危险模式诊断的现状**：
 
 - 扫描实现已有：`code_intel.semgrep.enabled` 默认 `false`，`mode=auto` 从 registry 拉规则，
   `mode=custom_dir` 只读 `HERMES_HOME/code-intelligence/semgrep/`；
-  `hermes_codegraph/analysis.py::semgrep_scan` 已经在内存里返回
+  `hermes_codegraph/analysis.py::semgrep_scan`（`:115-205`）已经在内存里返回
   `{path, rule_id, severity, message, start_line, start_column, end_line, end_column}` 的
   `findings`，不执行仓库代码、不写文件、`--metrics=off`。
 - 当前只在 `hermes code index` / `refresh_file(semgrep=true)` 里调用；`indexer._run_semgrep`
@@ -146,419 +202,480 @@ pi-tui 中，缺的是数据、事件与挂载。
 - `code_intel` / `hermes code diagnostics` 能查询已写入的 `CodeDiagnostic`；当前 schema 没有
   Revision 字段，查询结果不保证对应当前字节。因此**展示层不能靠按 path 查询旧图来冒充即时诊断**；
   即时诊断必须来自刚刚对当前字节执行的扫描。
-- 没有 UI 事件：Semgrep 结果只进图或查询，不会出现在编辑卡/工具卡。
+- 没有 UI 行/事件：Semgrep 结果只进图或查询，不会出现在编辑卡/工具卡。
 
 本 ADR 不沿用 ADR-8 D17 “只有显式索引才跑、写路径不跑”的限制：既然模型调用工具和写入工具都能
 即时得到 LSP 诊断，Semgrep 也应作为**同一诊断链路的即时源**，而不是等用户手动索引。代价是每次
 编辑可能多一次扫描；由 `code_intel.semgrep.enabled`、`mode`、超时和延迟队列控制。
 
-**兼容约束**：
+### 3. 旧 ADR 的“附件/事件”方案为什么不够
 
-- 模型面投递已经定型，且两条路形状不同：下一个工具结果把 note 追加在该 tool result 的 `content`
-  尾部（不新增消息）；turn end 则追加一条 durable `role:"user"` 行
-  （`agent/turn_stop_gates.py:282`，`_late_lsp_verdicts` 返回的 note），**它是一条模型可见的真实
-  user row，当前在客户端画成用户气泡**。改成 omp 的 custom message 会改变模型上下文和 prompt cache
-  的前缀，不是展示层可以决定的事；本 ADR 只给这条已有行加展示类型，不新增第二条 note 行。
-- `display_metadata` 是纯展示列：写入时随消息持久化，送给 provider 前由
-  `PERSISTENCE_ONLY_MESSAGE_FIELDS` 剥掉（`agent/message_metadata.py:46-54`）；resume 投影在
-  `tui_gateway/session_history.py:341-345` 原样带出。它适合承载 late diagnostics 的结构化载荷。
-- 没有“只展示、不进模型”的行类型：`display_kind="hidden"` 会从展示投影中消失
-  （`session_history.py:315-318`），其它 `display_kind` 行仍在模型历史里。因此不能为 late
-  diagnostics 新造一条独立行而不让模型重复读到同一段诊断。
+旧 ADR 把 late verdict 做成“编辑/写入卡的附件 + 独立展示块”，模型面仍走 tool-result 尾部文本或
+turn-end 的 user note。它在 ADR-10 P5 之后不再是正确形状：
 
-### 3. 直接照搬会错的地方
+- 它需要 `path -> tool_call_id` 映射、`display_metadata.late_diagnostics`、
+  `late_diagnostics_carrier.suffix` 精确剥离、客户端 path→files 快照、`removed_paths` 和
+  `clearLateDiagnostics` seam；这些复杂度全部来自“没有自己的行”。
+- 模型看到的是 tool-result 文本或一条 user row，展示层看到的是另一份 metadata；两者必须靠
+  suffix/路径约定对齐，任何漂移都会让卡上多显示一份 note 或让块消失。
+- 它不能自然满足“触发修复”：turn-end 的 note 是 user row，不是 omp 的 custom→developer；模型
+  能读，但形状与 omp 不一致，且展示层只能重标这条已有行。
+- resume/rebuild 必须靠 metadata 回填或壳快照；而 custom 行本来就是 durable history，快照、
+  实时、rebuild 三者可以共用一套投影。
 
 | 做法 | 结果 |
 |---|---|
-| 把 late verdict 做成新的 `role:"custom"` 行（omp 原样） | 模型会在 tool result 的 note 之外再读一遍同一诊断；prompt cache 与消息交替都改变 |
-| 解析 tool result 里的 `<diagnostics>` 文本来生成块 | 模型文本是 HTML 转义的、带 header 的、被 `truncate` 过的；解析脆弱且丢失 severity/结构 |
-| 直接把 `deferred` 的 `text` 填进组件 | 展示 `&lt;`/`&amp;` 实体；路径与消息的截断口径也不属于展示层 |
+| 仍把 late verdict 追加到 tool result 的 `content` 尾部 | 模型能看到，但没有结构化行；UI 只能解析文本；resume/rebuild 无法重建；不是 omp 的 custom 形状 |
+| 只发 `diagnostics.late` 展示事件 + tool 行 metadata | 模型面没有新行；需要 path→call id、suffix 剥离、shell 快照、`removed_paths`；resume 不天然 |
+| 新造 `role:"diagnostics"` / 独立行类型 | provider 与 ADR-10 的 custom 投影都不认识；必须再造一套转换与客户端分支 |
+| 把 late 行做成 `display_kind="hidden"` 的展示行 | 行会被展示投影丢弃；不加 hidden 又会让模型读不到或重复读 |
+| 直接在客户端解析 tool result 里的 `<diagnostics>` 文本 | HTML 转义、header、truncate 都使解析不可靠；会丢 severity/source/code |
 | 只在客户端本地再跑一次 LSP | 客户端没有写入权威，也没有服务端 snapshot；会得到与模型不同步的诊断 |
-| 把内联 `lsp_diagnostics` 也画成 late block | 内联 verdict 已经在编辑卡里；重复块违反“一个事实一次” |
+| 把内联 `lsp_diagnostics` 也做成 late 行 | 内联 verdict 已经在编辑卡里；重复行违反“一个事实一次” |
 | 用 `notification.show`/`status.update`/`agent.print` 转达 | 只会得到 toast/状态行；没有 `LateDiagnosticsMessageComponent` 的折叠、路径匹配与卡内挂载 |
-| 把 late block 写成一条 `display_kind="hidden"` 的展示行 | 行会被展示投影丢弃；若不加 hidden，又会被模型读到，形成重复 |
-| 忽略 turn-end 已经追加的 user row，另画一个结构化块 | 该 user row 是模型可见的；另画一块会与用户气泡重复。应给这条已有行加 `display_kind`/`display_metadata`，让壳把它画成 late block |
-| 保留 carrier tool result 尾部的 note 文本在 resume 投影里 | 若 carrier 是 `write_file`/`patch`，卡片会同时出现原始 note 与结构化块；必须用 `late_diagnostics_carrier.suffix` 在展示投影里剥掉 |
-| 在 `post()` 时就发事件 | verdict 可能被新编辑 supersede、被 turn-end 丢弃、或在进程退出前从未投递；UI 会显示模型从未看到的内容 |
-| 对所有本地 viewer 都发事件 | TUI/Desktop/附件没有消费点；还会为它们写展示元数据。用 ADR-6 的 `client:"omp-ui"` 收窄 |
-| 让 late diagnostics 启动一个新 turn（omp 的 idle `agent.prompt`） | 改变 Hermes 的 turn 语义、计费与用户预期；展示层不得触发模型调用 |
-| 沿用 ADR-8 D17 的“只有显式索引才跑 Semgrep，写路径不跑” | 模型/用户在一次编辑后拿不到危险模式诊断；与“Semgrep 和 LSP 一样是即时诊断”矛盾 |
+| 让 late diagnostics 启动一个 idle turn（omp 的 `injectIdle`） | 改变 Hermes 的 turn 语义、计费与用户预期；本 ADR 只在 turn-end 继续当前 turn |
+| 把 Semgrep 只当展示、不放进模型上下文 | 模型看不到危险模式，无法在同一 turn 修正；与“Semgrep 和 LSP 一样是即时诊断”矛盾 |
 | 直接 `get_diagnostics(path=...)` 并当成即时结果 | 旧 Revision 的诊断会混进当前文件；当前 schema 也没有 Revision 字段。即时结果必须来自对刚写入字节的扫描 |
-| 把 Semgrep 只当展示、不放进工具结果/延迟 note | 模型看不到危险模式，无法在同一个 turn 修正；与 LSP 的即时/延迟投递不一致 |
-| 只有 LSP error 才允许出现 Semgrep 行 | LSP 干净但 Semgrep 命中危险模式时会被吞掉；Semgrep 是独立来源 |
-| 把 Semgrep 放在 LSP 预算之外、每次都同步等待 | 一次编辑会被 Semgrep 拖住；必须复用同一 `WRITE_BUDGET`/`deferred` 机制，超时走延迟 |
 
 ## 决策
 
-### D1. 移植为“编辑/写入卡的附件 + 独立回退”，不是新的 transcript 行
+### transcript 行在 Hermes 中支持 omp 的 `custom` 角色
 
-- **LSP 部分**只描述**已经投递给模型**的 deferred verdict；**P3 的 Semgrep 部分**是同一诊断链路的
-  即时源，见 D10。两者都不改 system prompt、不启动 turn。**LSP 不新增模型消息、不改任何模型可见的
-  `content`**；Semgrep 会向已有工具结果/延迟 note 增加诊断行（D10），但不新增消息类型。展示元数据
-  只写 `display_metadata`（turn-end 已有的 user note 行还加 `display_kind`，见下一条）。
-- native 渲染复用 `routeLateDiagnostics`：按路径命中最近的编辑/写入 tool frame，调用
-  `ToolExecutionComponent.attachLateDiagnostics`。没有命中（卡已滚出、被压缩、ANSI 路径、resume
-  缺卡）才创建 `LateDiagnosticsMessageComponent` 独立块。
-- **V4A patch 例外（独立块，与 omp 一致）**：`patch(mode="patch")` 的目标路径在 V4A 文本里
-  （`tools/file_tools.py:959-961, 971-977`），args 不承载这个多文件列表；`ToolExecutionComponent.
-  matchesPath` 只读 `args.path`/`file_path`/`edits[].path`/`files[].path`
-  （`tool-execution.ts:977-996`）。omp 的 `apply_patch`/`hashline` schema 也只有 `{input}`
-  （`packages/coding-agent/src/edit/schemas.ts:33-40`），其 `#targetPaths` 同样匹配不到，所以 omp 对
-  这类编辑也落独立块。**本 ADR 保持同一行为：V4A 永不 attach，不新增 seam；卡内挂载只承诺
-  `write_file` 与 `patch(replace)`。** 不要为此在壳里解析 V4A 或伪造 `files` 参数。
-- **turn-end 行（P2）**：`_late_lsp_verdicts` 已经追加一条 `role:"user"` 的 durable note
-  （`agent/turn_stop_gates.py:282`）。对 omp-ui，这条已有行在 append 时带
-  `display_kind="late_diagnostics"` 与 `display_metadata.late_diagnostics.files`（由 local-viewer
-  presenter 返回；没有 presenter 时保持当前普通 user 行），壳把它画成结构化 late block，而不是用户
-  气泡。**不新增第二条行**；模型仍读同一 `content`。
-- **carrier tool 行（P2）**：下一个工具结果承载 note 时，仍把文本追加在该 tool result 的 `content` 尾部
-  （模型面逐字不变）。对 omp-ui，同一条 tool 消息的 `display_metadata` 记
-  `late_diagnostics_carrier = {files, suffix}`；`session_history` 的展示投影只把 `suffix` 从
-  `content` 里剥掉，resume 不会在卡片正文里重复 note。origin 编辑卡另由 `late_diagnostics.files`
-  生成结构化块。
-- 不在网关或客户端重新计算“哪个卡属于这次编辑”；路径匹配与 `findLast` 语义由 pi-tui 决定。
-  V4A patch 是已知例外，见上一条，不在 P1/P2 内补匹配逻辑。
-- 内联 `lsp_diagnostics`/Semgrep 结果留在工具结果里，不重复发 late 事件；两者的 late 结果都只由
-  `deferred` 的投递点产生。模型主动调用诊断工具得到的 Semgrep result 是即时工具结果，不走 late。
+#### D1. 唯一结构：`role:"custom"` + `custom_type:"lsp-late-diagnostic"`
 
-理由：Hermes 已经把延迟 verdict 以“附着在下一个工具结果”的方式交给模型；展示面最自然的对应物是
-同一张编辑卡的诊断区，而不是复制一条 omp custom message。turn-end 的 note 行是既有事实，展示层只能
-重标它，不能忽略它再画一块。这样既不重复模型上下文，也不新增行类型。
-
-### D2. 结构化 verdict 在 `deferred` 源头生成；模型文本逐字不变
-
-`_Note` 增加 `files: tuple[LateDiagnosticFile, ...]`（正常只有一项，与 path 对应）。
-`deferred.post` 的签名扩展为 `post(owner, path, text, baseline_text, files)`；`take`/`restore`/
-`pop_notes` 原样携带。`forward_to_agent` 与 `settle_for_agent` 的返回值增加 `files`，或返回一个
-`DeliveredNote{path, text, files}`；具体形状是实现点，但**LSP 部分的 `text` 必须保持当前字节**；
-P3 的 Semgrep 行是 D10 额外合并进 `files`/note 的内容，不改变已有 LSP 行。
-
-`files` 的字段与 omp 的 `LateDiagnosticsFile` 对齐：
+每批 late verdict 生成一条**真正的 transcript 行**，形状与 omp 的
+`CustomMessage<LateDiagnosticsDetails>` 对齐：
 
 ```text
-{path: string, summary: string, errored: bool, messages: string[]}
+role: "custom"
+custom_type: "lsp-late-diagnostic"
+content: "<system-notice> Diagnostics for the files you edited: ... </system-notice>"
+display: true
+display_only: false
+attribution: "agent"
+legacy_role: "user"
+details: {files: [{path, summary, errored, messages}, ...]}
 ```
 
-- `path`：`deferred.post` 收到的绝对路径（`os.path.abspath` 已在上游完成）。
-- `messages`（LSP 部分）：与模型块同一批诊断、同一 `DEFAULT_SEVERITIES`（当前只有 ERROR）、同一
-  `MAX_PER_FILE`/`MAX_TOTAL_CHARS` 上限；但必须是 **pi-tui 可解析的展示行**，不能用模型块的
-  `ERROR [12:5] …` 格式，也不能直接复用 `reporter.format_diagnostic`。`formatDiagnostics` 的
-  `parseDiagnosticMessage` 只接受
-  `path:line:col [severity] ([source] )?message( (code))?`（`render-utils.ts:510-524`）：
-  `severity` 小写，`source` 在 message 前，`code` 在最后。展示行因此形如
-  `C:\repo\src\app.ts:12:5 [error] [typescript] Type 'string' is not assignable … (2322)`。
-  路径、message、source、code 与模型侧用同一套纯文本 sanitizer（控制字符、CR/LF、长度上限；
-  **不做 HTML 转义**），绝不复用 `<diagnostics>` 包裹文本。无法解析的行会落入 `unparsed`，
-  丢失按文件分组/排序，验收必须覆盖这一点。
-- **解析/排序口径固定**：每条展示行都必须匹配 `parseDiagnosticMessage`；正常 payload 不允许出现
-  `unparsed` 行（出现即展示缺陷，不是可接受的降级）。`formatDiagnostics` 先按行内 `filePath` 分组，
-  组内按 severity rank（error < warning < info < hint）→ line → col → message 排序；壳不得二次排序、
-  过滤或改写。`path` 可以带 Windows 盘符冒号（`C:\...`），懒匹配已验证可用；验收加 Windows 路径
-  用例。
-- **行内 path 与 `files[].path` 逐字一致**：每个 `messages` 行解析出的 `filePath` 必须与该文件项的
-  `files[].path` 完全相同（同一绝对路径、同一分隔符/大小写口径）。`formatDiagnostics` 按**行内
-  path** 分组建树，`routeLateDiagnostics` 按 **`files[].path`** 挂卡；两者不一致会出现“挂到 A 卡、
-  树里显示 B 路径”或同一文件被拆成两组。`summary`/`errored` 也按同一路径口径计算，不能一边用
-  绝对路径、一边用 `displayPath` 后的相对路径。
-- `summary`：对同一批过滤后的诊断计数，复刻 omp 的复数形式（`"2 error(s)"`、`"1 warning(s)"`；
-  多个用 `", "` 连接）。P1 只会有 error；未来放开 severity 时无需改组件。
-- `errored`：是否存在 severity 1。
-- 如果过滤后没有诊断（`report_for_file` 返回空），现有代码不会 `post`，因此也不会产生事件。
-  不要为“clean”造一个空块。
+- `custom_type` 用 omp 的常量值 `"lsp-late-diagnostic"`
+  （`packages/tui/src/chat/messages.ts:23` 的 `LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE`），不是
+  `"late-diagnostics"` 或 `"diagnostics.late"`。
+- `display_only:false`：这是 message-bearing 行，必须进入模型上下文；`details` 只用于展示。
+- `content` 是模型读到的唯一字节，由 `details.files` 渲染；`details` 本身在
+  `PERSISTENCE_ONLY_MESSAGE_FIELDS` 中，provider 永远不会看到。
+- `attribution:"agent"`，`legacy_role:"user"`：与 omp 一致；客户端只读 `custom_type`/`details`，
+  不解析 `legacy_role`。
+- 生产者只在 `active_policy().custom_messages` 为 true 的会话写这个形状
+  （`agent/adviser_delivery.py:133-155`、`agent/todo_reminder.py:169-184` 是同一惯例）；其它会话
+  保持现有 tool-result 文本 / user note，默认 `lsp.display` 下逐字不变（显式配置时按 D12 过滤）。
 
-`reporter.py` 增加一个纯展示格式化入口（例如 `display_lines_for_file(diagnostics, …)`），
-`report_for_file` 复用它来避免两套 line/truncate 逻辑；模型侧继续在返回的块上做 HTML 转义。
-如果实现时发现复用会改变模型文本，宁可保留两个小函数，也不要让模型文本漂移。
+模型转换：把 `"lsp-late-diagnostic"` 加入
+`agent/custom_messages.py::MESSAGE_CUSTOM_TYPES`（`:37`）。这样
+`project_for_api`（`:193-225`）会把它按 message-bearing custom 映射成 `developer`，与 omp 的
+`convertMessageToLlm` 一致。**不加这个集合项，行会被 `project_for_api` 丢弃，模型永远看不到诊断，
+“触发修复”就不成立**。`display_only` 不能为 true，否则同样被丢弃。
 
-### D3. wire 契约：`diagnostics.late` 只送组件需要的四个字段
+`content` 模板（source-neutral，LSP + Semgrep 共用）：
 
 ```text
-event diagnostics.late {
-  files: [
-    {path: string, summary: string, errored: bool, messages: string[]}
-  ]
-  removed_paths?: string[]
+<system-notice>
+Diagnostics for the files you edited:
+{for each file}
+{path} — {summary}
+{for each message}
+{message}
+{/for}
+{/for}
+
+Fix them if they are real, then continue.
+</system-notice>
+```
+
+`content` 与 `details.files[].messages` 使用同一套行格式；`content` 受模型上限
+（`MAX_PER_FILE`/`MAX_TOTAL_CHARS`）约束，可以在末尾追加 `... and N more`（模型可见）；
+`details.files[].messages` 用更大的**显示上限**（例如 `MAX_DISPLAY_PER_FILE = 200`、
+`MAX_DISPLAY_TOTAL_CHARS = 32000`），并**不追加**不可解析的省略行（D2）。`summary` 始终按完整
+过滤集合计数，所以“完整展示”看到的是计数 + 可展开的显示行，模型看到的是同一批诊断的受控子集。
+
+#### D2. 结构化 verdict 在 `deferred` 源头生成；模型文本与展示文本分开
+
+`agent/lsp/deferred.py` 的 `_Note` 增加 `files: tuple[LateDiagnosticFile, ...]`：
+
+```text
+LateDiagnosticFile = {
+    "path": str,        # 绝对路径，与 deferred.post 收到的 path 同一口径
+    "summary": str,     # "2 error(s), 1 warning(s)"
+    "errored": bool,    # 是否含 error
+    "messages": list[str],
 }
 ```
 
-- 事件名用 `diagnostics.late`，不是 `lsp.*`：它是“晚到”的展示语义，不是 LSP 请求/响应。
-- `removed_paths` 是 P3 的失效信号：这些 path 的 late 缓存/卡内附件/独立块必须移除（新的
-  write/patch 使旧 Semgrep 行失效，且没有新的 LSP 文件可替换时）；不在其中的 path 不受影响。
-- **不送** `text`（模型文本）、`baseline_text`、原始 diagnostic dict、`session_id`（envelope 已有）、
-  `tool_call_id`（组件按路径匹配；P2 的持久化在网关内部用 call id）。V4A patch 的目标路径不在 args
-  匹配字段里，按路径匹配不命中，见 D1/D5；本 ADR 不为它开 `tool_call_id` 事件字段。
-- 同一事件内按 pop 顺序排列；同一路径只出现一次（`deferred._QUEUED` 本身按 path 去重）。
-- P3 起 `messages` 可以含 `[semgrep]` 行（D10）；不新增 `source_tool`/`rule_id` 字段，source 与
-  code 已编码在展示行里。没有 Semgrep 结果时形状与 P1 完全相同。
-- 每个 `messages` 行已经截断；整个 payload 仍受 `MAX_PER_FILE` / `MAX_TOTAL_CHARS` 约束。
-- 契约加在 `tui_gateway/contracts/events.py`，`Payload` 默认 `extra="forbid"`；`removed_paths`
-  是可选字段，除它之外不接受额外键。必须同一 PR 内有真实 emitter，否则
-  `registry.assert_complete` 的 orphan 门失败。不能用一个空契约占位。
-- 重新运行 `scripts/gen_gateway_contracts.py` 与 `scripts/gen_panel_inventory.py`，让 omp-ui 的
-  `gateway-contract.generated.ts` 与 `docs/omp-ui-panels.json` 同步。
+`post(owner, path, text, baseline_text, files)`、`take`、`restore`、`pop_notes` 原样携带。
+`text` 保持当前字节，供非 custom 会话的 legacy 投递；custom 会话只读 `files`。
 
-**发送范围**：只在 `local_viewer_turn(turn)` 且 session policy 的 `client == "omp-ui"` 时发布
-（ADR-6 D1）。CLI、TUI、Desktop、消息平台、ACP、one-shot、compute-host 都不发；它们既不消费这个
-组件，也不该为它写展示元数据。客户端的未知事件行为保持“忽略”。
+`agent/lsp/reporter.py` 增加纯展示入口（例如 `display_files_for(path, diagnostics, ...)`），与
+`report_for_file` 共用 severity 过滤和纯文本 sanitizer 的输入口径，但**使用独立的显示上限**
+（`MAX_DISPLAY_PER_FILE`/`MAX_DISPLAY_TOTAL_CHARS`），不复用模型上限，也**不复用 HTML 转义**。
+`elide` 只用于模型 `content` 的整段截断；`details.messages` 不做会破坏行解析的省略行。
 
-### D4. 只在 verdict 真正交给模型时发事件
+- 行格式固定为
+  `path:line:col [severity] ([source] )?message( (code))?`，例如
+  `C:\repo\src\app.ts:12:5 [error] [typescript] Type 'string' is not assignable … (2322)`。
+  `severity` 小写；`source` 在 message 前；`code` 在最后；`line`/`col` 都是 1-based（LSP 的
+  0-based `range.start` 在这里 +1，Semgrep 的 `start_line`/`start_column` 已经是 1-based）。
+- `path`、`message`、`source`、`code` 用纯文本 sanitizer：去控制字符、CR/LF 折叠为空格、单项长度上限
+  （message 300 / code 80 / source 80）；**不做 HTML 转义**。模型侧的 `<diagnostics>` 块继续走
+  `_sanitize_field` + `html.escape`，两者不互相复用输出。
+- 每一行必须匹配 pi-tui 的
+  `parseDiagnosticMessage`（`render-utils.ts:510-524`）；正常 payload 不允许出现 `unparsed` 行。
+  出现即展示缺陷，不是可接受的降级。
+- `summary` 对过滤后的完整集合计数，复刻 omp 的复数形式（`"2 error(s)"`、`"1 warning(s)"`；
+  多个用 `", "` 连接），不因模型截断而少计。模型 `content` 用
+  `MAX_PER_FILE`/`MAX_TOTAL_CHARS`；`details.files[].messages` 用
+  `MAX_DISPLAY_PER_FILE`/`MAX_DISPLAY_TOTAL_CHARS`，只放可解析行，不追加省略行。总字符上限按
+  **整行**截断：达到上限时丢弃最后一条会超限的行，不切半行（切半行会变成 `unparsed`）；
+  `summary` 仍计完整集合。
+- `errored` 为是否存在 `error`（LSP severity 1；Semgrep `error`）。
+- **行内 path 与 `files[].path` 逐字一致**：同一绝对路径、同一分隔符/大小写口径。
+  `formatDiagnostics` 按行内 path 分组件树，`routeLateDiagnostics` 按 `files[].path` 挂卡；两者不
+  一致会出现“挂到 A 卡、树里显示 B 路径”或同一文件被拆成两组。Windows 盘符冒号是合法用例，验收
+  覆盖。
+- `files` 顺序沿用 `deferred` 的 pop 顺序；组内 severity→line→col→message 排序由 pi-tui
+  `formatDiagnostics` 决定，壳不二次排序。
+- 过滤后没有诊断（`report_for_file` 返回空）就不 `post`、不生成行；不为 clean 造空块。
 
-- 事件由 `deferred` 的投递点触发，而不是 `post()`：
-  - `forward_to_agent`：note 已从 `_QUEUED` pop，即将随下一个工具结果交给模型；
-  - `settle_for_agent`：turn-end 等待结束，note 将作为 `role:"user"` 的 note 行交给模型；
-  - 下一个用户 turn 的 `forward_to_agent`：note 将随用户消息注入。
-- 每条被 pop 的 note 只发一次；`forward_to_agent`/`settle_for_agent` 之后 note 已从队列删除，不会重发。
-  被 supersede、被 `result.diagnostics is None` 丢弃、或从未 pop 的 verdict 不发。
-- turn-end 的 5s 超时只 pop 已经 `post()` 的 note；仍在运行的检查还没有 note，它留在
-  `_PENDING`，之后完成时 `post()` 才写入 `_QUEUED`，等下一个 `forward_to_agent`（通常下一个用户
-  turn）再交付。事件也在那个投递点才发。不要为了让 UI 早出现而提前发，也不要把“检查还在跑”说成
-  “note 已在队列”。
-- 事件发布沿用 `TurnRunner._publish_execution` 的 execution generation 校验；generation 不匹配时
-  自然不投递。`local_viewer_events.wire` 安装 sink，`restore` 清除，cached agent 不残留。
-- 发布顺序：sink 在 pop 之后、模型投递路径继续之前调用。native 命中时块挂到较早的编辑卡，顺序不依赖
-  当前工具；未命中时独立块在事件到达处追加，**不为它伪造历史位置**。P3 若需要严格“carrier 之后”的
-  顺序，再由 turn/事件层合并；P1 不引入调度延迟。
-- **独立块位置/时序（P1）**：未被卡接收的文件在事件到达处追加到 transcript 末尾，不插回历史位置，
-  不为“应该在编辑卡后面”而延迟；同一事件内多个未路由文件合成一个
-  `LateDiagnosticsMessageComponent`（组件按 payload 的 `files` 顺序聚合）。native 命中时块出现在较早
-  的编辑卡上，这是路由结果，不是重排。turn-end 与 carrier 的块（P2）留在各自已有行的位置。omp 的
-  idle 注入可以起新 turn，Hermes 不实现，因此跨客户端的到达时刻不承诺一致；不要用延迟/缓冲伪造
-  omp 的时序。rebuild 后的快照重放同样追加在当前末尾（或挂回卡），不回填历史。
-- **Semgrep 不是例外**：D10 让 Semgrep 与 LSP 共用同一个 `WRITE_BUDGET`/`deferred` 队列和投递点；
-  Semgrep-only 的 late verdict 同样在 pop 时发 `diagnostics.late`。模型主动调用诊断工具得到的
-  Semgrep result 是**即时工具结果**，不走 late 队列（见 D10）。
+Semgrep 的 `files` 由 `semgrep_files_for(path, findings)` 生成（D8），与 LSP 的 `files` 按 path
+合并；同一 path 的 `summary`/`errored` 按合并后的 severity 重算。
 
-理由：omp 的 late 消息是在注入时创建的；Hermes 的“注入”是模型投递点。以 pop 为界，UI 与模型看到的
-是同一批、同一时刻仍有效的 verdict，不会显示被 supersede 或从未送达的诊断。
+#### D3. 三个既有投递点都追加同一行，不再改写 tool result / user note
 
-### D5. P2：重标 turn-end 行、回填 origin tool 行、剥离 carrier 的 note 文本
+对 `custom_messages:true` 的会话，late verdict 在以下三个点各追加**至多一条** custom 行（该点
+弹出的所有 path 合并到一条行的 `files`）：
 
-P1 只做实时展示；P2 让 resume 也能重建。**不新增行**，而是给三类已有位置加展示信息：
+1. **下一个工具结果之后**：`agent/tool_executor.py` 仍先构造并 append `tool_message`，但不把
+   LSP note 追加到它的 `content`；在 tool 行 flush 之后，用 `agent/lsp/delivery.py` 的 helper
+   append custom 行、flush、`notify_plugin_message`。模型在下一次 API 调用看到
+   `tool` + `developer`，可以立即修。
+2. **turn 结束**：`agent/turn_stop_gates.py::_late_lsp_verdicts` 返回结构化的 `files`（或整行），
+   不再返回以 `[System note:` 开头的 user note；`apply_stop_gates` 在 interim assistant 行之后
+   append custom 行、flush、notify，然后 `continue_turn=True`。`_MAX_LSP_TURN_END_NOTES = 3`
+   的上限保留。
+3. **下一个用户 turn**：`agent/turn_context.py::_merge_gateway_notes` 不再把 LSP note 折进用户
+   消息的 `content`；它在 `current_turn_user_idx` 之后 append custom 行，由 `_persist_turn_start`
+   的 flush 落库，flush 后（`_row_id` 已存在）再 notify。`plugin_live_notes` 继续只承载插件
+   go-live notice，不再承载 `lsp:*` note。
 
-**（a）turn-end note 行**：这条 `role:"user"` 行已经存在（`turn_stop_gates.py:282`）。对 omp-ui，
-在 append 时就带：
+非 custom 会话（Desktop/Ink/消息平台）继续走现有三条 legacy 路径，默认 `lsp.display` 下模型文本与
+展示逐字不变；显式配置 `lsp.display` 时 inline/late 按 D12 过滤。
+`custom_messages` 标志在投递时由 `gateway.session_policy.active_policy()` 读取（agent 线程可用；
+LSP done-callback 线程不读，只生成 `files`）。
 
-```text
-display_kind = "late_diagnostics"
-display_metadata.late_diagnostics = {files:[...]}
-```
+**顺序与去重**：
 
-由 local-viewer presenter 在 `_late_lsp_verdicts` 返回后生成；没有 presenter（CLI、TUI、Desktop、
-消息平台）时保持当前普通 user 行，展示行为零变化。若实现选择先 append 再 stamp，可用
-`SessionDB.set_latest_matching_message_display_kind(session_id, role="user", content=<note>,
-display_kind="late_diagnostics", display_metadata=...)`（`hermes_state_messages.py:499-516`），但它必须
-在行 flush 之后、且只对 omp-ui 执行；直接 append 时带字段更稳，避免内容匹配和竞态。
+- 同一投递点弹出的多个 path 合成一条行；`files` 按 path 唯一。
+- 同一 path 的新 verdict 在 `deferred.post` 合并，不在客户端叠加第二块。
+- 行 append 后由所在投递点的既有 flush 落库；`_DB_PERSISTED_MARKER` 去重，重复 flush 不会写两次。
+- `row_id` 是 live 事件与快照合并的唯一键；不用 `path + messages` 做内容去重（同一个错误修复后
+  再次出现是合法的，内容去重会吞掉第二个真实块）。
 
-- 该行的 `content` 不变，模型仍读到同一 note；`display_kind` 只影响展示。
-- 客户端不得把它画成用户气泡；它走 late block 的渲染分支。
-- 非 omp-ui 不上这个 `display_kind`，否则会改变其它客户端对一条真实 user row 的解释。
+#### D4. wire 事件 `transcript.custom` 携带行本身，不另造 `diagnostics.late`
 
-**（b）origin 编辑/写入 tool 行**：
-
-- 网关在 `tool.start` 记录 session 级的 `path -> tool_call_id`（最新覆盖）：`write_file` 取
-  `args.path`；`patch` replace 取 `args.path`；V4A 用 `tools/patch_parser.parse_v4a_patch` 拆出
-  `Add File`/`Update File` 的路径。路径按 live session 的 cwd 解析为绝对路径，并与 `deferred.post`
-  的 path 用同一规范化（`realpath`/大小写按平台）比较。映射要有界（例如最近 64 个路径），
-  在 session 结束时释放。
-- late 事件产生时，用 `path` 找到 `tool_call_id`；通过新增的
-  `SessionDB.set_tool_message_display_metadata(session_id, tool_call_id, patch)` 合并写入该 tool 行：
-  `display_metadata.late_diagnostics = {files:[...]}`。合并而不是覆盖 `tool_result_metadata`、
-  `reactions`、`data_use` 等已有键。找不到活动行（rewind/压缩/子代理/one-shot）就跳过，
-  只发实时事件。
-- 同一路径后续 verdict 替换该键的 `files`；与 omp 的 `attachLateDiagnostics` “最新替换”一致。
-- **V4A 例外**：path→`tool_call_id` 映射能把 V4A 的路径写到 patch 行的 `display_metadata`，但客户端
-  重建卡片后仍调用 `attachLateDiagnostics`，它按 args 路径过滤；V4A 的权威目标在 patch 文本里，
-  args 不承载该列表，因此 P2 的 resume 对 V4A 也只按独立块处理。D5 的映射在这里只解决“写哪一行”，
-  不解决“组件接收”；这与 omp 的 `apply_patch`/`hashline` 行为一致，不新增 seam。
-
-**（c）carrier tool 行**：note 文本是追加到某个后续 tool result 的 `content` 尾部交给模型的
-（`plugin_live_notes.attach_to_tool_message`）。对 omp-ui，同一条 tool 消息的
-`display_metadata` 记：
+新增一个通用事件，让 live 与 resume 共用 `rowToAgentMessage`：
 
 ```text
-late_diagnostics_carrier = {files:[...], suffix:"<the exact appended notes suffix>"}
+event transcript.custom {
+  message: TranscriptMessage   # role:"custom" + custom_type/details/display/... + row_id
+}
 ```
 
-`suffix` 是 `attach_to_tool_message` 实际追加的整段 notes（可能同时含 plugin go-live notice；它们也是
-模型面提醒，不是工具输出，展示层一并剥离）。`session_history._history_to_messages` 的展示投影在该键
-存在且 `content` 以 `suffix` 结尾时，把 `suffix` 从**展示用** `content` 中剥掉；模型消息、DB 里的
-`content`、prompt 字节都不动。若追加后 turn budget 又重写了 content（`keep_after_turn_budget`），
-suffix 可能不在尾部：此时不剥，宁可让 resume 卡片多显示一次文本，也不能猜一个位置去切模型内容。
+- 载荷就是 `tui_gateway/session_history._history_to_messages` 对同一行的投影（抽成
+  `custom_row_message(row, text=...)` 单一 helper），不手写第二份形状。
+- 发射点：行已 durable（`_row_id` 已设置）之后，通过 `agent/plugin_events.py::notify_plugin_message`
+  → `tui_gateway/agent_callbacks.py::plugin_row_event` 返回
+  `("transcript.custom", {"message": <row>})`；canonical 的 `_canonical_plugin_event`
+  （`gateway/run_turn_runner.py:529-537`）用 `_publish_execution` 发；sidecar 的
+  `_announce_plugin_row` 改为 `_emit(name, sid, payload)` 或显式 `transcript.custom` 分支，
+  **不得**落进现有的 `else: _emit("message.adviser", …)`。
+- 只对 local viewer 且 session policy 的 `client == "omp-ui"` 发布（ADR-6 D1）；CLI、TUI、Desktop、
+  消息平台、ACP、one-shot、compute-host 都不发。`_canonical_plugin_event`/`_announce_plugin_row`
+  在 `transcript.custom` 分支再检查一次 `active_policy().client`，非 omp-ui 直接 return；不要依赖
+  客户端忽略未知事件来“静默”。客户端未知事件行为保持“忽略”。
+- **不送** baseline、原始 diagnostic dict、`session_id`/`tool_call_id`；模型文本只在行的
+  `text` 里，展示结构只在 `details` 里，`row_id`/`timestamp` 由行携带。
+- 契约加在 `tui_gateway/contracts/events.py`，`Payload` 默认 `extra="forbid"`；同一 PR 必须有真实
+  emitter，否则 `registry.assert_complete` 的 orphan 门失败。重跑
+  `scripts/gen_gateway_contracts.py`，让 omp-ui 的 `gateway-contract.generated.ts` 同步。
+- 不新增 `diagnostics.late`、`removed_paths`、`clearLateDiagnostics`：行是 durable history，没有
+  需要客户端清理的 path 缓存；同一 path 的新 verdict 是一条新行/新卡，旧行保留为历史。
+- 这也是 A.15 里“带 `custom_type`/`attribution` 的 `custom.message`”缺口的通用形状；本 ADR 只
+  消费 `custom_type:"lsp-late-diagnostic"`，其它 custom 类型仍走各自的专用事件或后续变更。
+- 事件名用 `transcript.custom`（与 `transcript.notice` 同族），不沿用 A.15 的占位名
+  `custom.message`；载荷是完整 transcript 行，不依赖名字。若后续统一命名，可在不改载荷的情况下
+  改名。
 
-注意写入顺序：`agent/tool_executor.py` 先跑 `forward_to_agent`/`attach_to_tool_message`，随后
-`prepare_metadata` 才把 `tool_message["display_metadata"] = metadata`。carrier 元数据必须在
-`prepare_metadata` 之后合并（或让 `prepare_metadata` 保留已有键），否则会被整体覆盖。
+#### D5. omp-ui 渲染：一个 `case`，复用现成的组件
 
-- carrier 的 `files` 在 resume 时可用于兜底：如果 origin 卡不在（被压缩/不在窗口），客户端按
-  `files` 的路由规则生成独立块，位置在该 carrier 之后；若 origin 卡在，则挂到 origin 卡，carrier
-  正文因 suffix 已剥而不重复。
-- 持久化只写 `display_metadata`；不改 `content`、不改 `display_kind`（carrier 是 tool 行）、不新增
-  `role`。因此 provider 看到的字节不变（`PERSISTENCE_ONLY_MESSAGE_FIELDS` 已剥离该列）。
-- resume：`_history_to_messages` 已经为 tool 行带出 `display_metadata`
-  （`session_history.py:341-345`）。ADR-2 D8 落地后，客户端重建 tool 卡时读取
-  `display_metadata.late_diagnostics.files`，先尝试 `attachLateDiagnostics`；卡片不接受（ANSI/非编辑
-  工具）就在该卡之后追加独立块。不要在 resume 时重新跑 LSP，也不要把这段文本再插进模型历史。
+`omp-ui/src/modes/utils/ui-helpers.ts::#customBlock`（`:204-241`）增加：
 
-P2 的依赖是 ADR-2 D8 的 tool 行卡片重建；如果该依赖未落地，P1 仍可独立上线，resume 会缺块，plan
-状态在 P2 前保持 `部分`（实时已接、快照未接），不伪装成完整。
+```ts
+case "lsp-late-diagnostic": {
+    const details = custom.details as {files?: LateDiagnosticsFile[]} | undefined;
+    if (!details?.files) return generic();
+    const files = routeLateDiagnostics(this.ctx.chatContainer.children, details.files);
+    if (files.length === 0) return [];
+    const component = new LateDiagnosticsMessageComponent(files);
+    component.setExpanded(this.ctx.toolOutputExpanded);
+    component.setToolActivityVisible(!this.ctx.hideToolActivity);
+    return [this.#child(component)];
+}
+```
 
-### D6. 客户端：一个 shell 事件 + 现成组件，不新增 `#messages`
+- 从 `@oh-my-pi/pi-tui/chat/late-diagnostics-message` 导入
+  `LateDiagnosticsMessageComponent`/`routeLateDiagnostics`/`LateDiagnosticsFile`；壳实际安装的
+  18.14.1 已有该模块（`omp-ui/node_modules/@oh-my-pi/pi-tui/src/chat/late-diagnostics-message.ts`）。
+- `routeLateDiagnostics` 在 native 下把每个文件交给最近的、路径匹配的编辑/写入卡
+  （`ToolExecutionComponent.attachLateDiagnostics`）；未被接收的文件才生成独立块。ANSI 全部独立。
+- **V4A patch 例外（独立块）**：`patch(mode="patch")` 的目标路径在 V4A 文本里，args 不承载这个
+  多文件列表；`matchesPath` 只读 `args.path`/`file_path`/`edits[].path`/`files[].path`。omp 的
+  `apply_patch`/`hashline` schema 也只有 `{input}`，同样匹配不到，所以 omp 对这类编辑也落独立块。
+  本 ADR 保持同一行为：V4A 永不 attach，不在壳里解析 V4A 或伪造匹配。
+- 缺 `details` 时回退 `CustomMessageComponent`（text-only），不画半截诊断树。
+- 不解析 `tool.complete.result.lsp_diagnostics`，不在客户端调用 LSP，不把事件映射成
+  `notification.show`/状态行。
 
-- `omp-ui/src/modes/rpc/gateway-session.ts` 的 `#notificationHandlers` 增加
-  `"diagnostics.late"`：校验 `files` 数组的形状与长度，更新 shell 的 path→`files` 快照（同一 path
-  替换；`removed_paths` 删除），再转成 shell 自有事件 `{type:"late_diagnostics"; files}`。不要把它
-  塞进 `#messages`，也不要写 `sessionManager`。
-- `message.start`/`message_end` 若携带 `display_kind="late_diagnostics"`（或 resume 的快照行），
-  **不要走 user 气泡分支**；这些行由 `diagnostics.late` 事件或 replay 的 late 分支渲染。否则 live
-  与 resume 会各出现一个用户气泡。
-- `omp-ui/src/session/agent-session-events.ts` 的 `AgentSessionEvent` 增加这一支（shell-owned，
-  不放 vendor）。`event-controller.ts` 的 switch 增加 case：
-  1. `routeLateDiagnostics(this.ctx.chatContainer.children, files)`；
-  2. 返回的未路由文件创建 `LateDiagnosticsMessageComponent`，`setExpanded(ctx.toolOutputExpanded)`，
-     `chatContainer.addChild`；
-  3. `requestRender()`。
-- **同一 path 原位替换**：独立块不能只靠传送层 `seq` 去重；同一 path 的后续事件/快照重放必须替换
-  原独立块（或卡内区），并保持**首次出现的位置**。壳维护 `path -> standalone component`（以及该块
-  聚合的 `files`）；替换时用 `TranscriptContainer.insertChildAt(newComponent, oldIndex)` 再移除旧
-  组件（或等价的原位 API），不要 `removeChild` 后 `addChild` 到末尾。若一个块聚合多个 path，替换
-  其中一个就用更新后的 `files` 重建整块、在原 index 插入，并更新其余 path 的映射。卡内区由
-  `attachLateDiagnostics` 的替换语义处理。
-- **色调由组件决定**：`LateDiagnosticsMessageComponent` 与卡内诊断区按 `errored` 选 error，否则
-  warning；P1 的 LSP 只有 ERROR（`DEFAULT_SEVERITIES`），因此 P1 块恒为 error 色调。P3 的 Semgrep
-  允许 warning-only（warning 色调），`info`/`hint` 不进 payload；壳不得按 source 或行内 severity
-  文本自行改色，也不要把 warning-only 当成 error。
-- **会话内 rebuild（壳快照重放）**：`rebuildChatFromMessages()` 先 `chatContainer.clear()`，随后只重放
-  `viewSession.messages`（`interactive-mode.ts:1425-1454, 1521`）。P1 的独立块和已挂到已结算工具卡的
-  late 区都不在 ledger，也不在 `liveComponents` 的保留集合（那里只保 `streamingComponent` 与
-  `pendingTools`）；事件已在 pop 时发过，不会重发。因此壳必须在 `diagnostics.late` 时按 path 累积
-  完整快照（同一 path 替换；`removed_paths` 删除），并在 `rebuildChatFromMessages()`/
-  `renderInitialMessages()` 之后重放 `routeLateDiagnostics`：能命中重建后的卡就挂卡，不能（ADR-2
-  D8 前 settled 卡不重建）就补独立块；独立块按 path 复用/替换，避免与后续同 path 事件重复。
-  **P2 的 SQLite `display_metadata` 只服务 resume 投影，live `message.complete` 不带它，不能当作
-  会话内 rebuild 的恢复来源。** 同一 session 的重绘重放快照；真正切换 session 时清空快照，避免跨
-  会话残留。omp 的 late 是 ledger 里的 custom message，rebuild 会重新 route；壳快照是 Hermes 的
-  等价物。
-- **resume 的 turn-end 行**：`rowToAgentMessage`/replay 遇到
-  `display_kind="late_diagnostics"` 的 user 行时，不调用 `addMessageToChat` 画气泡；它从
-  `display_metadata.late_diagnostics.files` 合成一次 `{type:"late_diagnostics", files}`，走同一
-  路由（能挂卡就挂，否则独立块）。行的 `content` 仍可留给未来的“查看原文”，但默认不画。
-  这条分支必须按 `display_kind` 精确命中，不能靠 `[System note:` 之类文本嗅探。
-- **resume 的 carrier tool 行**：`_history_to_messages` 已按 `late_diagnostics_carrier.suffix` 剥掉
-  正文尾部；客户端若看到 carrier 的 `display_metadata.late_diagnostics_carrier.files`，也只在
-  origin 卡缺失时用它兜底生成独立块，不能在 carrier 卡内再画一遍。
-- **removed_paths**：收到后按 path 删除累加器的 LSP/Semgrep 快照、移除对应独立块，并清空卡上的
-  late 诊断区。`ToolExecutionComponent` 需要一个小而窄的 `clearLateDiagnostics(path?)` seam（或等价的
-  “空快照”语义）；它只清空数据并 `invalidate()`，不改变渲染分支、折叠或色调。不要在壳里重造
-  tool card，也不要用空 `messages` 的普通 `files` 项冒充删除（会留下空 section/计数）。
-- 不做自己的路径匹配；`ToolExecutionComponent.attachLateDiagnostics` 已处理 `displayPath`、
-  `args.path`/`file_path`/`edits`/`files` 与 native 门。
-- 全局 tool-output 展开/隐藏沿用现有 `isExpandable`/`chatContainer.setToolActivityVisible` 机制；
-  组件自身已实现 `setExpanded`/`setToolActivityVisible`。
-- 不在客户端解析 `tool.complete.result.lsp_diagnostics`，不在客户端调用 LSP，不把事件映射成
-  `notification.show` 或状态行。
-- `diagnostics.late` 的 `files` 是每个 path 的**完整快照**（LSP + P3 的 Semgrep）；客户端按 path
-  替换，不做增量拼接。P3 的 LSP/Semgrep 合并由网关的 session 级累加器完成，客户端不解析 source
-  标签。
-- 事件重放去重按 notification 的 `seq`/`replayEpoch`/`executionGeneration`（`GatewayNotification`
-  已有这些字段），**不按 `path + messages` 做内容去重**：同一个错误在修复后再次出现是合法的，内容
-  去重会吞掉第二个真实块。同一张卡上的重复 attach 由 `attachLateDiagnostics` 的替换语义处理。
-- 同一 path 的**新 seq** 不是重复帧：它必须替换原独立块/卡内区，并按 D6 的 path→component 映射在
-  原位置替换；不能因为 path 相同就丢弃，也不能因为 seq 不同就再 append 一个块。只有同一
-  seq/replayEpoch/generation 的重放帧才直接丢弃。
+`gateway-session.ts` 增加 handler：
 
-### D7. 归属、去重、staleness 都以 `deferred` 为准
+```ts
+"transcript.custom": payload => this.#onTranscriptCustom(payload)
+
+#onTranscriptCustom(payload) {
+    const row = isRecord(payload.message) ? payload.message : undefined;
+    if (!row) return;
+    const message = GatewayOmpSession.rowToAgentMessage(row as TranscriptMessage);
+    if (message?.role === "custom") this.#emitCustomMessage(message, asNumber(row.row_id));
+}
+```
+
+`#emitCustomMessage` 已按 `row_id` 去重（`:1264-1272`），快照已带的行不会被 live 事件再 append
+一次。live 与 resume 走同一个 `#customBlock`，没有第二套渲染分支。
+
+#### D6. 持久化与 resume：行就是快照
+
+- 写入：`agent/session_persistence.py:254-260` 已把六个 custom 字段带进 writer；
+  `hermes_state_messages._message_row_params` 用 `storage_metadata` 放进
+  `display_metadata["_custom_message"]`；`append_message` 的 role 白名单已接受 `custom`。
+- 读取：`lift_stored_fields` 抬回顶层；`_history_to_messages` 调 `_custom_message` 输出
+  `role:"custom"`；`display_kind`/`display_metadata` 不出网关。
+- resume：`session.resume` 的 `display_messages` 带这条行；`rowToAgentMessage` → `#customBlock`
+  → `routeLateDiagnostics`/`LateDiagnosticsMessageComponent`。不需要 path→tool_call_id 映射、
+  `late_diagnostics_carrier.suffix`、`set_latest_matching_message_display_kind` 或壳快照。
+- 会话内 rebuild：custom 行在 `#messages`/`#rowMessages` 里，`rebuildChatFromMessages` 重放时
+  仍走 `#customBlock`；卡被压缩/滚出时自动退化为独立块。
+- 压缩/分支：`tui_gateway/methods_session_branch.py::_BRANCH_COPY_FIELDS` 与
+  `tui_gateway/session_workdir.py::_WORKDIR_SEED_FIELDS` 必须把六个 custom 字段
+  （`custom_type`/`display`/`display_only`/`details`/`attribution`/`legacy_role`）加入复制列表，
+  或用 `storage_metadata` 重新生成 `_custom_message` 信封。只复制 `display_metadata` 不够：
+  `_branch_source_history` 走 display 投影，顶层 custom 字段会被丢掉，分支恢复后会退化成
+  text-only。P1 加分支测试。`role:"custom"` 不计入 user turn 的
+  `truncate_before_user_ordinal` 地址空间。`rewind` 按 durable row 截断，行随之删除，不会复活。
+- **同一行只出现一次**：快照与 live 都按 `row_id` 合并；不按字符内容比较。
+- **`display_metadata` 是持久化信封，不是 wire 形状**：客户端永远只读 `custom_type`/`details`，
+  不读 `_custom_message`。
+
+#### D7. 归属、去重、staleness 都以 `deferred` 为准
 
 - `deferred` 已经保证：一个 `(owner, path)` 一条 note；新编辑吸收旧 note；被 supersede 的检查不
-  post；两个 session 编辑同一文件时各自只收到自己的 verdict（`test_write_never_waits_on_lsp.py`）。
-  **LSP 侧**不增加第二个 mutation version / digest；P3 的 Semgrep 是独立来源，另按扫描内容身份 +
-  成功 write/patch 失效（D10），不把两套 digest 混为一个。
+  post；两个 session 编辑同一文件时各自只收到自己的 verdict
+  （`test_write_never_waits_on_lsp.py`）。
 - 事件只发给 note 的 `owner` 对应的 session；owner 是 task id（子代理）时不升级到父会话。子代理的
   late diagnostics 不在 P1 的展示范围内；如需支持，另立变更。
-- 同一路径的多张编辑卡：`routeLateDiagnostics` 用 `findLast` 命中最近一张；这与“新编辑吸收旧
-  verdict”同向。不要改成第一张匹配。
-- 一个 late 事件内的 `files` 按 path 唯一；如果上游将来把多个 session 的 note 合并，必须在
+- 同一路径的多张编辑卡：`routeLateDiagnostics` 用 `findLast` 命中最近一张；与“新编辑吸收旧 verdict”
+  同向。
+- 一个 late 行内的 `files` 按 path 唯一；如果上游将来把多个 session 的 note 合并，必须在
   `deferred` 层拆开，客户端不猜 owner。
+- Semgrep 是独立来源，另按扫描内容身份 + 成功 write/patch 失效（D8），不与 LSP 的
+  digest/baseline 混为一个。
 
-### D8. 降级、失败与安全
-
-- LSP 未启用、workspace 未信任、服务端不回答、预算内无 verdict、verdict 为 clean：都不发事件、不画
-  占位。模型侧仍按现有策略在下一个工具结果/turn end/下一个用户 turn 收到或不收到。
-- 客户端缺失/旧版：未知事件被忽略，模型行为不变。
-- 非 omp-ui：不发事件、不写 `display_metadata`；TUI/CLI/消息平台的输出逐字不变。
-- 诊断文本来自刚解析用户代码的 language server，按不可信处理：纯文本 sanitizer 去掉控制字符、
-  折叠换行、限制 message/code/source/path 长度；事件有总行数/总字符上限；不送文件内容。
-  客户端用 `plainText` 渲染，不解释 HTML/Markdown。
-- 展示写库失败只记 debug，不影响 turn、工具结果或模型投递；失败时实时事件仍可显示。
-- 路径匹配失败（符号链接、大小写、跨 cwd）只导致“不挂到卡”，退化为独立块；不能因此丢事件或
-  改模型文本。实现时统一用 live session cwd 解析，并补 Windows/大小写测试。
-
-### D9. 兼容性与 footprint
-
-- 不新增模型工具、不改 `toolsets`、不改 system prompt、不新增配置项（P1/P2）。`lsp.enabled`、
-  `lsp.wait_timeout`、severity 过滤继续是唯一开关。
-- LSP 的 write 延迟不变：事件在 LSP loop 的 done-callback 之后才产生，写路径仍是
-  `WRITE_BUDGET`/`INLINE_GRACE`。P3 的 Semgrep 在同一预算内并行启动，超时即转 deferred；不允许
-  同步等待完整 Semgrep 扫描。
-- prompt cache：LSP 路径的模型消息/工具结果内容/系统提示都不因本 ADR 改变。P3 的 Semgrep 在
-  `code_intel.semgrep.enabled=true` 时会有意把危险模式行加入工具结果/延迟 note，这是新诊断内容，
-  不是隐藏的 cache 改写；`display_metadata` 与 `diagnostics.late` 事件仍是展示面（metadata 在
-  provider 前剥离）。
-- omp 的“late 到达会启动新 turn”在 Hermes **不实现**：展示层不调用模型，也不把 verdict 变成
-  admission。
-
-### D10. Semgrep 危险模式诊断：与 LSP 并列的即时诊断源（P3）
+#### D8. Semgrep 危险模式诊断：与 LSP 并列的即时源（P2）
 
 - **同一触发/预算**：`write_file`/`patch` 的编辑检查在启动 LSP 的同时启动 Semgrep（要求
   `code_intel.semgrep.enabled=true` 且 `mode` 有效）。两者共用 `WRITE_BUDGET`/`INLINE_GRACE`：
   预算内返回就并入该次写入的工具结果（`WriteResult`/`PatchResult` 的 `lsp_diagnostics` 与新增
-  `semgrep_diagnostics`；或统一 `diagnostics` 但保留 source 区分）；
-  超出预算就进入同一个 `deferred` 队列，按同一投递点（下一个工具结果 / turn end / 下一个用户
-  turn）交给模型和 UI。Semgrep-only 也可以内联/延迟，不要求 LSP 有 error。不要再把 Semgrep 限制成
-  “只有显式 `hermes code index`/`refresh_file` 才运行”。
+  `semgrep_diagnostics`；或统一 `diagnostics` 但保留 source 区分）；超出预算就进入同一个
+  `deferred` 队列，按同一投递点交给模型和 UI。Semgrep-only 也可以内联/延迟，不要求 LSP 有 error。
+- **映射**：每条 finding 变成一行
+  `path:line:col [severity] [semgrep] message (rule_id)`。`path` 必须按扫描 root 解析成与
+  `files[].path` 相同的绝对路径（`semgrep_scan` 返回的是相对路径、`/` 分隔），不能直接把
+  finding 的相对路径写进行内，否则 `formatDiagnostics` 的 filePath 与 `routeLateDiagnostics`
+  的挂卡路径不一致。severity 统一小写；source 固定 `semgrep`；code 用 `rule_id`（截断到 80
+  字符）。LSP 行与 Semgrep 行按 path 合并到同一个 `files` 项；`summary`/`errored` 按合并后的
+  severity 重算。
+- **模型文本**：late 行的 `content` 也包含这些行，因为 Semgrep 已和 LSP 一样是即时诊断，不再只靠
+  `code_intel` 查询。内联工具结果同样包含 `[semgrep]` 行。
+- **工具结果字段**：`WriteResult`/`PatchResult` 增加 `semgrep_diagnostics`（结构化 findings +
+  展示行）；`tool.complete.result` 原样携带，不把 Semgrep 混进 `lsp_diagnostics`（后者语义保持
+  LSP-only）。late note/行的 header 从 “LSP diagnostics introduced by …” 改成 source-neutral 的
+  “Diagnostics introduced by …”，turn-end/自定义行统一用 “Diagnostics for the files you edited …”。
+- **severity 口径**：默认 LSP `[error]`、Semgrep `[error, warning]`；
+  `lsp.display.*.severities` 可在 `error`/`warning` 间覆盖（D12）。`info`/`hint` 不显示；
+  `errored` 只在含 `error` 时为 true，纯 warning 用组件 warning 色调。合并时 `summary` 分别计数、
+  `errored` 取并集。
+- **失效**：每次成功的 write/patch 都重新扫描当前字节；新行按内容身份替换旧 Semgrep 行，不保留
+  旧 finding。Semgrep 关闭、未安装、扫描失败/超时且没有新结果时，新行没有 `[semgrep]` 行；旧行
+  作为历史留在 transcript，**不把旧 finding 合并回来**。不为“清空”发事件，也不修改旧行。
 - **模型调用工具**：模型主动调用诊断/索引工具时，结果作为该 tool 的 **result** 即时返回并显示在
   工具卡，不进入 late 队列。`code_graph_update(refresh_file, semgrep=true)` 现场扫描当前文件；
   `code_intel(diagnostics, path=...)` 在 path 明确且 Semgrep enabled 时也现场扫描并即时返回，
   无 path/未启用时返回已存结果并标注 freshness（不能把旧图冒充当前文件的即时诊断）。
   `refresh_file` 必须把 `semgrep_scan` 的 findings（rule、severity、span、message）放进 result；
   当前 `update.py:95-99` 丢弃返回值是实现缺口，必须修。
-- **映射**：每条 finding 变成一行 `path:line:col [severity] [semgrep] message (rule_id)`。
-  severity 统一小写；source 固定 `semgrep`；code 用 `rule_id`。LSP 行与 Semgrep 行按 path 合并到
-  同一个 `files` 项；`summary`/`errored` 按合并后的 severity 重算。模型文本也包含这些行，因为
-  Semgrep 已和 LSP 一样是即时诊断，不再只靠 `code_intel` 查询。
-- **工具结果字段**：`WriteResult`/`PatchResult` 增加 `semgrep_diagnostics`（结构化 findings +
-  展示行）；`tool.complete.result` 原样携带，不把 Semgrep 混进 `lsp_diagnostics`（后者语义保持
-  LSP-only）。late note 的 header 从 “LSP diagnostics introduced by …” 改成 source-neutral 的
-  “Diagnostics introduced by …”，turn-end note 的 “the language server reported …” 也要改成同样的
-  中性措辞；Semgrep 行自带 `[semgrep]`。这样内联与 late 的模型/展示形状一致。
-- **severity 口径**：Semgrep 展示 `error` 与 `warning`（危险模式通常落在这两级），`info`/`hint`
-  不显示；`errored` 只在含 `error` 时为 true，纯 warning 用组件 warning 色调。LSP 侧继续
-  `DEFAULT_SEVERITIES`（当前只有 ERROR）。合并时 `summary` 分别计数、`errored` 取并集。
-- **失效**：每次成功的 write/patch 都重新扫描当前字节；Semgrep 结果按内容 digest 替换，不保留旧
-  行。Semgrep 关闭、未安装、扫描失败/超时且没有新结果时，必须从卡、origin metadata 和**尚未投递
-  的** deferred note 中移除该 path 的旧 `[semgrep]` 行，不能把旧 finding 合并回来；纯 Semgrep 块用
-  `removed_paths` 清空；即使新结果内联进 tool result，写完成回调也要为“旧 Semgrep 行已消失且没有
-  新的 late files”的 path 发这个信号。LSP 的 `deferred` digest/`take/restore` 不变；Semgrep 用自己的
-  content identity，不混成同一 digest。
-- **持久化**：origin 编辑/写入 tool 行的 `display_metadata.late_diagnostics.files` 保存合并后的
-  LSP+Semgrep 行；`late_diagnostics_carrier` 镜像实际追加到模型 note 的 files（**可以含
-  Semgrep**），`suffix` 仍剥离整段 note；turn-end 行同理带 `display_kind` + metadata。失效时同步
-  删除持久化的 `[semgrep]` 行。
 - **降级/门控**：`code_intel.semgrep.enabled=false`、semgrep 未安装、`custom_dir` 为空、扫描
   `skipped`/`failed`：不显示 Semgrep 行，也不把失败当诊断；LSP 不受影响。`mode=auto` 可能联网，
   用户开启即接受；仍 `--metrics=off`、不执行仓库代码、不写文件。即时工具结果对所有客户端可见
-  （它就是普通 tool result）；`diagnostics.late` 事件仍只对 local viewer 且 `client:"omp-ui"` 发送。
-- **不再依赖 ADR-8 的显式索引/Revision 查询**：即时路径直接用 `semgrep_scan` 对刚写入字节的
+  （它就是普通 tool result）；`transcript.custom` 事件仍只对 local viewer 且 `client:"omp-ui"`
+  发送。
+- **不依赖 ADR-8 的显式索引/Revision 查询**：即时路径直接用 `semgrep_scan` 对刚写入字节的
   in-memory findings，不需要 `CodeDiagnostic` 的 Revision 字段，也不需要先跑索引。`code_intel`
-  的旧图查询仍可能存在，但它不是本 ADR 的即时诊断来源；不要用旧查询结果冒充当前字节的诊断。
+  的旧图查询仍可能存在，但它不是本 ADR 的即时诊断来源。
+
+#### D9. 触发修复：行是 `developer` 消息，turn-end 继续当前 turn
+
+“完整展示”和“触发修复”是同一行的两件事：
+
+- **模型面**：`custom_type:"lsp-late-diagnostic"` 在 `MESSAGE_CUSTOM_TYPES` 中，
+  `project_for_api` 把它转成 `developer`。模型读到的是：
+  - mid-turn：下一个 API 调用中 tool 结果之后的 developer 行；
+  - turn-end：interim assistant 行之后的 developer 行，`apply_stop_gates` 返回
+    `continue_turn=True`，模型在同一 turn 内修复；
+  - 下一个用户 turn：用户消息之后的 developer 行，模型在回答前看到诊断。
+- **展示面**：同一条行的 `details.files` 由 `LateDiagnosticsMessageComponent` 渲染；native 挂到
+  最近的编辑/写入卡，否则独立块；`details` 不参与 provider 请求。
+- **不启动 idle turn**：如果 turn 已经结束且没有下一个用户 turn，行持久化在 transcript 中，但
+  不会像 omp 的 `injectIdle` 那样自动 `agent.prompt`。展示层不调用模型；要自动修复需要另立
+  turn/计费决策。
+- **不新增模型工具、不改 system prompt**：模型通过已有的工具重新编辑来修复，不需要新的诊断工具。
+- **prompt cache**：行追加在 live turn 的尾部，不重写已发送前缀；一旦追加，字节稳定。resume 重放
+  同一行/同一 `content`，前缀不漂移。`details`/`display`/`attribution` 是 persistence-only，
+  不进 provider。
+- **修复后的状态**：新编辑产生新的 tool result；如果新 verdict 为空，不追加新行。旧行保留为历史，
+  与 omp 的 custom message 语义一致；模型按时间顺序看到旧问题与后来的修复。
+
+#### D10. 降级、失败与安全
+
+- LSP 未启用、workspace 未信任、服务端不回答、预算内无 verdict、verdict 为 clean：都不生成行、
+  不画占位。模型侧仍按现有策略在下一个工具结果/turn end/下一个用户 turn 收到或不收到。
+- Semgrep 关闭/未安装/`custom_dir` 空/扫描失败或超时：不生成 `[semgrep]` 行，不影响 LSP。
+- 客户端缺失/旧版：未知 `custom_type` 回退 `CustomMessageComponent`；未知事件被忽略；模型行为
+  不变。
+- `custom_messages:false` 的会话（Desktop/Ink 创建）不写 custom 行；`client != "omp-ui"` 的
+  local viewer 不发 `transcript.custom`。默认 `lsp.display` 下 TUI/CLI/消息平台的输出逐字不变；
+  用户显式设置 `lsp.display` 后，inline `lsp_diagnostics`/`semgrep_diagnostics` 按策略过滤（所有
+  客户端），late 行仍不写、不发。omp-ui 会话被其它客户端 resume 时 `custom_messages` 仍是 session
+  state；行照常写，事件按当前 viewer 的 client 门收窄。
+- 诊断文本来自刚解析用户代码的 language server / Semgrep，按不可信处理：纯文本 sanitizer 去掉
+  控制字符、折叠换行、限制 message/code/source/path 长度；行数/总字符有上限；不送文件内容。
+  客户端用 `plainText` 渲染，不解释 HTML/Markdown。
+- 持久化失败只记 debug，不影响 turn、工具结果或模型投递。`_row_id` 由 flush 设置，
+  `plugin_row_event` 在没有 `_row_id` 时返回 `None`，所以**不伪造实时事件**；行留在 `messages`
+  里由下一次 flush 重试，成功后再发事件。不要为了“先显示”合成 row_id：resume 会多出一块。
+- 路径匹配失败（符号链接、大小写、跨 cwd）只导致“不挂到卡”，退化为独立块；不能因此丢事件或改
+  模型文本。实现时统一用 live session cwd 解析，并补 Windows/大小写测试。
+
+#### D11. 兼容性与 footprint
+
+- 不新增模型工具、不改 `toolsets`、不改 system prompt；新增 `lsp.display` 展示策略（D12）。
+  `lsp.enabled`、`lsp.wait_timeout`、`code_intel.semgrep.enabled`、`mode` 继续是扫描/索引开关。
+- LSP 的 write 延迟不变：行在 LSP loop 的 done-callback 之后才产生，写路径仍是
+  `WRITE_BUDGET`/`INLINE_GRACE`。P2 的 Semgrep 在同一预算内并行启动，超时即转 deferred；不允许
+  同步等待完整 Semgrep 扫描。
+- prompt cache：LSP 路径的已发送前缀不因本 ADR 改变；新增行只追加在尾部。P2 的 Semgrep 在
+  `code_intel.semgrep.enabled=true` 时会有意把危险模式行加入工具结果/开发者行，这是新诊断内容，
+  不是隐藏的 cache 改写；`details`/事件仍是展示面。
+- omp 的“late 到达会启动新 turn”在 Hermes **不实现**：展示层不调用模型，也不把 verdict 变成
+  admission。turn-end 的 `continue_turn` 是既有 stop-gate 语义，不是新的 turn 触发源。
+- ADR-8 D17 的“仅显式索引、写路径不跑”不采用；Semgrep 与 LSP 同为即时诊断源。
+
+#### D12. 展示策略配置：`lsp.display.lsp` / `lsp.display.semgrep`
+
+在 `config.yaml` 的 `lsp` 节增加纯展示策略（不改扫描/索引开关）：
+
+```yaml
+lsp:
+  display:
+    lsp:
+      mode: both                 # off | inline | late | both
+      severities: [error]        # error | warning
+    semgrep:
+      mode: both
+      severities: [error, warning]
+```
+
+- `mode` 决定该来源在诊断面上的出现位置：
+  - `inline`：预算内 verdict 进工具结果/编辑卡；超时丢弃，不生成 late 行。
+  - `late`：预算内 verdict 也转 `deferred`，只生成 late 行，不内联。
+  - `both`（默认）：预算内内联；超时进 late 行（当前行为）。
+  - `off`：该来源不参与诊断面；不内联、不生成 late 行。Semgrep 额外跳过 write/patch 的即时扫描；
+    LSP 额外跳过该次 edit check，但不改变 `lsp.enabled` 对其它消费者的服务。
+- **`mode=late` 的文案**：预算内 verdict 被策略性转 `deferred` 时，legacy note/自定义行的 header
+  不能写“the language server answered after that tool result returned”——事实不成立。用
+  timing-neutral 的 “Diagnostics introduced by your edit of …”；只有真正超时才保留“answered
+  after …”的说明。
+- `severities` 只接受 `error`/`warning`。LSP 默认 `[error]`；Semgrep 默认 `[error, warning]`。
+  过滤发生在 `deferred.post` 和 `details`/`content` 生成之前；`summary`/`errored`/色调按过滤后的
+  集合计算。`info`/`hint` 不在本 ADR 的展示面（组件没有独立色调），要开另立 ADR。
+- **模型/展示同源**：过滤后的集合同时用于 `content`（模型）和 `details`（展示）；不做“UI 隐藏、
+  模型仍读”的双轨。`severities` 是诊断面的策略，不是 UI 过滤器。
+- **对 legacy 会话同样生效**：`lsp.display` 在 custom/legacy 分支之前读取；非
+  `custom_messages` 会话的 `late` 仍走现有 note/tool-result 文本，`inline`/`off` 同样生效，只是
+  没有 custom 行。不要只为 omp-ui 读这个配置。
+- **显式工具结果不受展示策略过滤**：在 `code_intel.semgrep.enabled=true` 的前提下，模型主动调用
+  `code_intel`/`code_graph_update(refresh_file, semgrep=true)` 时，findings 作为该 tool 的 result
+  返回；`lsp.display` 只过滤自动写入/补丁诊断面，不静默裁剪显式查询。`mode=off` 不阻止显式查询，
+  只跳过 write/patch 的即时扫描。总开关关闭时，显式 `refresh_file(semgrep=true)` 同样不扫描，
+  `code_intel(diagnostics)` 只能返回已存图并标注 freshness（不能把旧图冒充当前字节）。
+- **作用域**：`lsp.display` 的 `inline`/`severities` 部分作用于每次 write/patch 的工具结果，因此
+  对 CLI/Desktop/消息平台的 inline `lsp_diagnostics`/`semgrep_diagnostics` 同样生效；默认配置下
+  仍逐字不变。late custom 行仍只对 `custom_messages:true`（omp-ui）生成，`transcript.custom`
+  仍只对 `client:"omp-ui"` 发送。
+- **caps 不是配置键**：`MAX_PER_FILE`/`MAX_TOTAL_CHARS`/`MAX_DISPLAY_PER_FILE`/
+  `MAX_DISPLAY_TOTAL_CHARS` 是安全上限，P1 固定；不暴露给 `lsp.display`，避免用户放大事件/持久化
+  载荷。需要调大时改常量 + 验收，不新增配置面。
+- **开关优先级**：
+  - LSP：`lsp.enabled=true` 且 `lsp.display.lsp.mode != off`。
+  - Semgrep：`code_intel.enabled=true`、`code_intel.semgrep.enabled=true` 且
+    `lsp.display.semgrep.mode != off`。
+  - `mode=off` 只关闭诊断面（Semgrep 还跳过即时扫描）；`hermes code index` 的 Semgrep 层仍只看
+    `code_intel.semgrep.enabled`，不新增第二个索引开关。
+- **解析/失败**：`agent/lsp/display.py::DisplayPolicy.from_config()` 读
+  `load_config_readonly()["lsp"]["display"]`。未知 `mode` → 警告 + `both`；未知 severity 条目
+  丢弃；空/非法 `severities` → 该来源默认集合；任何解析失败都不让写入失败。配置在每次写入/检查时
+  读取（或缓存并在 `hermes lsp restart`/config reload 时失效）。新键加入 `DEFAULT_CONFIG`，按现有
+  `_config_version`/`hermes config migrate` 约定补齐缺失字段，不覆盖用户已有值。
+- **默认即现状**：没有 `display` 块时，LSP=`{mode: both, severities: [error]}`、
+  Semgrep=`{mode: both, severities: [error, warning]}`，与当前行为逐字一致；新增键只在用户显式
+  配置时改变展示。
+- **`hermes lsp status`** 增加一行解析后的 policy（`display.lsp.mode`/`severities` 等），便于
+  排障；不新增命令。用户通过 `config.yaml` 的 `lsp.display` 配置，实现后
+  `hermes config get lsp.display` 可查看该 section。
+- **不复制扫描开关**：`lsp.display.semgrep.mode` 不是 `code_intel.semgrep.enabled` 的别名；前者
+  只控制诊断面/即时扫描，后者控制 Semgrep 层总开关。
 
 ## 协议
 
-**实时事件**：
+**行（持久化与快照都走这一形状）**：
 
 ```json
 {
-  "type": "diagnostics.late",
-  "payload": {
+  "role": "custom",
+  "custom_type": "lsp-late-diagnostic",
+  "text": "<system-notice>\nDiagnostics for the files you edited:\nC:\\repo\\src\\app.ts — 3 error(s)\nC:\\repo\\src\\app.ts:12:5 [error] [typescript] Type 'string' is not assignable to type 'number'. (2322)\n…\n\nFix them if they are real, then continue.\n</system-notice>",
+  "display": true,
+  "display_only": false,
+  "attribution": "agent",
+  "legacy_role": "user",
+  "row_id": 12345,
+  "timestamp": 1762214400.0,
+  "details": {
     "files": [
       {
         "path": "C:\\repo\\src\\app.ts",
@@ -575,224 +692,260 @@ P2 的依赖是 ADR-2 D8 的 tool 行卡片重建；如果该依赖未落地，P
 }
 ```
 
-**失效帧**（P3；同一个事件名）：
+- DB 的 `content` 在 wire 上投影为 `TranscriptMessage.text`（`_custom_message` 的 `text` 字段）；
+  行内部仍叫 `content`。`details` 原样带出，客户端只读 `custom_type`/`details`。
+
+**实时事件**：
 
 ```json
 {
-  "type": "diagnostics.late",
+  "type": "transcript.custom",
   "payload": {
-    "files": [],
-    "removed_paths": ["C:\\repo\\src\\app.ts"]
+    "message": { "role": "custom", "custom_type": "lsp-late-diagnostic", "…": "同上" }
   }
 }
 ```
 
-- 成功 write/patch 后，如果该 path 没有新的 LSP 文件可替换，就发这个帧；壳删除缓存、独立块与卡内
-  附件。不要用空 `messages` 的普通 `files` 项代替，否则会留下空 section/计数。
+- `message.row_id` 必填（行已持久化）；客户端按它合并 live 与快照。
+- 事件只在 `local_viewer_turn(turn)` 且 `client == "omp-ui"` 时发布。
+- 不送 `display_metadata` 信封；`details` 即展示载荷。
 
-**持久化键**（P2；全部只在 `display_metadata` 内，不新增顶层消息字段）：
+**持久化键**（内部，不出网关）：
 
 ```json
 {
-  "late_diagnostics": {
-    "files": [
-      {"path": "C:\\repo\\src\\app.ts", "summary": "3 error(s)", "errored": true,
-       "messages": ["C:\\repo\\src\\app.ts:12:5 [error] [typescript] … (2322)",
-                    "C:\\repo\\src\\app.ts:18:1 [error] [typescript] … (2304)",
-                    "C:\\repo\\src\\app.ts:40:9 [error] [semgrep] … (typescript.lang.security.audit.eval)"]}
-    ]
+  "display_metadata": {
+    "_custom_message": {
+      "custom_type": "lsp-late-diagnostic",
+      "display": true,
+      "display_only": false,
+      "attribution": "agent",
+      "legacy_role": "user",
+      "details": {
+        "files": [
+          {"path": "C:\\repo\\src\\app.ts", "summary": "3 error(s)", "errored": true,
+           "messages": ["C:\\repo\\src\\app.ts:12:5 [error] [typescript] … (2322)"]}
+        ]
+      }
+    }
   }
 }
 ```
 
-- `late_diagnostics` 挂在 origin 的 `write_file`/`patch` tool 行；turn-end 的 user note 行用同一个
-  键，并额外带 `display_kind="late_diagnostics"`。
-- carrier tool 行额外记：
-
-```json
-{
-  "late_diagnostics_carrier": {
-    "files": [{"path": "C:\\repo\\src\\app.ts", "summary": "3 error(s)", "errored": true,
-               "messages": ["C:\\repo\\src\\app.ts:12:5 [error] [typescript] … (2322)",
-                            "C:\\repo\\src\\app.ts:18:1 [error] [typescript] … (2304)",
-                            "C:\\repo\\src\\app.ts:40:9 [error] [semgrep] … (typescript.lang.security.audit.eval)"]}],
-    "suffix": "<the exact notes suffix appended to this tool result's content>"
-  }
-}
-```
-
-- `suffix` 只用于展示投影的精确尾部剥离；不匹配尾部就不剥，绝不按 substring 或正则删除。它与
-  `attach_to_tool_message` 实际追加的整段 notes 相同（可能含 plugin notice）。
-- 合并写入；同一路径重复时替换 `files` 中该 path 的项。
-- `messages` 可以混合来源：`[typescript]`/`[pyright]` 等是 LSP source，`[semgrep]` 是危险模式
-  source；`summary`/`errored` 按合并后的 severity 重算。`late_diagnostics_carrier` 镜像实际追加到
-  模型 note 的 files，因此**可以含 Semgrep 行**；`suffix` 仍按整段 notes 精确剥离，不会把
-  Semgrep 行留在卡片正文里。
-- 单条 `messages` 行、单文件条数、总字符都受与模型块相同的上限；超出用现有 elision 文案。
+- `content` 是 DB 的 `content` 列；六个 custom 字段只走 `_custom_message`。
+- 合并写入；同一行重复 flush 由 `_DB_PERSISTED_MARKER` 去重。
+- 单条 `messages` 行、单文件条数、总字符都受显示上限（`MAX_DISPLAY_PER_FILE` /
+  `MAX_DISPLAY_TOTAL_CHARS`）约束；超出用 `summary` 计数，`details.messages` 不追加不可解析的
+  省略行。模型 `content` 另受 `MAX_PER_FILE`/`MAX_TOTAL_CHARS` 约束。
 
 ## 实现落点
 
 | 层 | 文件 | 变更 |
 |---|---|---|
-| LSP 队列 | `agent/lsp/deferred.py` | `_Note` 增加 `files`；`post`/`take`/`restore`/`pop_notes` 透传；投递点可拿到 `files` |
-| LSP 格式化 | `agent/lsp/reporter.py` | 纯文本、pi-tui 可解析的展示行（`path:line:col [severity] [source] message (code)`）+ 摘要/errored 的单一格式化入口；模型块继续现有 `ERROR [12:5] …` 与 HTML 转义 |
-| 延迟投递 | `tools/file_operations_lint.py` | `_queue_late_verdict` 同时构造 `files`；`deferred.post` 传入；模型 `text` 逐字不变 |
-| 投递消费 | `agent/tool_executor.py`、`agent/turn_stop_gates.py`、`agent/turn_context.py` | `forward_to_agent`/`settle_for_agent` 的返回值或回调携带 `files`；不改变 append/内容；turn-end presenter 在 append 时给 row 加 `display_kind`/`display_metadata` |
-| 本地 viewer | `gateway/local_viewer_events.py` | `wire` 安装 late sink，`restore` 清除；只对 `client:"omp-ui"` 发布；P2 的 path→tool_call_id 注册 |
-| 事件发布 | `gateway/run_turn_progress.py` | 复用 `_publish_execution`；P2 用 `complete_fields`/session live 记录目标 |
-| Semgrep 即时源（P3） | `hermes_codegraph/analysis.py`、`tools/file_operations_lint.py`、`agent/lsp/edit_check.py` | 在 write/patch 检查里与 LSP 同时启动 `semgrep_scan`；预算内进工具结果，超时进同一 `deferred` 队列；映射 `[semgrep]` 行 |
-| Semgrep 工具结果（P3） | `hermes_codegraph/update.py`、`tools/code_graph_update_tool.py`、`tools/code_intel_tool.py` | `refresh_file(semgrep=true)` 返回 findings；`code_intel(diagnostics, path=...)` 现场扫描并返回；结果即时进 tool result |
-| Semgrep 内联字段（P3） | `tools/file_operations.py`、`tools/file_operations_lint.py` | `WriteResult`/`PatchResult` 增加 `semgrep_diagnostics`；`lsp_diagnostics` 保持 LSP-only；note header 改为 source-neutral |
-| Semgrep 合并（P3） | `agent/lsp/reporter.py` / `deferred` 的 files 构造 | 按 path 合并 LSP/Semgrep 行，重算 summary/errored；模型 note 与 origin metadata 都含合并结果 |
-| Semgrep 失效（P3） | `tools/file_operations_lint.py`、`gateway/local_viewer_events.py` | 新写入重新扫描；关闭/失败/超时删除旧 `[semgrep]` 行与持久化；按需发 `removed_paths` |
-| 清空 seam（P3） | `omp-ui/node_modules/@oh-my-pi/pi-tui/src/chat/tool-execution.ts` | `clearLateDiagnostics` 只清 `#lateDiagnostics` 并 `invalidate()`；不改渲染语义 |
-| 契约 | `tui_gateway/contracts/events.py` | `DiagnosticsLatePayload` + `LateDiagnosticsFile`，可选 `removed_paths: list[str]`；同 PR 有 emitter 并重生成 TS |
-| 持久化（P2） | `hermes_state_messages.py` | `set_tool_message_display_metadata`（按 session + tool_call_id 合并）；`set_latest_matching_message_display_kind` 作为 turn-end 行的后备 |
-| 投影（P2） | `tui_gateway/session_history.py` | tool 行带 `display_metadata`（已有）；对 `late_diagnostics_carrier.suffix` 做精确尾部剥离；turn-end 的 `display_kind` 行原样投影 |
-| 壳 | `omp-ui/src/modes/rpc/gateway-session.ts` | 新增 `diagnostics.late` handler → shell 事件 |
-| 壳 | `omp-ui/src/session/agent-session-events.ts` | 新增 `late_diagnostics` 事件支 |
-| 壳 | `omp-ui/src/modes/controllers/event-controller.ts` | `routeLateDiagnostics` + `LateDiagnosticsMessageComponent` + 展开/可见性 |
-| 壳（P1 rebuild） | `omp-ui/src/modes/interactive-mode.ts`、`omp-ui/src/modes/utils/ui-helpers.ts` | 按 path 维护 `files` 快照；`rebuildChatFromMessages`/`renderInitialMessages` 后重放 `routeLateDiagnostics`，独立块按 path 复用/替换 |
-| 壳（P2） | `omp-ui/src/modes/rpc/gateway-session.ts`、replay 路径 | `rowToAgentMessage` 带 `display_metadata`；`display_kind="late_diagnostics"` 的 user 行走 late 分支；重建时 attach 或独立块 |
+| custom 类型 | `agent/custom_messages.py` | `MESSAGE_CUSTOM_TYPES` 增加 `lsp-late-diagnostic`；确认 `project_for_api`→`developer` |
+| 配置默认值 | `hermes_cli/config_defaults.py` | `lsp.display.lsp`/`lsp.display.semgrep` 默认块：`mode: both`，severities `[error]`/`[error, warning]`；按约定更新 `_config_version` 并让 migrate 补齐 |
+| 配置解析 | `agent/lsp/display.py`（新增） | `DisplayPolicy.from_config()`：读 `lsp.display`，校验 `off|inline|late|both` 与 `error|warning`，返回默认/回退；不让写入失败 |
+| LSP gating | `tools/file_operations_lint.py`、`agent/lsp/edit_check.py`、`agent/lsp/reporter.py` | 按 `lsp.display.lsp`：`off` 跳过 edit check；`inline` 超时丢弃；`late` 把预算内 verdict 转 `deferred`；`both` 现状；severity 过滤后算 summary/errored |
+| Semgrep gating | `tools/file_operations_lint.py`、`hermes_codegraph/analysis.py`、`hermes_codegraph/update.py` | 按 `lsp.display.semgrep`：`off` 跳过即时扫描；severity 过滤；`code_intel.semgrep.enabled` 仍是总开关，索引层不受 `mode` 影响 |
+| 状态输出 | `agent/lsp/cli.py` | `hermes lsp status` 显示解析后的 `display.*.mode`/`severities` |
+| 文档 | `website/docs/user-guide/features/lsp.md` | 记录 `lsp.display` 的键、默认值、`mode` 语义与优先级 |
+| 延迟队列 | `agent/lsp/deferred.py` | `_Note` 增加 `files`；`post`/`take`/`restore`/`pop_notes` 透传并按 path/source 合并 |
+| 展示格式化 | `agent/lsp/reporter.py` | `display_files_for`/`display_lines_for`：pi-tui 可解析行、summary/errored、纯文本 sanitizer；模型块保持现有 HTML 转义 |
+| late verdict | `tools/file_operations_lint.py` | `_queue_late_verdict` 同时构造 `files`；`deferred.post` 传入；模型 `text` 逐字不变 |
+| 行投递 | 新增 `agent/lsp/delivery.py`（或 `agent/late_diagnostics.py`） | `append_row(agent, messages, files)`：custom vs legacy 形状、append、flush、notify；三条投递点共用 |
+| 工具结果投递 | `agent/tool_executor.py` | 不再把 LSP note 追加到 tool `content`；tool 行 flush 后 append custom 行 |
+| turn-end | `agent/turn_stop_gates.py` | `_late_lsp_verdicts` 返回 `files`/行；append custom 行；`continue_turn` 保留 |
+| 下一个用户 turn | `agent/turn_context.py` | `_merge_gateway_notes` 对 custom 会话 append 行，不折进用户内容；flush 后 notify |
+| 实时事件映射 | `tui_gateway/agent_callbacks.py` | `plugin_row_event` 增加 `lsp-late-diagnostic`→`transcript.custom`；`_announce_plugin_row` 分支 |
+| canonical 发射 | `gateway/run_turn_runner.py` | `_canonical_plugin_event` 发 `transcript.custom`（omp-ui 门） |
+| 契约 | `tui_gateway/contracts/events.py` | `TranscriptCustomPayload{message: TranscriptMessage}` |
+| 单一投影 | `tui_gateway/session_history.py` | 抽出 `custom_row_message`，live 与 `_history_to_messages` 共用 |
+| 能力表 | `gateway/panel_inventory.py` | `late_diagnostics` → `READY`，事件 `transcript.custom`，字段 `custom_type`/`details`/`row_id` |
+| 持久化 | `agent/session_persistence.py`、`hermes_state_messages.py` | 验证 custom 六字段/role 白名单/`_custom_message` 信封 |
+| 分支/压缩 | `tui_gateway/methods_session_branch.py`、`tui_gateway/session_workdir.py` | `_BRANCH_COPY_FIELDS`/`_WORKDIR_SEED_FIELDS` 增加六个 custom 字段（或重新封装 `_custom_message`）；分支测试 |
+| Semgrep 即时源（P2） | `hermes_codegraph/analysis.py`、`tools/file_operations_lint.py`、`agent/lsp/edit_check.py` | 与 LSP 同时启动 `semgrep_scan`；预算内进工具结果，超时进同一 `deferred` 队列；映射 `[semgrep]` 行 |
+| Semgrep 工具结果（P2） | `hermes_codegraph/update.py`、`tools/code_graph_update_tool.py`、`tools/code_intel_tool.py` | `refresh_file(semgrep=true)` 返回 findings；`code_intel(diagnostics, path=...)` 现场扫描；修掉 `update.py:95-99` 的丢弃 |
+| Semgrep 内联字段（P2） | `tools/file_operations.py`、`tools/file_operations_lint.py` | `WriteResult`/`PatchResult` 增加 `semgrep_diagnostics`；`lsp_diagnostics` 保持 LSP-only；header 改 source-neutral |
+| Semgrep 合并（P2） | `agent/lsp/reporter.py` / `deferred` 的 files 构造 | 按 path 合并 LSP/Semgrep 行，重算 summary/errored |
+| 壳事件 | `omp-ui/src/modes/rpc/gateway-session.ts` | `transcript.custom` handler；`rowToAgentMessage` + `#emitCustomMessage`（按 `row_id` 去重） |
+| 壳渲染 | `omp-ui/src/modes/utils/ui-helpers.ts` | `#customBlock` 增加 `lsp-late-diagnostic`：`routeLateDiagnostics` + `LateDiagnosticsMessageComponent` + 展开/可见性 |
 | 生成物 | `scripts/gen_gateway_contracts.py`、`scripts/gen_panel_inventory.py` | 重生成 TS 契约/面板清单 |
 
 ## 分阶段
 
-- **P1（实时）**：D2 的结构化 `files`；D3 事件与契约；D4 sink/发布；D6 shell handler/组件/路由。
-  验收：写一个 Python 文件让 mock LSP 延迟返回，omp-ui 的编辑卡出现诊断区；内联路径不重复；
-  clean/timeout 不出现；其它客户端零变化。P1 的块不入 ledger，壳用 path→files 快照在
-  rebuild/renderInitial 后重放（D6/验收 11）；ADR-2 D8 前 settled 卡不重建时落独立块。
-- **P2（持久化/resume）**：D5 的 path→call id、origin/carrier/turn-end 三处 `display_metadata`、
-  resume 重建。验收：关闭再 resume 后，同一编辑卡仍有 late 诊断（V4A patch 除外，见 D1）；turn-end
-  的 note 不再画成用户气泡；carrier 卡片正文不重复 note；模型历史里没有新增重复诊断行；rewind 到
-  编辑之前后不显示。
-- **P3（Semgrep 即时源）**：D10 的 Semgrep 与 LSP 同预算/同延迟队列/同工具结果；write/patch 触发
-  扫描，模型诊断工具返回即时 result；按 path 合并 `[semgrep]` 行，模型 note 与 origin metadata 都含
-  合并结果。验收：LSP clean 但 Semgrep 命中时仍出现；超时走 late；新编辑不保留旧行；工具结果即时
-  可见。P3 同时做同一 turn 的多条 verdict 合并/排序（如有多块噪声）。
+- **P1（LSP 行、实时 + resume）**：D1–D3 的行/`files`/三个投递点；D4 的 `transcript.custom`；
+  D5 的壳 handler/组件；D6 的持久化/resume；D7 的归属；D12 的 `lsp.display.lsp`（mode/severities）。
+  验收：turn-end 行出现、模型按 `developer` 读到、当前 turn 继续；mid-turn 行在 tool 结果之后；
+  resume 重建同一块；live/快照按 `row_id` 只画一次；非 omp-ui 零变化；默认配置与当前行为逐字
+  一致。
+- **P2（Semgrep 即时源）**：D8 的 Semgrep 与 LSP 同预算/同延迟队列/同工具结果；write/patch 触发
+  扫描，模型诊断工具返回即时 result；按 path 合并 `[semgrep]` 行，模型行与 `details` 都含合并
+  结果；D12 的 `lsp.display.semgrep`（mode/severities）。验收：LSP clean 但 Semgrep 命中时仍
+  出现；超时走 late；新行不保留旧 `[semgrep]`；工具结果即时可见；`mode=off` 跳过即时扫描但不
+  影响 `hermes code index`。
+- **P3（硬化）**：同一 turn 多条 verdict 的合并/排序；Windows 路径/大小写/symlink；warning 色调；
+  provider `developer` 角色兼容（ADR-10 D11）；能力表/文档；行数与字符上限的回归；D12 的无效
+  mode/severity 回退、`hermes lsp status` 输出与配置文档。
 
 ## 验收
 
-1. **实时挂载**：`write_file`/`patch(replace)` 的 late verdict 在 native 下进入对应编辑/写入卡；
-   没有对应卡时生成一个 `LateDiagnosticsMessageComponent`；ANSI 下为独立块。V4A `patch(mode="patch")`
-   的目标路径不在 args 匹配字段里，按 D1 的例外走独立块（与 omp 一致）。
-2. **不重复**：内联 `lsp_diagnostics` 不触发事件；同一 verdict 不因 `forward_to_agent` 与
-   `settle_for_agent` 重复发；被新编辑 supersede 的旧 verdict 不发；turn-end 已有的 user note 行
-   只画成 late block，不额外出现用户气泡；carrier 正文不出现第二份 note。
-3. **归属**：两个 session 编辑同一文件，A 的 UI 只出现 A 的错误，B 只出现 B 的；子代理不冒泡到父
-   会话。
-4. **模型不变**：`WriteResult.lsp_diagnostics`、tool result 内容、turn-end note 文本与当前逐字一致；
-   现有 `tests/agent/lsp/test_write_never_waits_on_lsp.py` 全绿。
-5. **载荷**：事件只含 `files` 的四个字段；无 `text`/baseline/原始 dict；行数/长度受上限；展示文本无
-   HTML 实体；控制字符被剥离；每一行都能被 `parseDiagnosticMessage` 解析（不会落到 `unparsed`），
-   severity 为小写、source 在 message 前、code 在末尾。
-6. **范围**：`client != "omp-ui"` 的本地 viewer 与所有消息平台不收到事件、不写
-   `display_metadata`；omp-ui 的未知事件行为不变。
-7. **投递语义**：turn-end 5s 内到达的 verdict 在该 turn 内发；超时后留到下一个用户 turn 再发；
-   一-shot/无 next turn 时无 UI 事件、模型面行为不变。
-8. **P2 resume**：重新加载后 tool 行的 `display_metadata.late_diagnostics` 恢复同一块；turn-end 的
-   `display_kind="late_diagnostics"` 行画成结构化块而不是用户气泡；carrier 行的正文已按
-   `late_diagnostics_carrier.suffix` 剥掉 note，不重复；模型侧历史不新增诊断行；压缩/rewind 后不
-   复活已移除的块。
-9. **Semgrep 即时诊断**：`write_file`/`patch` 在预算内返回 `[semgrep]` 行并并入工具结果；超时则
-   进入同一 `deferred` 队列并在 late block/note 出现。模型调用 `code_graph_update
-   refresh_file(semgrep=true)`/`code_intel` 时，findings 直接在 tool result 中。LSP clean 时也能
-   显示；每行可被 `parseDiagnosticMessage` 解析，source=`semgrep`、code=rule_id；模型能读到这些
-   行，不依赖 `code_intel` 二次查询。
-10. **Semgrep 失效**：先得到 `[semgrep]` 行，再对同一 path 成功写入/打补丁；新扫描结果替换旧行，
-   不得把旧 finding 合并回来；origin metadata 与新 note 同步。Semgrep 关闭/失败/超时时旧行必须删除，
-   `removed_paths` 清掉纯 Semgrep 块/卡内附件。没有“先跑索引”的前置条件。
-11. **会话内 rebuild**：P1 收到 late 块后触发一次 `rebuildChatFromMessages()`（例如修改
-   `display.showTokenUsage`），壳按 path 快照重放：ADR-2 D8 前 settled 卡不重建时生成独立块，D8
-   落地后挂回重建的卡；同一 path 不出现第二块。不得依赖 SQLite `display_metadata` 的 live 投影来
-   恢复。
-12. **V4A 挂载**：`patch(mode="patch")` 的 late verdict 不进入 patch 卡（目标路径只在 V4A 文本里，
-   `matchesPath` 看不到），实时与 resume 都按独立块处理；与 omp 的 `apply_patch`/`hashline` 一致，
-   不新增 seam，也不得在壳里解析 V4A 文本来伪造匹配。
-13. **解析/排序**：事件中的每一行都通过 `parseDiagnosticMessage`，不出现 `unparsed`；行内解析出的
-   `filePath` 与 `files[].path` 逐字一致；组内顺序为 severity → line → col → message，与 pi-tui
-   一致；Windows `C:\...` 路径用例通过。
-14. **色调**：P1 全为 error 图标/色调；P3 的 warning-only 使用 warning 色调，`info`/`hint` 不出现；
-   壳没有按 source 或文本自行改色。
-15. **独立块位置**：未路由文件在事件到达处追加，同一事件合成一个块；native 命中挂到较早的编辑卡；
-   同一 path 的新 seq 原位替换、保持首次出现位置，不追加第二块；rebuild 后的重放在当前末尾/卡上，
-   不回填历史；不因等待 carrier 而延迟。
+1. **turn-end 触发修复**：写一个 Python 文件让 mock LSP 延迟返回；turn-end 时生成一条
+   `custom_type:"lsp-late-diagnostic"` 行，`content` 为 source-neutral system-notice，
+   `details.files` 带完整诊断；模型请求里该行以 `developer` 出现；`continue_turn` 让模型在同一
+   turn 内尝试修复；不再出现 `role:"user"` 的 late note / 用户气泡。
+2. **mid-turn 投递**：编辑不是最后一个工具调用时，下一个工具结果之后生成同一行；tool result 的
+   `content` 与当前逐字一致，不再追加 LSP note；模型下一次请求能看到该行。
+3. **下一个用户 turn**：turn 结束后才到达的 verdict 在下一次用户消息之后生成一行，且只生成一次；
+   模型在回答前看到它。
+4. **展示挂载**：`write_file`/`patch(replace)` 的 late verdict 在 native 下进入对应编辑/写入卡；
+   没有对应卡时生成一个 `LateDiagnosticsMessageComponent`；ANSI 下为独立块。V4A
+   `patch(mode="patch")` 按 D5 的例外走独立块，实时与 resume 一致。
+5. **不重复**：内联 `lsp_diagnostics` 不生成 late 行；同一 verdict 不因 mid-turn 与 turn-end 重复
+   成两行；被新编辑 supersede 的旧 verdict 不生成行；同一 `row_id` 的 live 事件与快照只画一块；
+   同一 path 的新 verdict 是合法的新行/新卡，不按内容去重。
+6. **resume/rebuild**：重新加载后 `session.resume` 带同一 custom 行，omp-ui 重建同一块；会话内
+   `rebuildChatFromMessages()` 重放 `#messages` 仍走 `#customBlock`，不依赖壳快照或
+   `display_metadata` 的 live 投影。
+7. **载荷/解析**：`details.files` 只有 `path`/`summary`/`errored`/`messages`；每一行都能被
+   `parseDiagnosticMessage` 解析，不出现 `unparsed`；行内解析出的 `filePath` 与 `files[].path`
+   逐字一致；severity 小写、source 在 message 前、code 在末尾；Windows `C:\...` 用例通过。
+8. **模型不变（legacy，默认配置）**：非 `custom_messages` 会话的
+   `WriteResult.lsp_diagnostics`、tool result 内容、turn-end user note 文本在默认
+   `lsp.display` 下与当前逐字一致；`tests/agent/lsp/test_write_never_waits_on_lsp.py` 全绿。
+9. **范围/安全**：`client != "omp-ui"` 的本地 viewer 与所有消息平台不收到 `transcript.custom`；
+   `custom_messages:false` 的会话不写 custom 行；默认 `lsp.display` 下这些客户端的 inline 输出
+   逐字不变，显式配置后 inline 诊断按策略过滤；诊断文本无 HTML 实体、控制字符被剥离、
+   行数/长度受上限；不送文件内容。
+10. **Semgrep 即时诊断**：`write_file`/`patch` 在预算内返回 `[semgrep]` 行并并入工具结果；超时
+    则进入同一 `deferred` 队列并在 late 行出现。模型调用 `code_graph_update
+    refresh_file(semgrep=true)`/`code_intel` 时，findings 直接在 tool result 中。LSP clean 时也能
+    显示；每行可被 `parseDiagnosticMessage` 解析，source=`semgrep`、code=rule_id。
+11. **Semgrep 失效**：先得到 `[semgrep]` 行，再对同一 path 成功写入/打补丁；新行不包含旧 finding，
+    旧行作为历史保留；Semgrep 关闭/失败/超时时新行没有 `[semgrep]` 行，不把旧 finding 合并回来。
+    没有“先跑索引”的前置条件。
+12. **触发边界**：turn 已结束且没有下一个用户消息时不自动启动新 turn；展示层不调用模型；不新增
+    模型工具；配置只限 `lsp.display`（D12）。
+13. **能力表**：`runtime.describe.transcript_blocks` 的 `late_diagnostics` 报
+    `supported:true`，事件为 `transcript.custom`，字段为 `custom_type`/`details`/`row_id`；
+    `docs/omp-ui-panels.json` 与 TS 契约重新生成且 orphan 门通过。
+14. **压缩/rewind**：压缩/分支复制保留 custom 行与 `details`；rewind 到行之前后不显示该块；
+    `role:"custom"` 不被当作 user turn 计数。
+15. **provider 形态**：OpenAI-compatible 与 Anthropic 适配器都能接受该行（ADR-10 D11 的
+    `developer` 折叠）；请求体不出现 `custom`/`details`/`display`/`attribution` 等内部键。
+16. **默认配置**：没有 `lsp.display` 块时，LSP 只显示 error、inline+late 都开；Semgrep 显示
+    error/warning、inline+late 都开；输出与当前行为逐字一致；`lsp.enabled`/
+    `code_intel.semgrep.enabled` 的默认值不变。
+17. **`lsp.display.lsp`**：`off` 不内联、不生成 late 行、跳过该次 edit check；`inline` 超时丢弃
+    且不生成 late 行；`late` 把预算内 verdict 转 `deferred`、不内联；`both` 保持当前行为；
+    `severities` 只留 `error` 或加上 `warning` 时，`details`/`content`/`summary`/`errored` 同步
+    变化。
+18. **`lsp.display.semgrep`**：`code_intel.semgrep.enabled=false` 时无论 `mode` 如何都不扫描、
+    不显示，显式 `refresh_file(semgrep=true)` 也不扫描（`code_intel(diagnostics)` 只返回已存图并
+    标 freshness）；master switch 开启时，`mode=off` 跳过 write/patch 的即时扫描，但
+    `hermes code index` 的 Semgrep 层不受影响，显式 `code_intel`/`code_graph_update(refresh_file,
+    semgrep=true)` 的 findings 仍在 tool result；`severities` 过滤后 summary/errored 重算。
+19. **无效配置**：未知 `mode` → 警告 + `both`；未知 severity 条目丢弃；空/非法 `severities`
+    → 该来源默认集合；写入、工具结果、turn 不因配置错误失败；`hermes lsp status` 显示解析后的
+    值。
+20. **模型/展示同源**：同一 `lsp.display` 过滤后的集合同时用于 `details` 和 `content`；不存在
+    “UI 隐藏但模型仍读”的分叉。
 
 ## 风险
 
-- **ADR-6 D1 依赖**：`client:"omp-ui"` 未落地时无法门控；本 ADR 不另造 opt-in，P1 随 D1 一起落地。
+- **provider 角色**：`developer` 行插在 tool 结果之后或 assistant 行之后，个别严格适配器可能拒绝
+  该位置。ADR-10 D11 已定义归一化；验收 15 覆盖 OpenAI/Anthropic。不要在会话层改成 `user` 来
+  规避，否则与 omp 和 ADR-10 的 custom→developer 语义分叉。
+- **`MESSAGE_CUSTOM_TYPES` 漏加**：`project_for_api` 会静默丢弃该行，模型看不到诊断，“触发修复”
+  失效，但展示仍正常。验收 1/15 必须在 provider 请求里断言 `developer` 行存在。
+- **prompt cache**：行只能追加在尾部；不得在 append 后回写 `content`/`details` 或重排历史。同一
+  row 的 resume 重放必须字节稳定。
+- **行增长**：turn-end 每次最多 3 条（`_MAX_LSP_TURN_END_NOTES`）；`files`/`messages` 受
+  `MAX_DISPLAY_PER_FILE`/`MAX_DISPLAY_TOTAL_CHARS` 限制（模型 `content` 另受
+  `MAX_PER_FILE`/`MAX_TOTAL_CHARS` 限制）；不要为每个 path 各发一条行。
+- **压缩/分支**：custom 行是模型上下文消息，压缩器可能把它纳入摘要；`display_only:false` 不能
+  改成 true，否则模型丢失诊断。`role:"custom"` 不得进入 user-turn 的 rewind 地址空间。
 - **路径归一化**：`deferred.post` 用绝对路径，工具 args 可能相对；Windows 大小写/分隔符、symlink、
-  session cwd 与进程 cwd 不一致都会导致“挂不到卡”。兜底是独立块，但不能静默丢事件；实现要有
-  跨平台测试。
-- **会话内 rebuild 依赖壳快照**：`rebuildChatFromMessages` 只重放 `viewSession.messages`，P1 的
-  live 块与卡内 late 区不入 ledger；必须由壳按 path 累积快照并在 rebuild/renderInitial 后重放
-  （D6/验收 11）。SQLite `display_metadata` 只在 resume 投影时读取，不能修复会话内 rebuild；快照与
-  P2 metadata 需按 path 去重，避免同一块出现两次。
-- **V4A patch 保持独立块**：`patch(mode="patch")` 的目标路径在 V4A 文本里，args 的 `path`/`files`
-  不是权威列表，`matchesPath` 覆盖不到（D1/D5/验收 12），实时与 resume 都按独立块处理；omp 的
-  `apply_patch`/`hashline` 也只有 `{input}`，行为一致。不新增 seam，也不要在壳里解析 V4A 或改写
-  args 假装匹配。
-- **展示口径漂移**：行解析/排序、error/warning 色调、独立块位置分别由 pi-tui、`errored` 和事件到达
-  顺序决定（D2/D4/D6）；壳若二次排序、按 source 改色、或延迟等待卡，会与 omp 分叉。行内 `filePath`
-  与 `files[].path` 不一致会让树和挂卡指向不同文件；同 path 新事件若 remove+append 会让块跳到末尾。
-  验收 13–15 固定这些口径，不把它们留给实现者自由发挥。
-- **DB 写入频率**：每次 late verdict 一次 `display_metadata` 合并；数量受 `_MAX_PER_OWNER`（32）与
-  `_MAX_OWNERS`（64）限制，仍应在 session 结束/rewind 时清理 path→call id 映射。
-- **缓存/压缩**：`display_metadata` 不进 provider，但压缩/分支复制会携带它；确认压缩后的 tool 行
-  仍投影同一键，且不会把 `late_diagnostics` 当成 human input。
-- **组件行为**：native/ANSI 路径不同（`routeLateDiagnostics` 在 ANSI 全独立），这是上游行为，不要
-  在壳里“修正”成统一挂载；否则与 pi-tui 的折叠/展开语义分叉。
-- **重复事件**：事件流重连/回放可能重复同一载荷；壳层去重只做展示，不改变持久化。
-- **turn-end 行的双语义**：`display_kind="late_diagnostics"` 的行仍是模型可见的真实 user row；
-  只对 omp-ui 打标，其它客户端继续画气泡。压缩/分支复制必须保留该 `display_kind`，否则 resume
-  会退化成用户气泡；同时 `context_compressor` 已把非 steer 的 `display_kind` 行排除在 human input
-  之外，新增 kind 不能绕过这条判断。
-- **carrier 后缀剥离**：只在 `content` 精确以 `suffix` 结尾时剥；budget spill/重写后不剥。剥错了会
-  截断真实工具输出，因此宁可少剥、让 resume 多显示一次文本，也不能做模糊匹配。
-- **Semgrep 实现缺口**：当前 `update.refresh_file` 丢弃 `_run_semgrep` 的返回值，write/patch 也没有
-  启动 `semgrep_scan`；P3 必须把“扫描 → findings → 工具结果/延迟队列”接通，并让
-  `refresh_file(semgrep=true)`/`code_intel` 把 findings 放进 result。这不是查询旧图的替代方案。
-- **Semgrep 延迟/成本**：`mode=auto` 可能联网拉规则，冷启动扫描可能远超 write budget。必须复用
+  session cwd 与进程 cwd 不一致都会导致“挂不到卡”。兜底是独立块，但不能静默丢行/事件。
+- **Semgrep 成本**：`mode=auto` 可能联网拉规则，冷启动扫描可能远超 write budget。必须复用
   `WRITE_BUDGET`/`deferred`，设置单文件超时；超时就发 late，不能阻塞写入。用户开启
   `code_intel.semgrep.enabled` 即接受这次扫描成本。
-- **Semgrep 失效**：每次成功 write/patch 都重新扫描当前字节；旧 websocket/进程结果晚到且
-  content identity 不匹配时丢弃。Semgrep 关闭/失败/超时不得保留旧 `[semgrep]` 行，否则会把过期
-  危险模式留在卡上。缓存/去重键必须包含内容身份，不能只用 path。
 - **Semgrep 与 LSP 合并**：同一 path 的 LSP/Semgrep 行必须合并成一份完整 `files`；任何一方更新都
-  重算 summary/errored，不能用第二次事件把另一方覆盖掉。相同 finding 在后续编辑后合法复现，不能
-  按 `messages` 内容去重；只按 notification seq/内容身份去重。
+  重算 summary/errored，不能用第二次行把另一方覆盖掉。相同 finding 在后续编辑后合法复现，不能按
+  `messages` 内容去重；只按 notification seq/内容身份去重。
+- **事件重复**：事件流重连/回放可能重复同一行；客户端按 `row_id` 去重，不按内容去重。同一 path 的
+  新 row_id 不是重复帧，必须画新行/新卡。
+- **旧客户端**：不认 `lsp-late-diagnostic` 的客户端回退 `CustomMessageComponent`（text-only），
+  不画诊断树；这比伪造块安全。Desktop/Ink 会话不产生该行。
+- **turn-end 双语义**：custom 行是模型可见的真实消息，不是 user row；只对 `custom_messages`
+  会话写。压缩/分支复制必须保留六字段，否则 resume 会退化成 text-only 或用户气泡（如果误写成
+  legacy user row）。
+- **sidecar 分支**：`plugin_row_event` 被 sidecar 与 canonical 共用；新增 `transcript.custom`
+  必须同时更新 `_announce_plugin_row`，否则会落进 `message.adviser` 的 else 分支。
 - **ADR-8 文本与工具面不一致**：ADR-8 D17 说 `code_graph_update` 固定 `semgrep=false`，当前工具
   仍暴露并透传 `semgrep`。本 ADR 以工具面的显式参数为准；ADR-8 文本应在独立变更里更正。若反过来
   移除该参数，模型仍可通过 write/patch 的即时 Semgrep 获得诊断，不依赖它。
+- **`mode=inline` 的静默丢失**：该模式明确丢弃超时 verdict（没有 late 行）。这是用户选择的策略，
+  不是 bug；文档要写明“需要晚到也显示就用 `both` 或 `late`”，不要让实现偷偷改成 `both`。
+- **`mode=late` 的时序**：预算内 verdict 也会被转 `deferred`，所以行可能在编辑后一个投递点才出现；
+  模型 `content` 用 timing-neutral 的 “Diagnostics for the files you edited:”，不要写回
+  “arrived after the edit returned” 造成事实错误。
+- **配置读取/缓存**：`lsp.display` 在每次写入/检查时读取，或缓存并在 `hermes lsp restart`/config
+  reload 时失效；读配置失败、未知 mode、非法 severity 都只能回退默认并记 warning，绝不能让
+  `write_file`/`patch` 失败。验收 16–19 固定这些口径。
+- **展示策略不是 UI-only**：过滤后的集合同时进 `content` 和 `details`；不要实现“客户端隐藏、
+  模型仍读”的双轨，否则用户看到的诊断与模型修复的诊断会分叉。
+- **`lsp.display.semgrep` 与 `code_intel.semgrep.enabled` 混淆**：前者是诊断面/即时扫描的策略，
+  后者是 Semgrep 层总开关；`mode=off` 不影响 `hermes code index`。文档和 `hermes lsp status`
+  要同时显示两者，避免用户以为关掉展示就关掉了索引。
 
 ## 不采纳
 
-- **新 transcript 行 / custom message**：模型会重复读同一诊断，且没有“只展示不进模型”的行类型。
-- **从 tool result 文本反解析**：HTML 转义、header、truncate 都使解析不可靠；会丢 severity 与结构。
+- **旧 ADR 的“编辑/写入卡附件 + `display_metadata` + carrier suffix”**：行本身是 durable custom
+  message，不需要 path→tool_call_id、suffix 剥离、shell 快照或 `removed_paths`。
+- **只发 `diagnostics.late` 展示事件**：与行重复；live 与 resume 会走两套形状。
+- **新造 `diagnostics` 角色 / 独立行类型**：ADR-10 的 `role:"custom"` 是唯一结构；provider 只认
+  `developer`/`user` 等白名单角色。
+- **`display_kind="hidden"` 或 `display_only:true`**：行会被展示投影或模型转换丢弃；“完整展示 +
+  触发修复”都不成立。
+- **从 tool result 文本反解析诊断**：HTML 转义、header、truncate 都使解析不可靠；会丢
+  severity/source/code。
 - **客户端重新查询 LSP**：客户端没有写入权威与服务端 snapshot，结果会与模型不同步。
-- **把内联诊断也做成 late 块**：重复展示同一事实。
+- **把内联诊断也做成 late 行**：重复展示同一事实；内联留在工具卡。
 - **用通知/状态行代替组件**：没有折叠、路径匹配、卡内挂载。
-- **让 late diagnostics 触发新 turn**：改变 Hermes 的 turn/计费语义；展示层不调用模型。
-- **对所有本地 viewer 广播**：没有消费点，且扩大持久化面；用 ADR-6 的 client 门。
-- **为 late diagnostics 新增模型工具或配置**：没有消费者；LSP 现有开关足够。
+- **让 late diagnostics 启动新 turn**：改变 Hermes 的 turn/计费语义；展示层不调用模型。
+- **对所有本地 viewer 广播 `transcript.custom`**：没有消费点，且扩大持久化面；用 ADR-6 的
+  client 门。
+- **为 late diagnostics 新增模型工具**：没有消费者；展示策略只加 `lsp.display`（D12），不新增
+  模型工具。
+- **把 `lsp.display` 做成纯 UI 过滤**：会与 `content` 分叉，用户看到的诊断和模型修复的诊断不同；
+  过滤必须同时作用于 `details` 和模型行。
+- **在 `lsp` 下复制 `code_intel.semgrep.enabled`**：那是扫描/索引总开关；`lsp.display.semgrep`
+  只控制诊断面/即时扫描，`mode=off` 不关闭 `hermes code index` 的 Semgrep 层。
+- **把 `mode=off` 当成 `lsp.enabled=false` / `code_intel.enabled=false`**：展示策略不关闭子系统；
+  关闭服务仍用原有开关。
 - **沿用 ADR-8 D17 的“仅显式索引、写路径不跑”**：这会让 Semgrep 在编辑后不可见，与“Semgrep 和
-  LSP 一样是即时诊断”矛盾；本 ADR 明确不采用该限制。
+  LSP 一样是即时诊断”矛盾。
 - **按 path 直接展示所有 `CodeDiagnostic`**：旧 Revision 的 finding 会混入当前文件；即时诊断必须
   来自刚写入字节的 `semgrep_scan`，查询旧图只能作为单独的查询面。
-- **把 Semgrep 只当展示、不放进工具结果/延迟 note**：模型看不到危险模式，无法在同一 turn 修正；
-  与 LSP 的即时/延迟投递不一致。
-- **为 Semgrep 新增独立事件/独立块**：组件按 path 合并即可，独立事件会与 LSP 块重复、破坏折叠。
+- **为 Semgrep 新增独立事件/独立块**：同一行按 path 合并即可，独立事件会与 LSP 块重复、破坏
+  折叠。
+- **`removed_paths`/`clearLateDiagnostics`**：行是历史，不是 path 缓存；同一 path 的新 verdict 是
+  新行，旧行保留。清空旧行会篡改历史，并与 omp 的 custom message 语义分叉。
 
 ## 遗留
 
-- P2 的 `path -> tool_call_id` 在跨进程 resume 后为空：这是预期的，只有本进程内仍在运行的检查才会
-  产生 late verdict；历史会话的块由 `display_metadata` 恢复，不依赖映射。
-- 如果未来 omp-ui 需要 warnings/info（当前 `DEFAULT_SEVERITIES` 只有 ERROR），另立 ADR 讨论
-  severity 展示与模型通道的关系；本 ADR 的 `summary`/`errored` 已为此留好形状。
-- 如果未来需要把 late diagnostics 作为 carrier 工具结果之后的严格顺序块，P3 再引入批量/排序；本 ADR
+- 旧 ADR 的 `path -> tool_call_id` 映射与 `late_diagnostics_carrier.suffix` 不再需要：历史块由
+  custom 行恢复；如果未来要支持“把某条 late 行挂回特定历史卡”的额外交互，再单独设计。
+- warnings 已由 `lsp.display.*.severities` 支持（默认 LSP 仍只有 `error`）；如果未来要展示
+  `info`/`hint`，需要同时处理组件的色调/折叠口径，另立 ADR。`summary`/`errored` 已为此留好形状。
+- 如果未来需要把 late diagnostics 作为严格“carrier 之后”的顺序块，P3 再引入批量/排序；本 ADR
   不承诺跨客户端一致的时间线。
-- Semgrep 的 `info`/`hint` 与 LSP warning 的展示口径不在本 ADR 内；当前只显示 Semgrep 的
-  `error`/`warning` 与 LSP 的 ERROR。要统一 severity 策略需要单独的配置/展示决策。
+- `lsp.display.*.severities` 只接受 `error`/`warning`；Semgrep 的 `info`/`hint` 与 LSP 的
+  `info`/`hint` 仍不在展示面（组件没有独立色调）。要统一完整 severity 策略，需要另立配置/展示
+  决策。
 - `code_intel`/`hermes code diagnostics` 对已存 `CodeDiagnostic` 的查询仍可能返回旧 Revision 的
   行；它只是查询面，不是写入后即时诊断的来源。若未来要让查询面也证明新鲜度，再给 schema 加
   Revision/内容身份；本 ADR 的即时路径不依赖它。
+- `transcript.custom` 是通用 custom 行事件；本 ADR 只定义 `lsp-late-diagnostic` 的消费者。其它
+  custom 类型若需要 live 事件，可直接复用该事件，但必须自己的 `custom_type` 在
+  `MESSAGE_CUSTOM_TYPES` 中有明确模型语义。

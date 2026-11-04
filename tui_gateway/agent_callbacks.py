@@ -211,6 +211,9 @@ def _announce_plugin_row(sid: str, row: Any) -> None:
     name, payload = event
     if name == "todo.reminder":
         _emit("todo.reminder", sid, payload)
+    elif name == "transcript.custom":
+        # ADR-9 D4: the row's own durable projection; never message.adviser.
+        _emit("transcript.custom", sid, payload)
     else:
         _emit("message.adviser", sid, payload)
 
@@ -221,6 +224,8 @@ def plugin_row_event(row: dict) -> tuple[str, dict] | None:
     Both the sidecar and the canonical local viewer dispatch through this one helper so the
     payload shapes cannot drift (ADR-10 D2/D3). ADR-10 P5: only ``custom_type`` selects the event;
     the one legacy row still announced is the adviser steer (a model-facing user row).
+    ADR-9 D4: a late-diagnostics row is emitted as ``transcript.custom`` carrying the exact
+    ``session.resume`` projection, and only to the omp-ui local viewer.
     """
     kind = str(row.get("custom_type") or "")
     if kind == "advisor" or row.get("display_kind") == "adviser":
@@ -228,6 +233,15 @@ def plugin_row_event(row: dict) -> tuple[str, dict] | None:
     if kind == "todo-reminder" or row.get("display_kind") == "todo_reminder":
         payload = _todo_reminder_payload(row)
         return ("todo.reminder", payload) if payload is not None else None
+    if kind == "lsp-late-diagnostic":
+        from agent.lsp.delivery import live_event_allowed
+
+        if not live_event_allowed() or not isinstance(row.get("_row_id"), int):
+            return None
+        from tui_gateway.session_history import custom_row_message
+
+        message = custom_row_message(row)
+        return ("transcript.custom", {"message": message}) if message is not None else None
     return None
 
 

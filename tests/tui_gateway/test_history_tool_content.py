@@ -178,14 +178,14 @@ def _compaction_rows():
     return standalone, merged
 
 
-def test_compaction_summary_is_opt_in_and_partial():
+def test_compaction_summary_is_opt_in_and_stamped():
     standalone, merged = _compaction_rows()
     hidden = _history_to_messages([standalone])
     assert hidden == []
     shown = _history_to_messages([standalone], include_compaction=True)
     assert shown[0]["role"] == "compaction_summary"
     assert shown[0]["text"] == "summary body"
-    assert "tokens_before" not in shown[0]  # ADR-5 P1 adds the stamp; the client defaults to 0
+    assert "details" not in shown[0]  # a pre-stamp row: no estimated numbers
     assert shown[0]["row_id"] == 4
     # A stamped row carries ADR-5 D2's metadata (counters + the boundary row it replaced).
     stamped = {**standalone, "display_metadata": {"compaction": {
@@ -195,10 +195,12 @@ def test_compaction_summary_is_opt_in_and_partial():
         "tokens_before": 120, "tokens_after": 40, "token_method": "estimate_rough",
         "method": "llm_summary", "boundary_row_id": 4}
     assert "display_metadata" not in row
-    # A merged handoff keeps its recovered live content instead of becoming the summary block.
+    # ADR-5 D3: a merged carrier emits the divider AND keeps its recovered live content below it.
     recovered = _history_to_messages([merged], include_compaction=True)
-    assert recovered[0]["role"] == "user"
-    assert recovered[0]["text"] == "EARLIER ASK"
+    assert [m["role"] for m in recovered] == ["compaction_summary", "user"]
+    assert recovered[0]["text"] == "body"
+    assert recovered[0]["row_id"] == 6
+    assert recovered[1]["text"] == "EARLIER ASK"
 
 
 @pytest.mark.parametrize("mode", ["none", "text", "full"])
