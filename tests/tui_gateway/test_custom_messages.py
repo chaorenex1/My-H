@@ -12,7 +12,7 @@ _history_to_messages = server._history_to_messages
 def _new_custom_row(**overrides):
     row = {
         "role": "custom",
-        "content": "[adviser — advisory only]\n- [concern · reviewer] re-read the failing test\n[end adviser]",
+        "content": "[advisor — advisory only]\n- [concern · reviewer] re-read the failing test\n[end advisor]",
         "custom_type": "advisor",
         "display": True,
         "display_only": False,
@@ -43,8 +43,8 @@ def test_custom_row_projects_as_custom_always():
 def test_legacy_display_row_normalizes_to_custom():
     row = {
         "role": "user",
-        "content": "[adviser — advisory only]\n- [nit] tighten the loop\n[end adviser]",
-        "display_kind": "adviser",
+        "content": "[advisor — advisory only]\n- [nit] tighten the loop\n[end advisor]",
+        "display_kind": "advisor",
         "display_metadata": {"severity": "nit"},
         "timestamp": 1.0,
         "_row_id": 8,
@@ -114,7 +114,7 @@ def test_custom_rows_convert_to_provider_roles(custom_type, attribution, expecte
 
 
 def test_legacy_display_rows_convert_only_in_a_custom_session():
-    row = {"role": "user", "content": "advice", "display_kind": "adviser"}
+    row = {"role": "user", "content": "advice", "display_kind": "advisor"}
     assert project_for_api(dict(row), custom_messages=True)[0]["role"] == "developer"
     assert project_for_api(dict(row), custom_messages=False)[0]["role"] == "user"
 
@@ -164,17 +164,17 @@ def test_transcript_notice_is_one_line_for_the_status_path():
         "compacting context", "done"]
 
 
-def test_adviser_card_writes_the_custom_row_in_a_custom_session(monkeypatch):
+def test_advisor_card_writes_the_custom_row_in_a_custom_session(monkeypatch):
     from types import SimpleNamespace
 
-    from agent.adviser_delivery import append_card
+    from agent.advisor_delivery import append_card
     from gateway import session_policy
 
     monkeypatch.setattr(session_policy, "active_policy",
                         lambda: SimpleNamespace(custom_messages=True))
     agent = SimpleNamespace(messages=[], _session_messages=None,
                             _flush_messages_to_session_db=lambda *_: None)
-    text = "[adviser — advisory only]\n- [concern · reviewer] re-read the failing test\n[end adviser]"
+    text = "[advisor — advisory only]\n- [concern · reviewer] re-read the failing test\n[end advisor]"
     assert append_card(agent, text, severity="concern")
     row = agent.messages[-1]
     assert row["role"] == "custom"
@@ -281,7 +281,7 @@ def test_transcript_capabilities_cover_the_d6_catalog():
     blocks = transcript_capabilities()
     assert len(blocks) == len(TRANSCRIPT_BLOCKS)
     expected = {
-        "adviser", "skill_invocation", "todo_reminder", "compaction_summary", "recap",
+        "advisor", "skill_invocation", "todo_reminder", "compaction_summary", "recap",
         "ttsr_notification", "late_diagnostics", "cache_miss_marker", "served_model_marker",
         "stripped_tool_calls", "reaction", "tool_execution", "notice", "background_tan",
         "collab_prompt", "reply_write",
@@ -295,7 +295,7 @@ def test_transcript_capabilities_cover_the_d6_catalog():
             assert capability["status"] in {"ready", "partial"}, block_id
             assert capability["events"] or capability["fields"], block_id
     # The producers landed by P1-P3 are ready; the ADR-3/5 blocks stay unsupported.
-    for block_id in ("adviser", "skill_invocation", "tool_execution", "notice", "ttsr_notification",
+    for block_id in ("advisor", "skill_invocation", "tool_execution", "notice", "ttsr_notification",
                      "late_diagnostics"):
         assert blocks[block_id]["status"] == "ready", block_id
         assert blocks[block_id]["fields"], block_id

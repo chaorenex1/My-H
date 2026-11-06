@@ -2,7 +2,7 @@
 
 Handlers: ``tui_gateway/methods_model_roles.py``. Hermes has one kind of auxiliary model role
 (``auxiliary.<task>``) plus two imported omp roles Hermes backs elsewhere: ``task`` →
-``delegation:`` and ``advisor`` → ``adviser:``. ``target`` says which section a row writes and
+``delegation:`` and ``advisor`` → ``advisor:``. ``target`` says which section a row writes and
 ``group`` whether it is a built-in picker slot, a plugin-registered task, or imported.
 
 ``tag`` is the omp badge the shell renders (VISION, TINY, MEMORY, …); the map lives server-side in
@@ -34,7 +34,7 @@ class ModelRoleRow(Result):
 
     ``reasoning_effort`` is the slot's own override: a level, ``"none"``, or ``null`` (inherit
     ``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config
-    section the row writes (``auxiliary``, ``delegation``, ``adviser`` or ``chain`` —
+    section the row writes (``auxiliary``, ``delegation``, ``advisor`` or ``chain`` —
     ``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots,
     plugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base
     slot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the
@@ -51,7 +51,7 @@ class ModelRoleRow(Result):
     reasoning_effort: str | None = None
     fallback_chain: list[ModelRoleFallbackEntry] = Field(default_factory=list)
     group: Literal["builtin", "plugin", "imported", "chain"] = "builtin"
-    target: Literal["auxiliary", "delegation", "adviser", "chain"] = "auxiliary"
+    target: Literal["auxiliary", "delegation", "advisor", "chain"] = "auxiliary"
     inherit_from: str | None = None
 
 

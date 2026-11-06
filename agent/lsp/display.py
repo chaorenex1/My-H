@@ -1,8 +1,8 @@
 """``lsp.display``: which diagnostics surface shows, and where (ADR-9 D12).
 
 Pure presentation policy. It never opens a scanner: ``lsp.enabled`` / ``code_intel.semgrep.enabled``
-stay the on/off switches for the subsystem, and ``hermes code index``'s Semgrep layer ignores this
-block. Every consumer reads the policy BEFORE it branches on custom vs legacy sessions, so a CLI,
+stay the on/off switches for the subsystem, and Semgrep is live-only (ADR-15), so ``hermes code
+index`` never runs it and this block only gates the write path and explicit queries. Every consumer reads the policy BEFORE it branches on custom vs legacy sessions, so a CLI,
 Desktop or messaging turn gets the same ``inline``/``severities`` filtering as omp-ui.
 
 The defaults reproduce the pre-ADR-9 behaviour byte for byte: LSP ``both`` + ``error`` (the inline

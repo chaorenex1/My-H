@@ -125,15 +125,15 @@ def _plugin_continuation_row(pending: dict) -> dict:
     }
 
 
-def _adviser_continuation(agent) -> Optional[dict]:
-    """A native adviser's stop-gate request for one more round, or ``None``."""
-    adviser = getattr(agent, "adviser", None)
-    if adviser is None:
+def _advisor_continuation(agent) -> Optional[dict]:
+    """A native advisor's stop-gate request for one more round, or ``None``."""
+    advisor = getattr(agent, "advisor", None)
+    if advisor is None:
         return None
     try:
-        return adviser.take_continuation()
+        return advisor.take_continuation()
     except Exception:
-        logger.debug("adviser continuation read failed", exc_info=True)
+        logger.debug("advisor continuation read failed", exc_info=True)
         return None
 
 
@@ -213,27 +213,27 @@ def apply_stop_gates(
             ),
         )
 
-    from agent.adviser_bridge import terminal_review
+    from agent.advisor_bridge import terminal_review
 
     terminal_review(agent, messages, final_response)
 
-    _adviser_pending = _adviser_continuation(agent)
-    if _adviser_pending:
+    _advisor_pending = _advisor_continuation(agent)
+    if _advisor_pending:
         from agent.prompt_builder import advisory_user_row
 
-        agent._adviser_continue_nudges = getattr(agent, "_adviser_continue_nudges", 0) + 1
-        final_msg["finish_reason"] = "adviser_continue"
+        agent._advisor_continue_nudges = getattr(agent, "_advisor_continue_nudges", 0) + 1
+        final_msg["finish_reason"] = "advisor_continue"
         _append_interim_answer(
             agent, final_msg, messages, conversation_history,
-            "adviser continuation interim flush failed",
+            "advisor continuation interim flush failed",
         )
-        adviser_row = advisory_user_row(str(_adviser_pending.get("text") or ""))
-        append_message(messages, adviser_row)
-        notify_plugin_message(agent, adviser_row)
+        advisor_row = advisory_user_row(str(_advisor_pending.get("text") or ""))
+        append_message(messages, advisor_row)
+        notify_plugin_message(agent, advisor_row)
         agent._session_messages = messages
         logger.debug(
-            "adviser continuation nudge issued (attempt %d, source=%s)",
-            agent._adviser_continue_nudges, _adviser_pending.get("source") or "",
+            "advisor continuation nudge issued (attempt %d, source=%s)",
+            agent._advisor_continue_nudges, _advisor_pending.get("source") or "",
         )
         return StopGateVerdict(
             continue_turn=True, final_response=None,

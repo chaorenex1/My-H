@@ -97,7 +97,7 @@ const sidebars: SidebarsConfig = {
             'user-guide/features/context-files',
             'user-guide/features/context-references',
             'user-guide/features/mixture-of-agents',
-            'user-guide/features/adviser',
+            'user-guide/features/advisor',
             'user-guide/features/agent-tool',
             'user-guide/features/personality',
             'user-guide/features/skins',

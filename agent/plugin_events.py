@@ -1,6 +1,6 @@
 """One-way notification for transcript rows a plugin injected.
 
-The adviser writes a real user-role row (display_kind=adviser) so the model sees the advice and
+The advisor writes a real user-role row (display_kind=advisor) so the model sees the advice and
 the transcript survives resume. A live surface needs the same event at injection time, or the
 card only appears after a rehydrate. The callback is installed by the surface (the gateway) and
 is optional: an agent without it behaves exactly as before.

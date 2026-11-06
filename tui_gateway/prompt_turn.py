@@ -450,11 +450,11 @@ def _run_post_turn_followups(
         with session["history_lock"]:
             envelope = _enqueue_prompt(session, steer, session.get("transport"), sid=sid)
             if envelope is not None:
-                # An adviser trigger is still a real turn, but its row must render as an adviser
+                # An advisor trigger is still a real turn, but its row must render as an advisor
                 # card, not as words the user typed. The label rides the queued row into the
                 # drained turn, where ``_run_prompt_submit`` adopts it.
                 _persist_queued_user_row(
-                    session, envelope, "adviser" if steer_kind == "adviser" else None)
+                    session, envelope, "advisor" if steer_kind == "advisor" else None)
     if _drain_queued_prompt(rid, sid, session):
         return
     if goal_followup:

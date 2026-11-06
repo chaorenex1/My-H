@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   EMPTY_CHAT,
-  adviserSeverity,
+  advisorSeverity,
   applyEvent,
   rowsFromHistory,
   type ChatEvent,
@@ -13,17 +13,17 @@ function event<T extends ChatEvent["type"]>(type: T, payload: unknown, seq = 1):
 }
 
 describe("rowsFromHistory", () => {
-  it("maps an adopted adviser row to a card, not a user bubble", () => {
+  it("maps an adopted advisor row to a card, not a user bubble", () => {
     const rows = rowsFromHistory([
       {
         role: "user",
-        display_kind: "adviser",
-        text: "[adviser — advisory only]\n- [concern · reviewer] check the migration",
+        display_kind: "advisor",
+        text: "[advisor — advisory only]\n- [concern · reviewer] check the migration",
       },
     ]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].kind).toBe("adviser");
-    if (rows[0].kind === "adviser") expect(rows[0].severity).toBe("concern");
+    expect(rows[0].kind).toBe("advisor");
+    if (rows[0].kind === "advisor") expect(rows[0].severity).toBe("concern");
   });
 
   it("keeps tool rows and drops empty assistant rows", () => {
@@ -52,18 +52,18 @@ describe("applyEvent", () => {
     expect(state.streamingId).toBeNull();
   });
 
-  it("adds an adviser card at the turn end and dedupes by id", () => {
+  it("adds an advisor card at the turn end and dedupes by id", () => {
     const payload = {
       id: "ad-1",
-      text: "[adviser] check it",
+      text: "[advisor] check it",
       severity: "blocker",
-      label: "adviser · blocker",
-      display_kind: "adviser",
+      label: "advisor · blocker",
+      display_kind: "advisor",
     };
-    let state = applyEvent(EMPTY_CHAT, event("message.adviser", payload));
-    state = applyEvent(state, event("message.adviser", payload, 2));
+    let state = applyEvent(EMPTY_CHAT, event("message.advisor", payload));
+    state = applyEvent(state, event("message.advisor", payload, 2));
     expect(state.rows).toHaveLength(1);
-    expect(state.rows[0].kind).toBe("adviser");
+    expect(state.rows[0].kind).toBe("advisor");
   });
 
   it("updates a tool row in place", () => {
@@ -83,10 +83,10 @@ describe("applyEvent", () => {
   });
 });
 
-describe("adviserSeverity", () => {
+describe("advisorSeverity", () => {
   it("reads the per-note header, then falls back to the block header", () => {
-    expect(adviserSeverity("- [blocker · reviewer] stop")).toBe("blocker");
-    expect(adviserSeverity("[adviser — concern] note")).toBe("concern");
-    expect(adviserSeverity("no marker")).toBe("advisory");
+    expect(advisorSeverity("- [blocker · reviewer] stop")).toBe("blocker");
+    expect(advisorSeverity("[advisor — concern] note")).toBe("concern");
+    expect(advisorSeverity("no marker")).toBe("advisory");
   });
 });

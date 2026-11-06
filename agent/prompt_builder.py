@@ -583,8 +583,8 @@ def format_steer_marker(steer_text: str) -> str:
 
 STEER_DISPLAY_KIND = "steer"
 #: Row kind for plugin advice delivered mid-turn. Not a user steer: the text carries its own
-#: `[adviser — advisory only]` frame and must not claim the user's authority.
-ADVISER_DISPLAY_KIND = "adviser"
+#: `[advisor — advisory only]` frame and must not claim the user's authority.
+ADVISOR_DISPLAY_KIND = "advisor"
 
 
 def steer_user_row(steer_text: str) -> dict[str, Any]:
@@ -599,17 +599,17 @@ def steer_user_row(steer_text: str) -> dict[str, Any]:
 def advisory_user_row(text: str) -> dict[str, Any]:
     """Plugin advice as a user-role row without the user-authority marker.
 
-    Providers need a user/tool row at the delivery point, but an adviser is not the user. The
-    body already opens with ``[adviser — advisory only]``; ``display_kind`` keeps it out of the
+    Providers need a user/tool row at the delivery point, but an advisor is not the user. The
+    body already opens with ``[advisor — advisory only]``; ``display_kind`` keeps it out of the
     "human input" bucket in history/compaction code that checks the kind.
     """
-    return {"role": "user", "content": str(text), "display_kind": ADVISER_DISPLAY_KIND,
+    return {"role": "user", "content": str(text), "display_kind": ADVISOR_DISPLAY_KIND,
             "plugin_message_id": uuid.uuid4().hex}
 
 
 def steer_row(text: str, kind: str = "user") -> dict[str, Any]:
     """Pick the row shape for a drained steer: operator text or plugin advice."""
-    if str(kind or "").lower() == ADVISER_DISPLAY_KIND:
+    if str(kind or "").lower() == ADVISOR_DISPLAY_KIND:
         return advisory_user_row(text)
     return steer_user_row(text)
 

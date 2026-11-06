@@ -1,7 +1,7 @@
 """Models-hub Roles JSON-RPC handlers: Hermes config is the single truth.
 
 ``model.roles.get`` projects the picker slots (``aux_picker_keys()``), the imported omp roles Hermes
-backs outside ``auxiliary`` (``task`` → ``delegation:``, ``advisor`` → ``adviser:``) and
+backs outside ``auxiliary`` (``task`` → ``delegation:``, ``advisor`` → ``advisor:``) and
 plugin-registered tasks (``_plugin_aux_tasks()``) with the route each role stores in the addressed
 profile's ``config.yaml``; built-in rows carry ``AUX_TASK_META``'s label/hint, imported and plugin
 rows the ones their registry declares. Every row wears an omp tag from ``aux_slots.omp_role_tags``.
@@ -78,7 +78,7 @@ def _cycle_order(cfg: dict) -> list[str]:
 
 
 def _imported_rows(cfg: dict) -> list[dict]:
-    """The omp roles backed by ``delegation:``/``adviser:``, in picker order."""
+    """The omp roles backed by ``delegation:``/``advisor:``, in picker order."""
     from hermes_cli.aux_slots import IMPORTED_ROLE_META, omp_role_tag
     from hermes_cli.imported_roles import read_imported_route
 
@@ -183,7 +183,7 @@ def _imported_effort(rid, role: str, raw) -> tuple[dict, dict | None]:
             return {}, None
         return {}, _err(rid, _ROLE_INVALID,
                         "advisor has no reasoning_effort override in Hermes "
-                        "(adviser config stores only provider/model)")
+                        "(advisor config stores only provider/model)")
     if effort == "inherit":
         return {"reasoning_effort": None}, None
     from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
@@ -204,7 +204,7 @@ def _imported_chain(rid, role: str, raw) -> tuple[dict, dict | None]:
             return {}, None  # an empty chain is the hub's "none configured", not a write
         return {}, _err(rid, _ROLE_INVALID,
                         "advisor has no fallback chain in Hermes "
-                        "(adviser runs the one configured review model)")
+                        "(advisor runs the one configured review model)")
     from hermes_cli.aux_fallback import normalize_fallback_chain
 
     try:
@@ -214,7 +214,7 @@ def _imported_chain(rid, role: str, raw) -> tuple[dict, dict | None]:
 
 
 def _set_imported_role(rid, params: dict, role: str) -> dict:
-    """Assign/clear ``task`` (``delegation:``) or ``advisor`` (``adviser:``)."""
+    """Assign/clear ``task`` (``delegation:``) or ``advisor`` (``advisor:``)."""
     from hermes_cli.config import _CONFIG_LOCK, load_config, save_config
     from hermes_cli.imported_roles import write_imported_route
     from hermes_cli.web_routers._common import _CONFIG_MUTATION_LOCK

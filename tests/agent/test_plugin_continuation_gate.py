@@ -57,7 +57,7 @@ def test_a_plugin_continuation_keeps_the_turn_open_with_a_visible_row(agent):
         calls["n"] += 1
         if calls["n"] == 1:
             queued = plugin_runtime.request_continuation(
-                SESSION, "[adviser — advisory only]\nre-read the failing test", source="minir",
+                SESSION, "[advisor — advisory only]\nre-read the failing test", source="minir",
             )
             assert queued["ok"] is True
             return _response("first answer")
@@ -116,7 +116,7 @@ def test_the_injected_row_is_announced_to_the_surface(agent):
         calls["n"] += 1
         if calls["n"] == 1:
             plugin_runtime.request_continuation(
-                SESSION, "[adviser — advisory only]\nkeep going", source="minir")
+                SESSION, "[advisor — advisory only]\nkeep going", source="minir")
         return _response("first pass done")
 
     agent._interruptible_api_call = model_call
@@ -124,14 +124,14 @@ def test_the_injected_row_is_announced_to_the_surface(agent):
         agent.run_conversation("do the work")
 
     assert len(seen) == 1
-    assert seen[0]["display_kind"] == "adviser"
+    assert seen[0]["display_kind"] == "advisor"
     assert len(seen[0]["plugin_message_id"]) == 32
 
 
 def test_a_plugin_can_trigger_the_next_turn(agent):
     def model_call(_api_kwargs):
         queued = plugin_runtime.queue_post_turn(
-            SESSION, "[adviser — advisory only]\nfinish the failing test", source="minir")
+            SESSION, "[advisor — advisory only]\nfinish the failing test", source="minir")
         assert queued["ok"] is True
         return _response("first pass done")
 
@@ -141,8 +141,8 @@ def test_a_plugin_can_trigger_the_next_turn(agent):
 
     assert result["final_response"] == "first pass done"
     # The surface (CLI/gateway/TUI) already submits a leftover pending_steer as the next turn.
-    assert result["pending_steer"].startswith("[adviser — advisory only]")
-    assert result["pending_steer_kind"] == "adviser"
+    assert result["pending_steer"].startswith("[advisor — advisory only]")
+    assert result["pending_steer_kind"] == "advisor"
 
 
 def test_a_continuation_queued_by_a_previous_turn_does_not_leak(agent):

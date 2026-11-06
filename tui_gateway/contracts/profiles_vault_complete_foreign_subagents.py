@@ -793,7 +793,7 @@ method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
 
 class SubagentConfigParams(ProfileParams):
     """Per-agent custom configuration stored in the profile's state.db (not config.yaml):
-    model/provider, adviser/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves
+    model/provider, advisor/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves
     the running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster
     file path). Omitted fields keep their stored value."""
 

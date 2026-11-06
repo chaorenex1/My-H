@@ -207,7 +207,7 @@ DEFAULT_CONFIG = {
         "max_verify_nudges": 3,
         "todo_reminders": True, "todo_reminders_max": 3,  # ADR-2 D11; interactive surfaces only
         # Max consecutive plugin stop-gate continuations per turn (`hermes_cli.plugin_runtime.
-        # request_continuation`); separate from the verify budget: adviser work must not consume it.
+        # request_continuation`); separate from the verify budget: advisor work must not consume it.
         "max_plugin_continuations": 2,
         # Verification closure: after code edits in a workspace, refuse a final answer until fresh
         # verification evidence exists or the agent explains why it can't check (bounded loop,

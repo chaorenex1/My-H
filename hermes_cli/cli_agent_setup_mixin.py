@@ -12,23 +12,23 @@ from rich.markup import escape as _escape
 from agent.i18n import t
 from utils import base_url_host_matches
 
-# One `- [severity · target · adviser] text` line inside a plugin adviser row.
-_ADVISER_ITEM_RE = re.compile(r"^- \[([^\]]+)\]\s*(.*)$")
+# One `- [severity · target · advisor] text` line inside a plugin advisor row.
+_ADVISOR_ITEM_RE = re.compile(r"^- \[([^\]]+)\]\s*(.*)$")
 
 
-def _adviser_rows(content) -> tuple[str, list[str]]:
-    """``(label, body lines)`` for a plugin adviser row.
+def _advisor_rows(content) -> tuple[str, list[str]]:
+    """``(label, body lines)`` for a plugin advisor row.
 
     The bracketed header/footer are machine chrome around the rendered block; neither the
     live line nor the resume recap should show them.
     """
-    label = "adviser"
+    label = "advisor"
     body: list[str] = []
     for line in str(content or "").splitlines():
         text = line.strip()
-        if not text or text.startswith("[adviser") or text == "[end adviser]":
+        if not text or text.startswith("[advisor") or text == "[end advisor]":
             continue
-        match = _ADVISER_ITEM_RE.match(text)
+        match = _ADVISOR_ITEM_RE.match(text)
         if match:
             label = match.group(1).strip() or label
             if match.group(2).strip():
@@ -38,15 +38,15 @@ def _adviser_rows(content) -> tuple[str, list[str]]:
     return label, body
 
 
-def _adviser_items(content) -> list[tuple[str, str]]:
-    """``(label, text)`` for each note row in a plugin adviser row.
+def _advisor_items(content) -> list[tuple[str, str]]:
+    """``(label, text)`` for each note row in a plugin advisor row.
 
     The resume recap only needs the block summary, but the live CLI line paints each note
     with its own severity, so callers need the rows separately.
     """
     items: list[tuple[str, str]] = []
     for line in str(content or "").splitlines():
-        match = _ADVISER_ITEM_RE.match(line.strip())
+        match = _ADVISOR_ITEM_RE.match(line.strip())
         if match and match.group(2).strip():
             items.append((match.group(1).strip(), match.group(2).strip()))
     return items
@@ -237,16 +237,16 @@ def _collect_resume_entries(display_history, disp: dict, clean_assistant):
             label = metadata.get("display_text") if display_kind in ("async_delegation_complete", "process_complete") else None
             entries.append(("event", _sanitize_display_text(label or t(_RESUME_EVENT_KEYS[display_kind]))))
             continue
-        if display_kind == "adviser":
+        if display_kind == "advisor":
             # Plugin guidance, not a human prompt: show the severity/label and the advice
             # body, never the rendered block's brackets.
-            adviser_label, adviser_body = _adviser_rows(content)
-            text = _sanitize_display_text(" ".join(adviser_body)).strip()
+            advisor_label, advisor_body = _advisor_rows(content)
+            text = _sanitize_display_text(" ".join(advisor_body)).strip()
             if not text:
                 continue
             if len(text) > max_user_len:
                 text = text[:max_user_len] + "..."
-            entries.append(("adviser", f"{adviser_label}: {text}"))
+            entries.append(("advisor", f"{advisor_label}: {text}"))
             continue
         if role == "user":
             text = _sanitize_display_text(withheld_prompt_text(msg) or _user_display_text(content))
@@ -809,9 +809,9 @@ class CLIAgentSetupMixin:
             self.agent._finite = single_query_mode  # -q/-Q: a finite gateway admission (headless clarify)
             from hermes_cli.gateway_tools import bind
             bind(self.agent)  # main's dock / status bar / /stop read this session's gateway processes
-            # Plugin-injected adviser rows (host `plugin_message_callback`): draw the guidance
+            # Plugin-injected advisor rows (host `plugin_message_callback`): draw the guidance
             # at injection time instead of letting the next prompt repaint show a bare user turn.
-            self.agent.plugin_message_callback = self._on_adviser_row
+            self.agent.plugin_message_callback = self._on_advisor_row
             # Hydrate credits notices at session OPEN (parity with the TUI) so a depletion
             # warning shows before the first message. Idempotent + fail-open in the helper.
             try:
@@ -951,10 +951,10 @@ class CLIAgentSetupMixin:
         # role -> (label, label style, body style, continuation indent)
         you_label = f"  {t('cli.resume.label_you')} "
         assistant_label = f"  {t('cli.resume.label_assistant', agent_name='Hermes')} "
-        adviser_label = "  ◆ adviser "
+        advisor_label = "  ◆ advisor "
         role_styles = {
             "user": (you_label, f"dim bold {_session_label_c}", "dim", " " * len(you_label)),
-            "adviser": (adviser_label, f"dim bold {_assistant_label_c}", "dim", " " * len(adviser_label)),
+            "advisor": (advisor_label, f"dim bold {_assistant_label_c}", "dim", " " * len(advisor_label)),
             "assistant": (assistant_label, f"dim bold {_assistant_label_c}", "dim", " " * len(assistant_label)),
             "assistant_last": (assistant_label, f"bold {_assistant_label_c}", "", " " * len(assistant_label)),  # full, non-dim
         }

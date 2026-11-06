@@ -48,7 +48,7 @@ D10 写明 `is_error` 必须 merge 进 callback 返回的 `display_metadata`；�
 - **8 个区块需要新增 producer/数据**：
   - 助手消息、Cache miss 标记 → `tool.start.step_usage` / `message.complete.step_usage`（每步）；
   - Served model 标记 → `message.complete.served_model` / `requested_model`；
-  - Advisor → canonical 路径的 `message.adviser`；
+  - Advisor → canonical 路径的 `message.advisor`；
   - 工具执行、图片/SVG/figure → `session.history.include_tool_content`（resume 后的工具正文与图片）；
   - Transcript 选择器 → `session.history.outline`（rewind 入口本身是客户端接线，不是网关数据）；
   - Todo 提醒 → `todo.reminder` + 持久化的 reminder 行（D11）。
@@ -109,20 +109,20 @@ canonical 的 `completion_payload` 从 `captured['result']` 读取。`gateway/ru
 分别取 turn result 的 `served_model` / `requested_model`（缺失为 `null`）。omp 的 `ServedModelTracker`
 读 `AssistantMessage.upstreamModel`（字段已存在），映射层直接赋值。
 
-### D3. canonical 本地 viewer 补发 `message.adviser`
+### D3. canonical 本地 viewer 补发 `message.advisor`
 
 `plugin_message_callback` 在 **gateway 路径**上目前只有 sidecar 安装（`tui_gateway/agent_callbacks.py:189,199`；
 classic CLI 另在 `hermes_cli/cli_agent_setup_mixin.py:816` 安装，与本 ADR 无关），canonical turn 的
 `gateway/run_turn_runner.py:489 _wire_turn_agent_callbacks` 没有装，所以 advisor 只有 resume 快照、
 没有实时卡片。
 
-决定：在 `_wire_turn_agent_callbacks` 装一个过滤 `display_kind=="adviser"` 的 callback，复用
-`tui_gateway/agent_callbacks.py::_adviser_payload`，通过 `_publish_execution("message.adviser", ...)`
+决定：在 `_wire_turn_agent_callbacks` 装一个过滤 `display_kind=="advisor"` 的 callback，复用
+`tui_gateway/agent_callbacks.py::_advisor_payload`，通过 `_publish_execution("message.advisor", ...)`
 发出（契约 `tui_gateway/contracts/events.py:245` 已存在）。同一个 dispatcher 也按 `display_kind`
 分发 `todo_reminder`（D11），sidecar 与 canonical 复用同一个 payload 构造 helper。
 
 快照侧不改：`_history_to_messages` 已保留 `display_kind`（`session_history.py:364-368`），客户端按
-`display_kind=="adviser"` 画 Advisor 块，不新增行类型。
+`display_kind=="advisor"` 画 Advisor 块，不新增行类型。
 
 ### D4. 压缩摘要不做 transcript 块
 
@@ -330,7 +330,7 @@ Background TAN 由 ADR-3 取代。Todo 提醒已由 D11 决定实现，不在此
      （fallback = final_response）。
 - 事件：`todo.reminder {todos, attempt, max_attempts}`。行 append 后调 `notify_plugin_message(agent, row)`；
   sidecar 扩展 `tui_gateway/agent_callbacks.py::_announce_plugin_row`，canonical 在 D3 的
-  `plugin_message_callback` 里做同一 `display_kind` 分发（`adviser` / `todo_reminder`），payload 构造
+  `plugin_message_callback` 里做同一 `display_kind` 分发（`advisor` / `todo_reminder`），payload 构造
   复用一个 helper（从 `display_metadata.todo_reminder` 取）。不新增回调。
 - 进展清零：`agent/tool_executor.py::_commit_tool_result` 在每次工具结果后把
   `_todo_reminder_awaiting_progress = False`（成功/失败都清，对齐 `onToolResult`）。
@@ -386,7 +386,7 @@ message.complete (additive)
   served_model?:  string | null
   requested_model?: string | null
 
-message.adviser                  # payload 不变（events.MessageAdviserPayload）
+message.advisor                  # payload 不变（events.MessageAdvisorPayload）
   # canonical 本地 viewer 也发；sidecar 行为不变
 
 todo.reminder (new)
@@ -421,7 +421,7 @@ session.history (E)
 | 用量 | `gateway/run_turn_progress.py::publish_worker_tool_event` | v1 不改：worker 帧字段严格校验，managed/remote 回合 `step_usage=null`；扩展需同时加帧字段、worker allowlist 与 `read` 白名单 |
 | 用量 | `tui_gateway/prompt_turn.py::_complete_turn_payload` | 填 `step_usage`、`served_model`、`requested_model` |
 | 用量 | `gateway/session_settlement_recovery.py::completion_payload` | 从 captured 转出三个字段 |
-| advisor | `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` | 装过滤后的 `plugin_message_callback` → `message.adviser` |
+| advisor | `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` | 装过滤后的 `plugin_message_callback` → `message.advisor` |
 | todo | `agent/todo_reminder.py`（新） | enabled/max、active todos、surface/subagent/finite 守卫、closing-question、async wake |
 | todo | `agent/turn_stop_gates.py` | kanban gate 后加 todo gate：append reminder 行 + `continue_turn=True` |
 | todo | `tui_gateway/contracts/events.py` | `todo.reminder {todos, attempt, max_attempts}` |
@@ -460,7 +460,7 @@ session.history (E)
 | provider 未返回 usage 的步 | 保持 `null`，不填 0；`TurnUsageTally` 自然跳过 |
 | tool-only step 没有可关闭的 assistant 段 | 客户端把 `step_usage` 直接计入 `TurnUsageTally`，不渲染空块（D8） |
 | managed / remote 回合没有 per-step usage | 字段为 `null`，客户端显示缺省，不回退到累计 `usage`；验收覆盖 |
-| `message.adviser` 与快照重复 | resume 以快照替换 transcript；live 事件只追加，不合并历史 |
+| `message.advisor` 与快照重复 | resume 以快照替换 transcript；live 事件只追加，不合并历史 |
 | `include_tool_content:"full"` 放大 payload | 默认 `none`；单行字节上限；超限回落占位；resume 快照不启用 |
 | DB tool `content` 是模型侧包装文本 | `include_tool_content` 走 `display_tool_result_content`（按工具名剥 wrapper/notice）；验收覆盖 web/browser/MCP |
 | metadata callback 与 `complete_fields` 争用 edit snapshot | peek 或缓存渲染结果；before-state 只消费一次 |
@@ -482,7 +482,7 @@ session.history (E)
 3. managed / remote 回合：`step_usage` 为 `null`，客户端不显示伪值、不报错，也不回退到累计
    `usage` 冒充单步。
 4. fallback 回合 `served_model != requested_model`；正常回合两者一致或 `served_model` 缺省。
-5. canonical 本地 viewer 收到且只收到一次 `message.adviser`；resume 后同一行按 `display_kind="adviser"`
+5. canonical 本地 viewer 收到且只收到一次 `message.advisor`；resume 后同一行按 `display_kind="advisor"`
    还原，不重复。
 6. `session.history`：`none` 的响应字节不高于现状；`text`/`full` 返回 **display-safe** 投影——
    `web_extract`/`browser_*`/`mcp_*` 的文本与 live `tool.complete.result` 一致，不含

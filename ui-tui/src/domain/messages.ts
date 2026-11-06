@@ -3,25 +3,25 @@ import type { SessionInfo } from '@hermes/shared/gateway-types'
 import { LONG_MSG } from '../config/limits.js'
 import { t } from '../i18n/runtime.js'
 import { buildToolTrailLine } from '../lib/text.js'
-import type { AdviserMeta, Msg } from '../types.js'
+import type { AdvisorMeta, Msg } from '../types.js'
 
-// Adviser rows are persisted as rendered text: a bracketed header, one `- [label] text`
+// Advisor rows are persisted as rendered text: a bracketed header, one `- [label] text`
 // line per advice, and a footer. The card shows the same body the Desktop parses.
-const ADVISER_HEADER_RE = /^\[adviser[^\n]*\]\s*/
-const ADVISER_FOOTER_RE = /\s*\[end adviser\]\s*$/
-const ADVISER_ITEM_RE = /^- \[([^\]]+)\]\s*(.*)$/gm
-const ADVISER_SEVERITY_RANK: Record<string, number> = { blocker: 3, concern: 2, nit: 1 }
+const ADVISOR_HEADER_RE = /^\[advisor[^\n]*\]\s*/
+const ADVISOR_FOOTER_RE = /\s*\[end advisor\]\s*$/
+const ADVISOR_ITEM_RE = /^- \[([^\]]+)\]\s*(.*)$/gm
+const ADVISOR_SEVERITY_RANK: Record<string, number> = { blocker: 3, concern: 2, nit: 1 }
 
-/** Split an adviser block into its display body and card metadata. */
-export const adviserFromText = (content: string): { body: string; meta: AdviserMeta } | undefined => {
+/** Split an advisor block into its display body and card metadata. */
+export const advisorFromText = (content: string): { body: string; meta: AdvisorMeta } | undefined => {
   const raw = String(content || '').trim()
 
   if (!raw) {
     return undefined
   }
 
-  const body = raw.replace(ADVISER_HEADER_RE, '').replace(ADVISER_FOOTER_RE, '').trim()
-  const items = [...body.matchAll(ADVISER_ITEM_RE)].map(match => {
+  const body = raw.replace(ADVISOR_HEADER_RE, '').replace(ADVISOR_FOOTER_RE, '').trim()
+  const items = [...body.matchAll(ADVISOR_ITEM_RE)].map(match => {
     const label = match[1].trim()
 
     return { label, severity: label.split(' · ')[0]?.trim() || 'advisory', text: match[2].trim() }
@@ -29,7 +29,7 @@ export const adviserFromText = (content: string): { body: string; meta: AdviserM
   // A mixed block is as loud as its strongest row, not as its first one.
   const top = items.reduce<(typeof items)[number] | undefined>(
     (best, item) =>
-      !best || (ADVISER_SEVERITY_RANK[item.severity] ?? 0) > (ADVISER_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
+      !best || (ADVISOR_SEVERITY_RANK[item.severity] ?? 0) > (ADVISOR_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
     undefined
   )
 
@@ -39,8 +39,8 @@ export const adviserFromText = (content: string): { body: string; meta: AdviserM
   }
 }
 
-/** The adviser card metadata from the gateway's `details.notes` (ADR-10 D1). */
-export const adviserMetaFromNotes = (notes: readonly AdviserNote[]): AdviserMeta => {
+/** The advisor card metadata from the gateway's `details.notes` (ADR-10 D1). */
+export const advisorMetaFromNotes = (notes: readonly AdvisorNote[]): AdvisorMeta => {
   const items = notes.map(note => {
     const severity = note.severity ?? 'advisory'
     const label = [severity, note.advisor].filter(Boolean).join(' · ')
@@ -49,7 +49,7 @@ export const adviserMetaFromNotes = (notes: readonly AdviserNote[]): AdviserMeta
   })
   const top = items.reduce<(typeof items)[number] | undefined>(
     (best, item) =>
-      !best || (ADVISER_SEVERITY_RANK[item.severity] ?? 0) > (ADVISER_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
+      !best || (ADVISOR_SEVERITY_RANK[item.severity] ?? 0) > (ADVISOR_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
     undefined
   )
 
@@ -116,11 +116,11 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       if (custom_type === 'advisor') {
         // Plugin guidance the model saw; never a human prompt. Details are canonical (D1);
         // the text parse only recovers the body for an older gateway.
-        const parsed = adviserFromText(text)
+        const parsed = advisorFromText(text)
         const notes = Array.isArray(details?.notes) ? details.notes : undefined
-        const meta = notes ? adviserMetaFromNotes(notes) : parsed?.meta
+        const meta = notes ? advisorMetaFromNotes(notes) : parsed?.meta
         out.push({
-          ...(meta ? { adviser: meta } : {}),
+          ...(meta ? { advisor: meta } : {}),
           role: 'system',
           text: parsed?.body ?? text,
           ...(createdAt !== undefined && { createdAt })
@@ -197,7 +197,7 @@ export const fmtDuration = (ms: number) => {
   return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-interface AdviserNote {
+interface AdvisorNote {
   advisor?: string
   note?: string
   severity?: string
@@ -208,7 +208,7 @@ interface TranscriptRow {
   custom_type?: string
   details?: {
     display_text?: string
-    notes?: AdviserNote[]
+    notes?: AdvisorNote[]
     task_count?: number
     [key: string]: unknown
   }

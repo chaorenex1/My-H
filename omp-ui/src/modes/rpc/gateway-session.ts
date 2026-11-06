@@ -152,7 +152,7 @@ function toolRowContent(row: TranscriptMessage, text: string): (TextContent | Im
 
 /**
  * ADR-10 D8.1/P5: one gateway custom row as a display-only message. The client reads
- * `custom_type`/`details` and never parses adviser/skill/todo text; a row without details
+ * `custom_type`/`details` and never parses advisor/skill/todo text; a row without details
  * renders as the generic custom block. The legacy marker pair no longer exists on the wire.
  */
 function customRowToMessage(row: TranscriptMessage): CustomMessage | undefined {
@@ -557,7 +557,7 @@ export class GatewayOmpSession {
 	/**
 	 * Project a persisted transcript row onto the shell's `AgentMessage` vocabulary (ADR-10 D8.1).
 	 *
-	 * Wire rows carry `role` + `custom_type`/`details`; the client never parses adviser, skill or
+	 * Wire rows carry `role` + `custom_type`/`details`; the client never parses advisor, skill or
 	 * todo text and never reads an internal marker. ADR-10 P5 removed `display_kind`/`display_metadata`.
 	 */
 	static rowToAgentMessage(row: TranscriptMessage): AgentMessage | undefined {
@@ -1013,7 +1013,7 @@ export class GatewayOmpSession {
 		"agent.print": () => {},
 		"command.output": payload => this.#onTextNotice(payload, "info", asString(payload.name) ?? "command"),
 		"notification.show": payload => this.#onNotificationShow(payload),
-		"message.adviser": payload => this.#onAdviserMessage(payload),
+		"message.advisor": payload => this.#onAdvisorMessage(payload),
 		// Seat: contract-only until the gateway stop gate emits it (ADR-2 D11).
 		"todo.reminder": payload => this.#onTodoReminder(payload),
 		"transcript.notice": payload => this.#onTranscriptNotice(payload),
@@ -1347,8 +1347,8 @@ export class GatewayOmpSession {
 		this.#emit({ type: "compaction_summary", message })
 	}
 
-	#onAdviserMessage(payload: Record<string, unknown>): void {
-		if (!this.#blockEnabled("adviser")) return
+	#onAdvisorMessage(payload: Record<string, unknown>): void {
+		if (!this.#blockEnabled("advisor")) return
 		const text = asString(payload.text)
 		if (!text) return
 		const message = customRowToMessage({

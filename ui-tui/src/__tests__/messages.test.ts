@@ -54,12 +54,12 @@ describe('toTranscriptMessages', () => {
     ])
   })
 
-  it('projects adviser rows as an adviser card, not a user prompt', () => {
+  it('projects advisor rows as an advisor card, not a user prompt', () => {
     const text = [
-      '[adviser — advisory only]',
+      '[advisor — advisory only]',
       '- [concern · reviewer] The patch drops the retry path.',
       '- [nit] Name the fallback.',
-      '[end adviser]'
+      '[end advisor]'
     ].join('\n')
 
     const [message] = toTranscriptMessages([{
@@ -75,19 +75,19 @@ describe('toTranscriptMessages', () => {
     }])
 
     expect(message.role).toBe('system')
-    expect(message.text).not.toContain('[adviser')
-    expect(message.text).not.toContain('[end adviser]')
+    expect(message.text).not.toContain('[advisor')
+    expect(message.text).not.toContain('[end advisor]')
     expect(message.text).toContain('drops the retry path')
-    expect(message.adviser).toMatchObject({ label: 'concern · reviewer', severity: 'concern' })
-    expect(message.adviser?.items).toHaveLength(2)
+    expect(message.advisor).toMatchObject({ label: 'concern · reviewer', severity: 'concern' })
+    expect(message.advisor?.items).toHaveLength(2)
   })
 
   it('lets a blocker listed second raise the card severity', () => {
     const text = [
-      '[adviser — advisory only]',
+      '[advisor — advisory only]',
       '- [concern · reviewer] The patch drops the retry path.',
       '- [blocker · reviewer] The migration never ran.',
-      '[end adviser]'
+      '[end advisor]'
     ].join('\n')
 
     const [message] = toTranscriptMessages([{
@@ -102,8 +102,8 @@ describe('toTranscriptMessages', () => {
       }
     }])
 
-    expect(message.adviser).toMatchObject({ severity: 'blocker' })
-    expect(message.adviser?.items.map(item => item.severity)).toEqual(['concern', 'blocker'])
+    expect(message.advisor).toMatchObject({ severity: 'blocker' })
+    expect(message.advisor?.items.map(item => item.severity)).toEqual(['concern', 'blocker'])
   })
 
   it('projects async_delegation_complete with task_count metadata', () => {
@@ -193,7 +193,7 @@ describe('MessageLine', () => {
     expect(renderedLine).toContain('Ψ > Okay')
   })
 
-  it('renders an adviser card with its label instead of a user gutter glyph', () => {
+  it('renders an advisor card with its label instead of a user gutter glyph', () => {
     const stdout = new PassThrough()
     const stdin = new PassThrough()
     const stderr = new PassThrough()
@@ -210,7 +210,7 @@ describe('MessageLine', () => {
       React.createElement(MessageLine, {
         cols: 80,
         msg: {
-          adviser: { items: [], label: 'concern · reviewer', severity: 'concern' },
+          advisor: { items: [], label: 'concern · reviewer', severity: 'concern' },
           role: 'system',
           text: 'The patch drops the retry path.'
         },
@@ -229,7 +229,7 @@ describe('MessageLine', () => {
 
     const rendered = stripAnsi(output)
 
-    expect(rendered).toContain('adviser · concern · reviewer')
+    expect(rendered).toContain('advisor · concern · reviewer')
     expect(rendered).toContain('The patch drops the retry path.')
   })
 
@@ -250,7 +250,7 @@ describe('MessageLine', () => {
       React.createElement(MessageLine, {
         cols: 80,
         msg: {
-          adviser: {
+          advisor: {
             items: [
               { label: 'concern · reviewer', severity: 'concern', text: 'read the import first' },
               { label: 'blocker · reviewer', severity: 'blocker', text: 'the test never ran' }
@@ -276,7 +276,7 @@ describe('MessageLine', () => {
 
     const rendered = stripAnsi(output)
 
-    expect(rendered).toContain('adviser · blocker · reviewer')
+    expect(rendered).toContain('advisor · blocker · reviewer')
     expect(rendered).toContain('concern · reviewer')
     expect(rendered).toContain('blocker · reviewer')
     expect(rendered).toContain('the test never ran')

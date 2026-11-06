@@ -1,4 +1,4 @@
-"""The live adviser event is for plugin rows only.
+"""The live advisor event is for plugin rows only.
 
 ``plugin_message_callback`` also fires when a mid-turn steer is delivered at a tool
 boundary. Those rows carry ``display_kind="steer"`` and are the operator's words, so
@@ -18,25 +18,25 @@ def _announce(emitted: list[tuple], row) -> None:
         agent_callbacks._announce_plugin_row("test-session", row)
 
 
-def test_adviser_row_emits_message_adviser():
+def test_advisor_row_emits_message_advisor():
     emitted: list[tuple] = []
     _announce(emitted, {
-        "content": "[adviser — advisory only]\n- [blocker · reviewer] Stop the migration.\n[end adviser]",
-        "display_kind": "adviser",
+        "content": "[advisor — advisory only]\n- [blocker · reviewer] Stop the migration.\n[end advisor]",
+        "display_kind": "advisor",
         "plugin_message_id": "abc123",
         "role": "user",
     })
 
     assert len(emitted) == 1
     event_type, sid, payload = emitted[0]
-    assert event_type == "message.adviser"
+    assert event_type == "message.advisor"
     assert sid == "test-session"
     assert payload["id"] == "abc123"
     assert payload["severity"] == "blocker"
     assert payload["label"] == "blocker · reviewer"
 
 
-def test_plain_steer_row_is_not_announced_as_adviser_guidance():
+def test_plain_steer_row_is_not_announced_as_advisor_guidance():
     emitted: list[tuple] = []
     _announce(emitted, {
         "content": "[steer] Ship the smaller patch.",

@@ -1847,9 +1847,9 @@ def run_conversation(
     agent._turn_user_intervened = False
     # Images attached natively to this user turn stay visible to vision_analyze for the turn, so
     # it does not embed the same pixels a second time into the same request (#76411).
-    from agent.adviser_bridge import ensure_adviser
+    from agent.advisor_bridge import ensure_advisor
 
-    _adviser = ensure_adviser(agent)
+    _advisor = ensure_advisor(agent)
     with native_turn_images(user_message):
         try:
             # A plugin with a background reviewer needs a handle to this live turn:
@@ -1857,11 +1857,11 @@ def run_conversation(
             # released here. Bind inside the try so a failing binder cannot skip the
             # voice-route teardown below.
             plugin_runtime.bind_turn(agent)
-            if _adviser is not None:
+            if _advisor is not None:
                 try:
-                    _adviser.bind_turn()
+                    _advisor.bind_turn()
                 except Exception:
-                    logger.debug("adviser bind failed", exc_info=True)
+                    logger.debug("advisor bind failed", exc_info=True)
             result = _run_conversation_turn(
                 agent,
                 user_message,
@@ -1883,11 +1883,11 @@ def run_conversation(
             # more turn through the existing pending_steer contract.
             plugin_runtime.attach_post_turn(agent, result)
         finally:
-            if _adviser is not None:
+            if _advisor is not None:
                 try:
-                    _adviser.unbind_turn()
+                    _advisor.unbind_turn()
                 except Exception:
-                    logger.debug("adviser unbind failed", exc_info=True)
+                    logger.debug("advisor unbind failed", exc_info=True)
             plugin_runtime.unbind_turn(agent)
             end_voice_turn_route(agent)
     settle_held_final(agent, result)

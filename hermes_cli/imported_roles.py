@@ -1,12 +1,12 @@
 """The two omp model roles Hermes backs outside ``auxiliary``.
 
 omp's ``task`` role is Hermes' ``delegation:`` section (the delegated-child route) and ``advisor``
-is ``adviser:`` (the review model). ``model.roles.*`` and ``model.presets.*`` read and write them
+is ``advisor:`` (the review model). ``model.roles.*`` and ``model.presets.*`` read and write them
 through this module so the wire never grows a second copy of the mapping; ``aux_slots.py`` owns the
 role ids, labels and omp tags, ``aux_fallback.py`` the chain shapes both roles share.
 
 "Auto" is ``provider: ""`` / ``model: ""`` for these roles: the child inherits the parent's route
-and the adviser falls back to its own ``WATCHDOG.yml`` entries. Hermes has no adviser fallback chain
+and the advisor falls back to its own ``WATCHDOG.yml`` entries. Hermes has no advisor fallback chain
 or reasoning-effort override, so writes for those two knobs are refused instead of silently dropped.
 """
 
@@ -52,7 +52,7 @@ def read_imported_route(cfg: dict, role: str) -> dict:
             "fallback_chain": imported_fallback_chain(cfg),
         }
     if role == "advisor":
-        section = _section(cfg, "adviser")
+        section = _section(cfg, "advisor")
         return {
             "provider": _text(section.get("provider")),
             "model": _text(section.get("model")),
@@ -116,11 +116,11 @@ def advisor_route_problem(route: dict) -> str:
     effort = route.get("reasoning_effort", _UNSET)
     if effort is not _UNSET and effort is not None:
         return ("advisor has no reasoning_effort override in Hermes "
-                "(adviser config stores only provider/model)")
+                "(advisor config stores only provider/model)")
     chain = route.get("fallback_chain", _UNSET)
     if chain is not _UNSET and chain:
         return ("advisor has no fallback chain in Hermes "
-                "(adviser runs the one configured review model)")
+                "(advisor runs the one configured review model)")
     return ""
 
 
@@ -129,10 +129,10 @@ def _write_advisor(cfg: dict, route: dict, *, clear: bool) -> None:
         problem = advisor_route_problem(route)
         if problem:
             raise ValueError(problem)
-    section = dict(_section(cfg, "adviser"))
+    section = dict(_section(cfg, "advisor"))
     section["provider"] = "" if clear else _provider(route.get("provider"))
     section["model"] = "" if clear else _text(route.get("model"))
-    cfg["adviser"] = section
+    cfg["advisor"] = section
 
 
 def write_imported_route(cfg: dict, role: str, route: dict, *, clear: bool = False,

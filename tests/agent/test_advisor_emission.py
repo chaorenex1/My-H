@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.adviser_emission import EmissionGuard, normalize_note
+from agent.advisor_emission import EmissionGuard, normalize_note
 
 
 def test_normalization_folds_case_and_punctuation():

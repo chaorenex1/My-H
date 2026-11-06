@@ -66,7 +66,7 @@ describe("Hermes model hub source", () => {
 			],
 		}),
 		row({ id: "web_tools", label: "", provider: "auto", model: "auto" }),
-		row({ id: "advisor", label: "Advisor", tag: "ADVISOR", group: "imported", target: "adviser" }),
+		row({ id: "advisor", label: "Advisor", tag: "ADVISOR", group: "imported", target: "advisor" }),
 	]
 	const modelChains: Record<string, ModelRoleFallbackEntry[]> = {
 		"deepseek/*": [{ provider: "openrouter", model: "backup" }],

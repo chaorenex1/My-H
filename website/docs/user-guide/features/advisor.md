@@ -1,25 +1,25 @@
 ---
 sidebar_position: 12
-title: "Adviser"
+title: "Advisor"
 description: "A native second model that shadows the turn, verifies with read-only tools, and delivers nit/concern/blocker notes into the same session."
 ---
 
-# Adviser
+# Advisor
 
-The adviser is a native port of oh-my-pi's advisor: one persistent second model
+The advisor is a native port of oh-my-pi's advisor: one persistent second model
 (the *reviewer*) watches the primary agent's incremental transcript, may verify
 its suspicions with read-only tools, and sends terse advice back into the same
 session. It reviews; it does not act — every note goes through the primary
 agent's judgment.
 
 Hermes already has Mixture of Agents (many reference models feed one aggregator)
-and the post-turn background review (memory/skills). The adviser is different:
+and the post-turn background review (memory/skills). The advisor is different:
 **one extra model, live, per turn**, whose only output is advice.
 
 ## Enable
 
 ```yaml
-adviser:
+advisor:
   enabled: true
   # empty = inherit the primary route; pin one to control spend:
   model: anthropic/claude-sonnet-4
@@ -29,6 +29,16 @@ adviser:
 above is an OpenRouter model), never a provider separator. To switch providers,
 set `provider:` next to it (`provider: anthropic` + `model: claude-sonnet-4`);
 otherwise the review runs on the primary agent's route.
+
+### Per-agent opt-in
+
+A named agent definition can set `advisor: true` (the roster/default reviewer) or a model
+selector such as `advisor: "@smol"` / `advisor: "openai:gpt-5-mini"`. This opts an unattended
+`platform="subagent"` peer in; without it such a run hosts no reviewer. An explicit
+`WATCHDOG.yml` entry model wins over the selector, and the Agent Hub's stored per-agent `advisor`
+toggle is read on the spawn path and overrides the frontmatter. The global `advisor.enabled`
+gate still applies. `@role:level` sets the reviewer's reasoning effort (a standard Hermes
+effort level).
 
 The roster (who reviews, with which model/tools/instructions) lives in
 `WATCHDOG.yml`, on the same search path as project context files:
@@ -76,7 +86,7 @@ the reviewer can hold the agent to the user's standing instructions.
 The default is deliberately `main`, unlike oh-my-pi's `all`: Hermes subagents are
 spawned often, and an unset scope must not silently start a reviewer (and its
 model spend) per subagent. Set `all` or `subagent` to opt in. Cron runs and
-detached forks never host an adviser regardless of scope.
+detached forks never host an advisor regardless of scope.
 
 ### Evidence-only review
 
@@ -89,21 +99,21 @@ default is `true`.
 
 | Severity | Where it lands |
 |---|---|
-| `nit` | queued as an adviser row at the next safe boundary; never interrupts |
-| `concern` | steered into the live turn (one standalone user row, `display_kind=adviser`) |
+| `nit` | queued as an advisor row at the next safe boundary; never interrupts |
+| `concern` | steered into the live turn (one standalone user row, `display_kind=advisor`) |
 | `blocker` | steered **and** the running tool batch is interrupted |
 
 At a terminal boundary a note at or above `continue_severity` (default
 `concern`) wakes the model once more through the stop gate, bounded by
 `max_continuations` (default 2). Notes arriving after the run are appended as a
-durable adviser card instead of starting a turn.
+durable advisor card instead of starting a turn.
 
 Every delivered batch is framed for the model:
 
 ```
-[adviser — advisory only]
+[advisor — advisory only]
 - [concern · Security Reviewer] re-read the failing test
-[end adviser]
+[end advisor]
 ```
 
 ## Admission
@@ -136,25 +146,26 @@ The reviewer cannot flood the turn:
   provider that keeps throttling cannot pin a worker thread.
 - Provider quota errors beyond that cap latch the reviewer until the session is
   reset; repeated failures drop the backlog and eventually halt it, so a broken
-  adviser cannot burn tokens forever.
+  advisor cannot burn tokens forever.
 
 ## Inspect
 
 ```python
-agent.adviser.status()
-# {'enabled': True, 'advisers': [{'name': 'Security Reviewer', 'status': 'running',
+agent.advisor.status()
+# {'enabled': True, 'advisors': [{'name': 'Security Reviewer', 'status': 'running',
 #   'backlog': 0, 'review_mode': 'turn', 'review_interval': 2, ...}], ...}
 ```
 
-Per-reviewer transcripts are appended to
-`$HERMES_HOME/adviser/<session_id>/__adviser.<slug>.jsonl` for cost and
+Per-reviewer transcripts are appended inside the session bundle:
+`<bundle>/_advisor.jsonl` (default reviewer) or `<bundle>/_advisor.<slug>.jsonl`, and a
+named subagent run keeps its own under `<bundle>/<topic>/_advisor.jsonl` for cost and
 post-mortem inspection.
 
 ## Upstream pin
 
 The port is pinned to oh-my-pi **18.14.0** (`can1357/oh-my-pi`, tag commit
 `31147f9d1a76608549821c3759f8487b4d66c72d`). The source list and pin live in
-`agent/adviser_config.py` (`UPSTREAM_ADVISER_*`) — bump them together with this
+`agent/advisor_config.py` (`UPSTREAM_ADVISOR_*`) — bump them together with this
 section when re-porting.
 
 Ported behavior from 18.13.1/18.13.2/18.14.0: timed throttle waits, per-entry
@@ -164,4 +175,4 @@ Known deviations:
 - unset `scope` means `main`, not `all` (see [Session scope](#session-scope));
 - there are no fallback chains for the reviewer model (a failed model retries,
   then pauses), and no `/advisor` command family — inspect with
-  `agent.adviser.status()`.
+  `agent.advisor.status()`.

@@ -75,7 +75,7 @@ v1 的消费者只有：
 - 未来的集成 ADR（记忆、代码图、Advisor 等）——**不在本 ADR 实现**。Python API 是给这些未来
   接入保留的稳定契约，v1 没有其他 core 组件调用它。
 
-明确不接入：`agent/memory_manager.py`、`agent/memory_provider.py`、`agent/adviser*`、
+明确不接入：`agent/memory_manager.py`、`agent/memory_provider.py`、`agent/advisor*`、
 `agent/learning_graph.py`、`tools/registry.py`、`toolsets.py`、任何 gateway hook。v1 不注册模型
 工具、不实现 `MemoryProvider`、不新增 hook、不改系统提示或工具面。这是用户决定：先把 core 子系统
 和 CLI 做出来，其他组件暂不接入。
@@ -388,7 +388,7 @@ v1 不实现 `MemoryProvider`、不注册模型工具、不挂 hook、不改系�
 
 - **Memory**：不 import `agent.memory_manager` / `agent.memory_provider`，不实现 `prefetch`、
   `sync_turn`、`on_memory_write`；`MEMORY.md` / `USER.md` 与外部记忆提供者完全不变。
-- **Code Graph / Advisor / learning_graph**：不 import `agent.adviser*`、`agent.learning_graph`，
+- **Code Graph / Advisor / learning_graph**：不 import `agent.advisor*`、`agent.learning_graph`，
   不写它们的存储，也不替换它们的投影。
 - **工具面**：不 import `tools.registry`，不注册 `graph` 工具，不改 `_HERMES_CORE_TOOLS` /
   `toolsets.py`；模型看不到图能力。
@@ -656,7 +656,7 @@ hermes-agent/
 | 生命周期 | `graph.admin.close()` / `atexit` | 关闭 `Database`，释放文件锁 |
 | 模型工具 | **不接入** | 不 import `tools.registry`，不改 `toolsets.py` |
 | 记忆 | **不接入** | 不 import `agent.memory_*`，不实现 `MemoryProvider` |
-| 其它组件 | **不接入** | 不 import `agent.adviser*`、`agent.learning_graph` |
+| 其它组件 | **不接入** | 不 import `agent.advisor*`、`agent.learning_graph` |
 | 测试 | `scripts/run_tests.sh`、临时 `HERMES_HOME` | 不写真实 profile |
 
 ## 未决问题（不在本 ADR 内）

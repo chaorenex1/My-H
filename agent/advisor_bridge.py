@@ -1,7 +1,7 @@
-"""Turn-loop bridge to the native adviser.
+"""Turn-loop bridge to the native advisor.
 
 The conversation loop and the stop gates only need two things: a session handle
-(lazily created on the first turn, so an agent whose config has ``adviser.enabled:
+(lazily created on the first turn, so an agent whose config has ``advisor.enabled:
 false`` pays nothing) and one terminal-boundary capture taken before the stop
 gates decide whether the turn ends. Keeping both here leaves the loop phases at
 their audited complexity: the call site is one function call, not a branch.
@@ -22,38 +22,38 @@ logger = logging.getLogger(__name__)
 _LOCK = threading.Lock()
 
 
-def ensure_adviser(agent: Any) -> Optional[Any]:
-    """Return (creating once) the agent's adviser session, or None when construction failed."""
-    existing = getattr(agent, "adviser", None)
+def ensure_advisor(agent: Any) -> Optional[Any]:
+    """Return (creating once) the agent's advisor session, or None when construction failed."""
+    existing = getattr(agent, "advisor", None)
     if existing is not None:
         return existing
     with _LOCK:
-        existing = getattr(agent, "adviser", None)
+        existing = getattr(agent, "advisor", None)
         if existing is not None:
             return existing
         try:
-            from agent.adviser_runtime import AdviserSession, adviser_session_kind
+            from agent.advisor_runtime import AdvisorSession, advisor_session_kind
 
-            kind = adviser_session_kind(agent)
+            kind = advisor_session_kind(agent)
             if kind is None:  # cron runs and detached forks never host a reviewer
                 return None
-            session = AdviserSession(agent, kind=kind)
-        except Exception:  # health: allow BLE001 -- optional feature: a broken adviser must never block a turn
-            logger.debug("adviser session init failed", exc_info=True)
+            session = AdvisorSession(agent, kind=kind)
+        except Exception:  # health: allow BLE001 -- optional feature: a broken advisor must never block a turn
+            logger.debug("advisor session init failed", exc_info=True)
             return None
-        agent.adviser = session
+        agent.advisor = session
         return session
 
 
 def step_review(agent: Any, messages: list[Any]) -> None:
     """Capture a completed tool-round boundary; observational, never blocks the turn."""
-    adviser = getattr(agent, "adviser", None)
-    if adviser is None:
+    advisor = getattr(agent, "advisor", None)
+    if advisor is None:
         return
     try:
-        adviser.on_step(messages, terminal=False)
+        advisor.on_step(messages, terminal=False)
     except Exception:  # health: allow BLE001 -- reviewer capture is observational; the turn must continue
-        logger.debug("adviser step capture failed", exc_info=True)
+        logger.debug("advisor step capture failed", exc_info=True)
 
 
 def terminal_review(agent: Any, messages: list[Any], final_response: Any) -> None:
@@ -64,13 +64,13 @@ def terminal_review(agent: Any, messages: list[Any], final_response: Any) -> Non
     """
     if not isinstance(final_response, str) or not final_response.strip():
         return
-    adviser = ensure_adviser(agent)
-    if adviser is None:
+    advisor = ensure_advisor(agent)
+    if advisor is None:
         return
     try:
-        adviser.on_step([*messages, {"role": "assistant", "content": final_response}], terminal=True)
+        advisor.on_step([*messages, {"role": "assistant", "content": final_response}], terminal=True)
     except Exception:  # health: allow BLE001 -- reviewer capture is observational; the turn must continue
-        logger.debug("adviser terminal capture failed", exc_info=True)
+        logger.debug("advisor terminal capture failed", exc_info=True)
 
 
-__all__ = ["ensure_adviser", "step_review", "terminal_review"]
+__all__ = ["ensure_advisor", "step_review", "terminal_review"]

@@ -1,4 +1,4 @@
-"""Per-adviser review queue, worker, retry ladder, and the session-level roster.
+"""Per-advisor review queue, worker, retry ladder, and the session-level roster.
 
 Port of oh-my-pi's ``advisor/runtime.ts`` (queue/drain/retry/quota/halt) and the
 capture/cadence half of ``session/session-advisors.ts``, wired to native Hermes
@@ -6,17 +6,17 @@ turn boundaries instead of an agent-core ``turn_end`` callback.
 
 Lifecycle:
 
-* :class:`AdviserSession` owns the roster for one :class:`~run_agent.AIAgent`,
-  reads ``adviser:`` settings from ``config.yaml`` and the ``WATCHDOG.yml``
+* :class:`AdvisorSession` owns the roster for one :class:`~run_agent.AIAgent`,
+  reads ``advisor:`` settings from ``config.yaml`` and the ``WATCHDOG.yml``
   roster from the session cwd, and mirrors omp's cadence (``reviewMode`` /
   ``reviewInterval`` / ``syncBacklog``).
-* Each configured adviser gets one :class:`AdviserRuntime`: a background thread
-  drains captured delta batches through that adviser's private model loop. The
-  primary turn NEVER parks on a failing adviser: catch-up waits are released
-  immediately once the adviser is failing.
+* Each configured advisor gets one :class:`AdvisorRuntime`: a background thread
+  drains captured delta batches through that advisor's private model loop. The
+  primary turn NEVER parks on a failing advisor: catch-up waits are released
+  immediately once the advisor is failing.
 * Advice delivery (steer / interrupt / continuation / card) lives in
-  :mod:`agent.adviser_delivery`; admission and dedupe live in
-  :mod:`agent.adviser_emission`.
+  :mod:`agent.advisor_delivery`; admission and dedupe live in
+  :mod:`agent.advisor_emission`.
 """
 
 from __future__ import annotations
@@ -26,39 +26,39 @@ import logging
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Optional
 
-from agent.adviser_config import (
+from agent.advisor_config import (
     DEFAULT_TOOL_NAMES,
-    AdviserConfig,
-    discover_advisers,
+    AdvisorConfig,
+    discover_advisors,
     discover_watchdog_files,
 )
-from agent.adviser_delta import DeltaTracker, PendingDelta
-from agent.adviser_delivery import append_card, deliver
-from agent.adviser_emission import (
+from agent.advisor_delta import DeltaTracker, PendingDelta
+from agent.advisor_delivery import append_card, deliver
+from agent.advisor_emission import (
     DEFAULT_BUDGET_PER_UPDATE,
     SEVERITIES,
     EmissionGuard,
     meets_severity,
 )
-from agent.adviser_model import (
+from agent.advisor_model import (
     MAX_QUARANTINE_RETRIES,
-    AdviserContextOverflow,
-    AdviserModel,
-    AdviserOutputQuarantined,
-    AdviserUsageLimit,
+    AdvisorContextOverflow,
+    AdvisorModel,
+    AdvisorOutputQuarantined,
+    AdvisorUsageLimit,
     AdviseTool,
     classify_error,
 )
-from agent.adviser_prompts import (
+from agent.advisor_prompts import (
     format_active_repo,
     format_context_files,
     format_memory_instructions,
     render_system_prompt,
 )
-from agent.adviser_recorder import AdviserRecorder
+from agent.advisor_recorder import AdvisorRecorder
 from agent.retry_utils import provider_retry_after_seconds, reset_delay_from_message
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ SETTING_DEFAULTS: dict[str, Any] = {
 
 
 @dataclass
-class AdviserSettings:
+class AdvisorSettings:
     enabled: bool = False
     provider: str = ""
     model: str = ""
@@ -116,7 +116,7 @@ class AdviserSettings:
     temperature: float = 0.0
 
     @classmethod
-    def from_config(cls, raw: Any) -> AdviserSettings:
+    def from_config(cls, raw: Any) -> AdvisorSettings:
         section = raw if isinstance(raw, dict) else {}
         values = dict(SETTING_DEFAULTS)
         values.update({key: section[key] for key in SETTING_DEFAULTS if key in section})
@@ -148,22 +148,22 @@ def _min_int(value: Any, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
-def load_settings() -> AdviserSettings:
-    """``adviser:`` from the active profile config; unreadable config means disabled."""
+def load_settings() -> AdvisorSettings:
+    """``advisor:`` from the active profile config; unreadable config means disabled."""
     try:
         from hermes_cli.config import load_config_readonly
 
         config = load_config_readonly() or {}
     except Exception:
-        logger.debug("adviser settings unavailable", exc_info=True)
-        return AdviserSettings()
-    return AdviserSettings.from_config(config.get("adviser"))
+        logger.debug("advisor settings unavailable", exc_info=True)
+        return AdvisorSettings()
+    return AdvisorSettings.from_config(config.get("advisor"))
 
 
-def adviser_session_kind(agent: Any) -> Optional[str]:
+def advisor_session_kind(agent: Any) -> Optional[str]:
     """Which ``WATCHDOG.yml`` scope this session hosts: ``"main"``, ``"sub"`` or ``None``.
 
-    Detached forks (``_persist_disabled``) and cron runs never host an adviser: a
+    Detached forks (``_persist_disabled``) and cron runs never host an advisor: a
     background-review fork binding one would re-enter the review machinery it exists
     to avoid, and an unattended run (cron, ``agent_run`` peer) has nobody to act on
     the advice. A *delegated* subagent (``_delegate_depth > 0``) hosts one only when
@@ -173,6 +173,10 @@ def adviser_session_kind(agent: Any) -> Optional[str]:
     """
     if bool(getattr(agent, "_persist_disabled", False)):
         return None
+    # A named agent's ``advisor`` field opts this spawned peer in explicitly; without it an
+    # unattended ``platform="subagent"`` run hosts no reviewer.
+    if getattr(agent, "_advisor_override", None):
+        return "sub"
     if int(getattr(agent, "_delegate_depth", 0) or 0) > 0:
         return "sub"
     # ``platform="subagent"`` also covers unattended peers (``agent_run.py``) that never
@@ -230,7 +234,7 @@ def evict_stale_tool_results(messages: list[dict[str, Any]], *, min_tokens: int 
         return (
             isinstance(message, dict)
             and message.get("role") == "tool"
-            and message.get("_adviser_pruned") is None
+            and message.get("_advisor_pruned") is None
             and _estimate_tokens(message) >= min_tokens
             and message.get("name") in ("read_file", "search_files")
         )
@@ -262,7 +266,7 @@ def evict_stale_tool_results(messages: list[dict[str, Any]], *, min_tokens: int 
             continue
         tokens = _estimate_tokens(message)
         message["content"] = f"[Stale result elided - {tokens} tokens]"
-        message["_adviser_pruned"] = True
+        message["_advisor_pruned"] = True
         evicted += 1
     return evicted
 
@@ -282,11 +286,11 @@ class _RuntimeState:
     dropped_backlogs: int = 0
 
 
-class AdviserRuntime:
-    """One adviser's queue and worker; safe to call from the turn thread."""
+class AdvisorRuntime:
+    """One advisor's queue and worker; safe to call from the turn thread."""
 
-    def __init__(self, *, config: AdviserConfig, settings: AdviserSettings,
-                 model: AdviserModel, recorder: AdviserRecorder,
+    def __init__(self, *, config: AdvisorConfig, settings: AdvisorSettings,
+                 model: AdvisorModel, recorder: AdvisorRecorder,
                  advise: AdviseTool, agent: Any = None) -> None:
         self.config = config
         self.agent = agent  # the reviewed session's agent: freeze heartbeats and the pause gate
@@ -347,7 +351,7 @@ class AdviserRuntime:
             delta = self._tracker.capture(messages, wip=wip,
                                           include_reasoning=self.include_reasoning)
         except Exception:
-            logger.warning("adviser delta render failed", exc_info=True)
+            logger.warning("advisor delta render failed", exc_info=True)
             with self._lock:
                 self._state.failing = True
             self._release_failure_waiters()
@@ -400,7 +404,7 @@ class AdviserRuntime:
 
         self._stop.clear()
         self._thread = spawn_context_thread(
-            self._drain, name=f"adviser-{self.slug or 'default'}")
+            self._drain, name=f"advisor-{self.slug or 'default'}")
         self._thread.start()
 
     def _drain(self) -> None:
@@ -423,7 +427,7 @@ class AdviserRuntime:
                 if self._stop.is_set() or self._state.epoch != epoch:
                     return
             from agent.pause_gate import park as park_frozen
-            if park_frozen(self.agent, boundary="adviser batch"):
+            if park_frozen(self.agent, boundary="advisor batch"):
                 # A Stop during the freeze ends the reviewer too; the turn it advised is stopping.
                 return
             self._recorder.begin_review()
@@ -433,7 +437,7 @@ class AdviserRuntime:
                 self._model.run([batch.text], wip=batch.wip, covered_turn=self._covered_turn,
                                 terminal=batch.terminal)
             except Exception as exc:  # health: allow BLE001 -- provider/loop failures are classified below
-                logger.debug("adviser review failed", exc_info=True)
+                logger.debug("advisor review failed", exc_info=True)
                 with self._lock:
                     if self._stop.is_set() or self._state.epoch != epoch:
                         self._recorder.abandon_review()
@@ -444,7 +448,7 @@ class AdviserRuntime:
                     wait = rate_limit_wait_seconds(exc, self.max_rate_limit_wait_s)
                     if wait is not None:
                         throttle_waits += 1
-                        logger.info("adviser %s throttle: retrying after %.1fs", self.name, wait)
+                        logger.info("advisor %s throttle: retrying after %.1fs", self.name, wait)
                         if not self._stop.wait(wait):
                             continue
                 decision = self._handle_failure(exc, batch, epoch)
@@ -474,26 +478,26 @@ class AdviserRuntime:
 
     def _handle_failure(self, exc: BaseException, batch: PendingDelta, epoch: int) -> str:
         kind = classify_error(exc)
-        if isinstance(exc, AdviserOutputQuarantined):
+        if isinstance(exc, AdvisorOutputQuarantined):
             with self._lock:
                 self._state.consecutive_quarantines += 1
                 exhausted = self._state.consecutive_quarantines >= MAX_QUARANTINE_RETRIES
                 if not exhausted:
                     self._model.reset()
             if exhausted:
-                logger.warning("adviser %s: quarantine retries exhausted", self.name)
+                logger.warning("advisor %s: quarantine retries exhausted", self.name)
                 return "drop"
             return "retry"
         if kind == "quota":
             with self._lock:
                 self._state.quota = True
                 self._model.reset()
-            logger.warning("adviser %s paused on provider quota/rate limit", self.name)
+            logger.warning("advisor %s paused on provider quota/rate limit", self.name)
             return "drop"
         if kind == "overflow":
             return "overflow"
         if kind == "permanent":
-            logger.warning("adviser %s: permanent provider rejection: %s", self.name, exc)
+            logger.warning("advisor %s: permanent provider rejection: %s", self.name, exc)
             return "drop"
         with self._lock:
             self._state.consecutive_failures += 1
@@ -516,7 +520,7 @@ class AdviserRuntime:
                 self._state.pending.clear()
                 self._state.held.clear()
             self._wake.notify_all()
-        logger.warning("adviser %s dropped a review after failures (%d): %s", self.name, dropped, exc)
+        logger.warning("advisor %s dropped a review after failures (%d): %s", self.name, dropped, exc)
 
     def _release_failure_waiters(self) -> None:
         with self._lock:
@@ -524,7 +528,7 @@ class AdviserRuntime:
 
     # ---- catch-up ---------------------------------------------------------
     def wait_for_catchup(self, timeout: Optional[float], threshold: int = 1) -> bool:
-        """Block until backlog < threshold; a failing/halted adviser releases immediately."""
+        """Block until backlog < threshold; a failing/halted advisor releases immediately."""
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._lock:
             while True:
@@ -564,15 +568,15 @@ class AdviserRuntime:
             self._wake.notify_all()
 
 
-class AdviserSession:
+class AdvisorSession:
     """The roster and turn-boundary policy attached to one ``AIAgent``."""
 
     def __init__(self, agent: Any, *, kind: Optional[str] = None) -> None:
         self.agent = agent
-        self.kind = kind or adviser_session_kind(agent)
-        self.settings = AdviserSettings()
+        self.kind = kind or advisor_session_kind(agent)
+        self.settings = AdvisorSettings()
         self._lock = threading.RLock()
-        self._runtimes: list[AdviserRuntime] = []
+        self._runtimes: list[AdvisorRuntime] = []
         self._built_for: Optional[tuple] = None
         self._last_refresh = 0.0
         self._turn_live = False
@@ -591,7 +595,7 @@ class AdviserSession:
             return
         settings = load_settings()
         cwd = str(getattr(self.agent, "session_cwd", "") or "") or str(getattr(self.agent, "_cwd", "") or "")
-        discovered = discover_advisers(cwd) if cwd else None
+        discovered = discover_advisors(cwd) if cwd else None
         signature = (
             settings.enabled, settings.provider, settings.model, settings.review_mode,
             settings.review_interval, settings.sync_backlog, settings.immune_turns,
@@ -603,7 +607,7 @@ class AdviserSession:
                    None if a.tools is None else tuple(a.tools), a.review_mode,
                    a.review_interval, a.sync_backlog, a.scope, a.include_reasoning,
                    a.instructions, a.enabled, a.max_notes_per_update)
-                  for a in (discovered.advisers if discovered else ())),
+                  for a in (discovered.advisors if discovered else ())),
         )
         with self._lock:
             if not force and signature == self._built_for:
@@ -616,28 +620,54 @@ class AdviserSession:
             if not settings.enabled or self.kind is None:
                 return
             self._warnings = list(discovered.warnings) if discovered else []
-            if discovered and discovered.advisers:
-                roster = [config for config in discovered.advisers if self._scope_hosts(config)]
+            if discovered and discovered.advisors:
+                roster = [config for config in discovered.advisors if self._scope_hosts(config)]
             else:
-                # The legacy/default reviewer belongs to the top-level session only; a subagent
-                # hosts nothing unless the roster asks for it explicitly.
-                roster = [AdviserConfig(name="default", slug="")] if self.kind == "main" else []
+                # The legacy/default reviewer belongs to the top-level session (and to a named
+                # agent that explicitly opted in) — a plain subagent hosts nothing.
+                opt_in = self.kind == "main" or bool(getattr(self.agent, "_advisor_override", None))
+                roster = [AdvisorConfig(name="default", slug="")] if opt_in else []
+            if not roster and getattr(self.agent, "_advisor_override", None):
+                # A roster whose entries are all main-scoped still must not silently drop an
+                # agent that asked for a reviewer; use the default/role reviewer.
+                roster = [AdvisorConfig(name="default", slug="")]
             shared = discovered.shared_instructions if discovered else None
             shared_budget = discovered.shared_max_notes_per_update if discovered else None
             for config in roster:
-                runtime = self._build(config, shared, shared_budget, cwd)
+                runtime = self._build(self._override_config(config), shared, shared_budget, cwd)
                 if runtime is not None:
                     self._runtimes.append(runtime)
 
-    def _scope_hosts(self, config: AdviserConfig) -> bool:
+    def _scope_hosts(self, config: AdvisorConfig) -> bool:
         """``scope`` decides which session kind builds this entry; unset means main."""
         scope = config.scope or "main"
         if scope == "all":
             return True
         return scope == "subagent" if self.kind == "sub" else scope == "main"
 
-    def _build(self, config: AdviserConfig, shared: Optional[str], shared_budget: Optional[int],
-               cwd: str) -> Optional[AdviserRuntime]:
+    def _override_config(self, config: AdvisorConfig) -> AdvisorConfig:
+        """Apply a per-agent ``advisor`` model selector to a roster entry.
+
+        An explicit model in ``WATCHDOG.yml`` stays authoritative; the named agent's field fills
+        the role/default slot, mirroring omp's ``modelRoles.advisor`` semantics.
+        """
+        override = getattr(self.agent, "_advisor_override", None)
+        if not override or config.model:
+            return config
+        if isinstance(override, dict):
+            model = str(override.get("model") or "").strip()
+            provider = str(override.get("provider") or "").strip() or None
+            effort = str(override.get("reasoning_effort") or "").strip() or None
+        elif isinstance(override, str):
+            model, provider = override.strip(), None
+            effort = None
+        else:
+            return config
+        return replace(config, model=model or config.model, provider=provider or config.provider,
+                       reasoning_effort=effort or config.reasoning_effort)
+
+    def _build(self, config: AdvisorConfig, shared: Optional[str], shared_budget: Optional[int],
+               cwd: str) -> Optional[AdvisorRuntime]:
         if config.enabled is False:
             self._last_status[config.slug] = STATUS_PAUSED
             return None
@@ -649,9 +679,12 @@ class AdviserSession:
                 self._deliver_note(slug, name, note, severity, turn, terminal),
             EmissionGuard(budget_per_update=budget),
         )
-        recorder = AdviserRecorder(session_id=str(getattr(self.agent, "session_id", "") or ""),
-                                   slug=config.slug, cwd=cwd)
-        model = AdviserModel(
+        from tools.tool_output_archive import agent_artifact_dir
+
+        recorder = AdvisorRecorder(session_id=str(getattr(self.agent, "session_id", "") or ""),
+                                   slug=config.slug, cwd=cwd,
+                                   directory=agent_artifact_dir(self.agent))
+        model = AdvisorModel(
             system_blocks=blocks,
             tools=tools,
             advise=advise,
@@ -659,7 +692,7 @@ class AdviserSession:
             call_model=self._call_model(config),
             on_record=recorder.record,
         )
-        runtime = AdviserRuntime(
+        runtime = AdvisorRuntime(
             config=config,
             settings=self.settings,
             model=model,
@@ -670,7 +703,7 @@ class AdviserSession:
         self._last_status[config.slug] = STATUS_RUNNING
         return runtime
 
-    def _system_blocks(self, config: AdviserConfig, shared: Optional[str], budget: int, cwd: str) -> list[str]:
+    def _system_blocks(self, config: AdvisorConfig, shared: Optional[str], budget: int, cwd: str) -> list[str]:
         watchdog = discover_watchdog_files(cwd) if cwd else ""
         active_repo = format_active_repo(cwd) if cwd else None
         if active_repo:
@@ -693,11 +726,11 @@ class AdviserSession:
                 if isinstance(text, str) and text.strip():
                     return text
         except Exception:
-            logger.debug("adviser memory instructions unavailable", exc_info=True)
+            logger.debug("advisor memory instructions unavailable", exc_info=True)
         return None
 
     @staticmethod
-    def _tool_schemas(config: AdviserConfig) -> list[dict[str, Any]]:
+    def _tool_schemas(config: AdvisorConfig) -> list[dict[str, Any]]:
         from tools.registry import registry
 
         names = config.tools if config.tools is not None else list(DEFAULT_TOOL_NAMES)
@@ -721,9 +754,14 @@ class AdviserSession:
 
         return str(registry.dispatch(name, args))
 
-    def _call_model(self, config: AdviserConfig) -> Callable[..., Any]:
+    def _call_model(self, config: AdvisorConfig) -> Callable[..., Any]:
         provider = (config.provider or self.settings.provider or "").strip() or None
         model = (config.model or self.settings.model or "").strip() or None
+        reasoning = None
+        if config.reasoning_effort:
+            from hermes_constants import parse_reasoning_effort
+
+            reasoning = parse_reasoning_effort(config.reasoning_effort)
 
         def call(**kwargs: Any) -> Any:
             from agent.auxiliary_client import call_llm
@@ -735,6 +773,7 @@ class AdviserSession:
                 tools=kwargs.get("tools"),
                 temperature=self.settings.temperature,
                 timeout=self.settings.timeout_s,
+                reasoning_config=reasoning,
             )
 
         return call
@@ -744,7 +783,7 @@ class AdviserSession:
             try:
                 runtime.dispose()
             except Exception:
-                logger.debug("adviser runtime dispose failed", exc_info=True)
+                logger.debug("advisor runtime dispose failed", exc_info=True)
         self._runtimes = []
         self._last_status = {}
         self._continuation = None
@@ -760,7 +799,7 @@ class AdviserSession:
             self._turn_live = False
 
     def reset(self) -> None:
-        """Conversation boundary (``/new``, branch): re-prime every adviser."""
+        """Conversation boundary (``/new``, branch): re-prime every advisor."""
         with self._lock:
             for runtime in self._runtimes:
                 runtime.reset()
@@ -820,7 +859,7 @@ class AdviserSession:
                 runtime.advise.flush_deferred_notes()
             self._wait_for_catchup(runtimes)
 
-    def _wait_for_catchup(self, runtimes: list[AdviserRuntime]) -> None:
+    def _wait_for_catchup(self, runtimes: list[AdvisorRuntime]) -> None:
         for runtime in runtimes:
             mode = runtime.sync_backlog
             if mode == "off":
@@ -840,7 +879,7 @@ class AdviserSession:
         try:
             channel = deliver(self, notes, turn=turn, terminal=terminal)
         except Exception:
-            logger.warning("adviser delivery failed", exc_info=True)
+            logger.warning("advisor delivery failed", exc_info=True)
             return
         if channel == "steer":
             with self._lock:
@@ -849,7 +888,7 @@ class AdviserSession:
             self._last_status[slug] = runtime.status
 
     def set_continuation(self, text: str, *, source: str = "") -> bool:
-        """Queue one adviser continuation for the stop gate; bounded per turn."""
+        """Queue one advisor continuation for the stop gate; bounded per turn."""
         with self._lock:
             if self._continuation is not None or self._continuations_sent >= self.settings.max_continuations:
                 return False
@@ -898,7 +937,7 @@ class AdviserSession:
             "sync_backlog": self.settings.sync_backlog,
             "review_mode": self.settings.review_mode,
             "review_interval": self.settings.review_interval,
-            "advisers": [
+            "advisors": [
                 {
                     "name": runtime.name,
                     "slug": runtime.slug,
@@ -924,10 +963,10 @@ __all__ = [
     "STATUS_PAUSED",
     "STATUS_QUOTA",
     "STATUS_RUNNING",
-    "AdviserRuntime",
-    "AdviserSession",
-    "AdviserSettings",
-    "adviser_session_kind",
+    "AdvisorRuntime",
+    "AdvisorSession",
+    "AdvisorSettings",
+    "advisor_session_kind",
     "evict_stale_tool_results",
     "load_settings",
     "rate_limit_wait_seconds",

@@ -1,10 +1,10 @@
-"""Delivery channel policy and the adviser wire format shared with the surfaces."""
+"""Delivery channel policy and the advisor wire format shared with the surfaces."""
 
 from __future__ import annotations
 
 import threading
 
-from agent.adviser_delivery import deliver, format_batch, resolve_channel
+from agent.advisor_delivery import deliver, format_batch, resolve_channel
 
 
 class _Agent:
@@ -23,7 +23,7 @@ class _Agent:
         self.interrupts.append(tool_reason)
 
 
-class _Adviser:
+class _Advisor:
     continue_severity = "concern"
 
     def __init__(self, agent, *, live=True, immune=False):
@@ -48,12 +48,12 @@ class _Adviser:
 
 
 def test_wire_format_parses_with_the_cli_contract():
-    from hermes_cli.cli_agent_setup_mixin import _adviser_items
+    from hermes_cli.cli_agent_setup_mixin import _advisor_items
 
     text = format_batch([("re-read the failing test", "concern", "reviewer"),
                          ("the test never ran", "blocker", None)])
 
-    assert _adviser_items(text) == [
+    assert _advisor_items(text) == [
         ("concern · reviewer", "re-read the failing test"),
         ("blocker", "the test never ran"),
     ]
@@ -70,49 +70,49 @@ def test_channel_table_follows_omp_precedence():
     assert resolve_channel(severity="concern", preserve_only=True, streaming=True) == "steer"
 
 
-def test_live_concern_is_steered_as_an_adviser_row():
+def test_live_concern_is_steered_as_an_advisor_row():
     agent = _Agent()
-    adviser = _Adviser(agent)
+    advisor = _Advisor(agent)
 
-    channel = deliver(adviser, [("read the diff", "concern", "reviewer")])
+    channel = deliver(advisor, [("read the diff", "concern", "reviewer")])
 
     assert channel == "steer"
     text, kind = agent.steered[0]
-    assert kind == "adviser" and "read the diff" in text
+    assert kind == "advisor" and "read the diff" in text
     assert agent.interrupts == []
 
 
 def test_blocker_interrupts_the_running_batch():
     agent = _Agent()
-    adviser = _Adviser(agent)
+    advisor = _Advisor(agent)
 
-    deliver(adviser, [("the write truncates", "blocker", None)])
+    deliver(advisor, [("the write truncates", "blocker", None)])
 
-    assert agent.interrupts == ["adviser"]
+    assert agent.interrupts == ["advisor"]
 
 
 def test_terminal_concern_wakes_the_model_once():
-    adviser = _Adviser(_Agent(), live=True)
+    advisor = _Advisor(_Agent(), live=True)
 
-    channel = deliver(adviser, [("fix before done", "concern", None)], terminal=True)
+    channel = deliver(advisor, [("fix before done", "concern", None)], terminal=True)
 
     assert channel == "continuation"
-    assert adviser.continuations and "fix before done" in adviser.continuations[0]
+    assert advisor.continuations and "fix before done" in advisor.continuations[0]
 
 
 def test_terminal_nit_becomes_a_card():
-    adviser = _Adviser(_Agent(), live=True)
+    advisor = _Advisor(_Agent(), live=True)
 
-    channel = deliver(adviser, [("tiny cleanup", "nit", None)], terminal=True)
+    channel = deliver(advisor, [("tiny cleanup", "nit", None)], terminal=True)
 
-    assert channel == "preserve" and adviser.cards
+    assert channel == "preserve" and advisor.cards
 
 
 def test_after_the_turn_advice_is_a_card_not_a_steer():
     agent = _Agent()
-    adviser = _Adviser(agent, live=False)
+    advisor = _Advisor(agent, live=False)
 
-    channel = deliver(adviser, [("late concern", "concern", None)], terminal=True)
+    channel = deliver(advisor, [("late concern", "concern", None)], terminal=True)
 
     assert channel == "preserve"
     assert agent.steered == []

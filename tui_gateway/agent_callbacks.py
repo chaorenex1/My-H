@@ -183,7 +183,7 @@ def _agent_cbs(sid: str) -> dict:
         # set_theme (desktop GUI): theme.apply with the tour probe ladder, or a theme.pick card.
         "theme_callback": lambda payload: theme_request(sid, payload),
         "setup_beat_callback": lambda payload: _setup_beat_request(sid, payload),
-        # A plugin-injected adviser row (steer/continuation): let a live surface draw the card
+        # A plugin-injected advisor row (steer/continuation): let a live surface draw the card
         # now instead of waiting for the next transcript hydrate. A plain mid-turn steer is a
         # user row and keeps its own surface path.
         "plugin_message_callback": lambda row: _announce_plugin_row(sid, row)}
@@ -197,7 +197,7 @@ def _agent_cbs(sid: str) -> dict:
 
 
 def _announce_plugin_row(sid: str, row: Any) -> None:
-    """Emit the live event for one plugin-injected row (adviser, todo reminder).
+    """Emit the live event for one plugin-injected row (advisor, todo reminder).
 
     ``plugin_message_callback`` also fires for a mid-turn steer delivered at a tool
     boundary; that row is the operator's words and already has a surface path, so
@@ -212,10 +212,10 @@ def _announce_plugin_row(sid: str, row: Any) -> None:
     if name == "todo.reminder":
         _emit("todo.reminder", sid, payload)
     elif name == "transcript.custom":
-        # ADR-9 D4: the row's own durable projection; never message.adviser.
+        # ADR-9 D4: the row's own durable projection; never message.advisor.
         _emit("transcript.custom", sid, payload)
     else:
-        _emit("message.adviser", sid, payload)
+        _emit("message.advisor", sid, payload)
 
 
 def plugin_row_event(row: dict) -> tuple[str, dict] | None:
@@ -223,13 +223,13 @@ def plugin_row_event(row: dict) -> tuple[str, dict] | None:
 
     Both the sidecar and the canonical local viewer dispatch through this one helper so the
     payload shapes cannot drift (ADR-10 D2/D3). ADR-10 P5: only ``custom_type`` selects the event;
-    the one legacy row still announced is the adviser steer (a model-facing user row).
+    the one legacy row still announced is the advisor steer (a model-facing user row).
     ADR-9 D4: a late-diagnostics row is emitted as ``transcript.custom`` carrying the exact
     ``session.resume`` projection, and only to the omp-ui local viewer.
     """
     kind = str(row.get("custom_type") or "")
-    if kind == "advisor" or row.get("display_kind") == "adviser":
-        return "message.adviser", _adviser_payload(row)
+    if kind == "advisor" or row.get("display_kind") == "advisor":
+        return "message.advisor", _advisor_payload(row)
     if kind == "todo-reminder" or row.get("display_kind") == "todo_reminder":
         payload = _todo_reminder_payload(row)
         return ("todo.reminder", payload) if payload is not None else None
@@ -271,11 +271,11 @@ def _todo_reminder_payload(row: dict) -> dict | None:
     }
 
 
-def _adviser_payload(row: dict) -> dict:
-    """The event payload for one injected adviser row; the Desktop draws the card.
+def _advisor_payload(row: dict) -> dict:
+    """The event payload for one injected advisor row; the Desktop draws the card.
 
     New rows carry structured ``details`` (ADR-10 D1); ``legacy_details`` only fills the live
-    adviser-steer marker row. ``row_id`` lets a client merge the live event into a snapshot that
+    advisor-steer marker row. ``row_id`` lets a client merge the live event into a snapshot that
     already has the row.
     """
     from agent.custom_messages import custom_fields, legacy_details
@@ -285,7 +285,7 @@ def _adviser_payload(row: dict) -> dict:
     if match:
         label = match.group(1).strip()
     fields = custom_fields(row)
-    details = fields.get("details") or legacy_details(row, display_kind="adviser")
+    details = fields.get("details") or legacy_details(row, display_kind="advisor")
     severity = details.get("severity") if isinstance(details, dict) else None
     return {
         "id": str(row.get("plugin_message_id") or ""),

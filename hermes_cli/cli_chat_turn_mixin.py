@@ -336,7 +336,7 @@ class CLIChatTurnMixin:
         # Notes and voice prefix are API-local: the staged input stays the durable transcript
         # value so a close-path marker follows the same dict instead of a second user row.
         _persist_clean_user_message = message if (turn.voice_prefix or agent_message != message) else None
-        # A leftover adviser trigger re-enters the REPL as a pending input; label its row so
+        # A leftover advisor trigger re-enters the REPL as a pending input; label its row so
         # every surface draws a card instead of words the user typed.
         _display_kind = None
         _pending_kinds = getattr(self, "_pending_input_kinds", None)
@@ -664,8 +664,8 @@ class CLIChatTurnMixin:
             _kinds = getattr(self, "_pending_input_kinds", None)
             if _kinds is None:
                 _kinds = self._pending_input_kinds = {}
-            _kinds[str(_leftover_steer)] = ("adviser"
-                                           if (turn.result or {}).get("pending_steer_kind") == "adviser"
+            _kinds[str(_leftover_steer)] = ("advisor"
+                                           if (turn.result or {}).get("pending_steer_kind") == "advisor"
                                            else "user")
 
         return response

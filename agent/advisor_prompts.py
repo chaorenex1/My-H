@@ -1,4 +1,4 @@
-"""Adviser system-prompt fragments and ordered assembly.
+"""Advisor system-prompt fragments and ordered assembly.
 
 Verbatim port of oh-my-pi's ``prompts/advisor/*.md`` (tool names adapted to the
 Hermes registry: ``read_file`` / ``search_files``). The block order is
@@ -9,7 +9,7 @@ load-bearing for prompt caching and for what the reviewer treats as authority:
 3. memory instructions (when a memory backend exposes them)
 4. WATCHDOG.md blocks + active-repo notice
 5. shared ``instructions`` from every ``WATCHDOG.yml`` on the search path
-6. the adviser entry's own ``instructions``
+6. the advisor entry's own ``instructions``
 
 Blocks stay separate until the request is built; the model loop joins them with
 a blank line into the single system message Hermes sends.
@@ -160,7 +160,7 @@ def format_context_files(cwd: str) -> Optional[str]:
         files = [(label, path, content) for _kind, label, path, content in
                  discover_context_files(Path(cwd).resolve()) if content]
     except Exception:  # health: allow BLE001 -- reviewer prompt assembly must never break a turn
-        logger.debug("adviser context files unavailable", exc_info=True)
+        logger.debug("advisor context files unavailable", exc_info=True)
         return None
     if not files:
         return None

@@ -50,11 +50,11 @@ AUX_TASK_KEYS: tuple[str, ...] = tuple(AUX_TASK_META)
 AUX_PICKER_EXCLUDED: frozenset[str] = frozenset({"moa_reference", "moa_aggregator"})
 
 #: omp roles Hermes backs outside ``auxiliary.<task>``: ``(label, hint, target)``. ``task`` is the
-#: delegated-child route (``delegation:``), ``advisor`` the review model (``adviser:``); their
+#: delegated-child route (``delegation:``), ``advisor`` the review model (``advisor:``); their
 #: readers/writers live in ``hermes_cli/imported_roles.py``.
 IMPORTED_ROLE_META: dict[str, tuple[str, str, str]] = {
     "task": ("Task", "delegated subagent route", "delegation"),
-    "advisor": ("Advisor", "adviser review model", "adviser"),
+    "advisor": ("Advisor", "advisor review model", "advisor"),
 }
 
 #: Every imported role id, in picker order. omp ids, kept distinct from ``auxiliary`` task keys.
@@ -92,6 +92,6 @@ def aux_picker_keys() -> tuple[str, ...]:
 
 
 def imported_role_target(role_id: str) -> str:
-    """``delegation``/``adviser`` for an imported omp role, else ``""``."""
+    """``delegation``/``advisor`` for an imported omp role, else ``""``."""
     meta = IMPORTED_ROLE_META.get(str(role_id))
     return meta[2] if meta else ""

@@ -135,19 +135,19 @@ export interface ClarifyReq {
 }
 
 /**
- * Plugin adviser guidance (`display_kind="adviser"`): a user-role row the model saw, but
+ * Plugin advisor guidance (`display_kind="advisor"`): a user-role row the model saw, but
  * not a human prompt, so it renders as its own block instead of a "you" bubble.
  */
-export interface AdviserItem {
+export interface AdvisorItem {
   label: string
   severity: string
   text: string
 }
 
-export interface AdviserMeta {
+export interface AdvisorMeta {
   label: string
   severity: string
-  items: AdviserItem[]
+  items: AdvisorItem[]
 }
 
 /** A collapsed paste in a sent user message: the chip shown and the text the model got. */
@@ -172,7 +172,7 @@ export interface Msg {
   /** The durable message row of a resumed user prompt (backtrack browsing finds its prompt by it). */
   rowId?: number
   text: string
-  adviser?: AdviserMeta
+  advisor?: AdvisorMeta
   // Unix seconds the message was authored (persisted transcript timestamp on
   // rehydrate, wall clock at append time for live rows). Rendered as a dim
   // [HH:MM] label when `display.timestamps` is on (#41531).

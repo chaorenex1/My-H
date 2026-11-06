@@ -2282,35 +2282,35 @@ describe('createGatewayEventHandler', () => {
     })
   })
 
-  describe('message.adviser', () => {
-    const adviserText =
-      '[adviser — advisory only]\n- [blocker · reviewer] Stop: the migration drops the index.\n[end adviser]'
+  describe('message.advisor', () => {
+    const advisorText =
+      '[advisor — advisory only]\n- [blocker · reviewer] Stop: the migration drops the index.\n[end advisor]'
 
-    it('appends an adviser card with the gateway label and severity', () => {
+    it('appends an advisor card with the gateway label and severity', () => {
       const appended: Msg[] = []
       const onEvent = createGatewayEventHandler(buildCtx(appended))
 
       onEvent({
-        payload: { id: 'a1', label: 'blocker · reviewer', severity: 'blocker', text: adviserText },
-        type: 'message.adviser'
+        payload: { id: 'a1', label: 'blocker · reviewer', severity: 'blocker', text: advisorText },
+        type: 'message.advisor'
       } as any)
 
       expect(appended).toHaveLength(1)
       expect(appended[0]).toMatchObject({
-        adviser: { label: 'blocker · reviewer', severity: 'blocker' },
+        advisor: { label: 'blocker · reviewer', severity: 'blocker' },
         role: 'system'
       })
       expect(appended[0]?.text).toContain('drops the index')
-      expect(appended[0]?.text).not.toContain('[adviser')
+      expect(appended[0]?.text).not.toContain('[advisor')
     })
 
     it('ignores a replayed event carrying the same plugin_message_id', () => {
       const appended: Msg[] = []
       const onEvent = createGatewayEventHandler(buildCtx(appended))
-      const payload = { id: 'a1', label: 'concern · reviewer', severity: 'concern', text: adviserText }
+      const payload = { id: 'a1', label: 'concern · reviewer', severity: 'concern', text: advisorText }
 
-      onEvent({ payload, type: 'message.adviser' } as any)
-      onEvent({ payload, replayed: true, type: 'message.adviser' } as any)
+      onEvent({ payload, type: 'message.advisor' } as any)
+      onEvent({ payload, replayed: true, type: 'message.advisor' } as any)
 
       expect(appended).toHaveLength(1)
     })
@@ -2319,8 +2319,8 @@ describe('createGatewayEventHandler', () => {
       const appended: Msg[] = []
       const onEvent = createGatewayEventHandler(buildCtx(appended))
 
-      onEvent({ type: 'message.adviser' } as any)
-      onEvent({ payload: { id: 'x', text: '   ' }, type: 'message.adviser' } as any)
+      onEvent({ type: 'message.advisor' } as any)
+      onEvent({ payload: { id: 'x', text: '   ' }, type: 'message.advisor' } as any)
 
       expect(appended).toHaveLength(0)
     })

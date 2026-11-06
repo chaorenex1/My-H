@@ -43,7 +43,7 @@ from agent.context_compressor_tail import (
 from agent.context_compressor_telemetry import CompressionTelemetryMixin
 from agent.error_classifier import ClassifiedError, FailoverReason, classify_api_error
 from agent.micro_compaction import MicroCompactionMixin
-from agent.prompt_builder import ADVISER_DISPLAY_KIND, STEER_DISPLAY_KIND
+from agent.prompt_builder import ADVISOR_DISPLAY_KIND, STEER_DISPLAY_KIND
 from agent.model_metadata import (
     CHARS_PER_TOKEN, MINIMUM_CONTEXT_LENGTH, get_model_context_length, estimate_messages_tokens_rough, estimate_tokens_rough,
     strip_opaque_replay_items,
@@ -1336,11 +1336,11 @@ def _last_assistant_index(messages: list[dict[str, Any]]) -> int:
 
 def _pending_tool_round(messages: list[dict[str, Any]]) -> range:
     """Indices of the tool results the transcript ends with — a round the model has not answered yet; empty when
-    the transcript ends in any other row. /steer and adviser rows after the round do not answer it: a steer is
+    the transcript ends in any other row. /steer and advisor rows after the round do not answer it: a steer is
     delivered after the newest tool result before the next API call, and two can land in one iteration (one when
-    the tool batch ends, one before the request), so every contiguous trailing steer/adviser row is skipped."""
+    the tool batch ends, one before the request), so every contiguous trailing steer/advisor row is skipped."""
     end = len(messages)
-    while end and messages[end - 1].get("display_kind") in (STEER_DISPLAY_KIND, ADVISER_DISPLAY_KIND):
+    while end and messages[end - 1].get("display_kind") in (STEER_DISPLAY_KIND, ADVISOR_DISPLAY_KIND):
         end -= 1
     start = end
     while start > 0 and messages[start - 1].get("role") == "tool":

@@ -25,7 +25,7 @@ def build_auxiliary_task_entry(
                          f"must contain only alphanumeric characters and underscores")
     from hermes_cli.aux_slots import AUX_TASK_KEYS, IMPORTED_ROLE_IDS
     # The imported role ids are part of the Models hub's id space too (`task` → delegation,
-    # `advisor` → adviser), so a plugin task may not claim them: the hub would then show two rows
+    # `advisor` → advisor), so a plugin task may not claim them: the hub would then show two rows
     # under one id and route every write to the imported one.
     builtin_aux_keys = set(AUX_TASK_KEYS) | set(IMPORTED_ROLE_IDS)
     if key in builtin_aux_keys:

@@ -348,7 +348,7 @@ describe("custom row projection", () => {
 	test("an advisor row reads its details and never parses the note text", () => {
 		const message = GatewayOmpSession.rowToAgentMessage({
 			role: "custom",
-			text: "[adviser — advisory only]\n- [concern · reviewer] re-read the failing test\n[end adviser]",
+			text: "[advisor — advisory only]\n- [concern · reviewer] re-read the failing test\n[end advisor]",
 			custom_type: "advisor",
 			display: true,
 			details: { notes: [{ note: "re-read the failing test", severity: "concern", advisor: "reviewer" }] },
@@ -632,13 +632,13 @@ describe("compaction summary", () => {
 })
 
 describe("gateway block events", () => {
-	test("message.adviser emits one custom message pair from its details", () => {
+	test("message.advisor emits one custom message pair from its details", () => {
 		const { session, events } = harness()
 		session.handleNotification({
-			type: "message.adviser",
+			type: "message.advisor",
 			payload: {
 				id: "a1",
-				text: "[adviser — advisory only]\n- [nit] tighten the loop\n[end adviser]",
+				text: "[advisor — advisory only]\n- [nit] tighten the loop\n[end advisor]",
 				severity: "nit",
 				label: "nit",
 					row_id: 41,
@@ -654,7 +654,7 @@ describe("gateway block events", () => {
 		expect(start.message.details).toMatchObject({ notes: [{ note: "tighten the loop", severity: "nit" }] })
 	})
 
-	test("an adviser row already in the snapshot is not appended twice", () => {
+	test("an advisor row already in the snapshot is not appended twice", () => {
 		const snapshotRow = {
 			role: "custom",
 			text: "advice",
@@ -666,7 +666,7 @@ describe("gateway block events", () => {
 		}
 		const { session, events } = harness({ messages: [snapshotRow as never] })
 		session.handleNotification({
-			type: "message.adviser",
+			type: "message.advisor",
 			payload: { id: "a1", text: "advice", row_id: 41, details: { notes: [{ note: "advice" }] } }
 		})
 		expect(events.filter((event) => event.type === "message_end")).toHaveLength(0)
@@ -895,11 +895,11 @@ describe("gateway block events", () => {
 		expect(session.transcriptBlock("notice")).toBeUndefined()
 		expect(session.transcriptBlock("recap")).toBeUndefined()
 		session.adoptTranscriptBlocks({
-			adviser: { supported: true, status: "ready" },
+			advisor: { supported: true, status: "ready" },
 			notice: { supported: false, status: "unsupported", needs: "a notice producer" },
 			todo_reminder: { supported: true, status: "ready" }
 		})
-		expect(session.transcriptBlock("adviser")?.supported).toBe(true)
+		expect(session.transcriptBlock("advisor")?.supported).toBe(true)
 		expect(session.transcriptBlock("notice")).toMatchObject({ status: "unsupported", needs: "a notice producer" })
 
 		session.handleNotification({ type: "transcript.notice", payload: { id: "n1", text: "hidden", level: "info" } })
@@ -919,7 +919,7 @@ describe("gateway block events", () => {
 			display: true,
 			timestamp: 1
 		} as unknown as TranscriptMessage
-		session.adoptTranscriptBlocks({ adviser: { supported: false, status: "unsupported", needs: "x" } })
+		session.adoptTranscriptBlocks({ advisor: { supported: false, status: "unsupported", needs: "x" } })
 		session.adoptSnapshot(SNAPSHOT({ messages: [row] }))
 		expect(session.initialMessages()).toHaveLength(1)
 	})
@@ -927,11 +927,11 @@ describe("gateway block events", () => {
 	test("live non-role blocks stay unmounted while their capability is unsupported", () => {
 		const { session, events } = harness()
 		session.adoptTranscriptBlocks({
-			adviser: { supported: false, status: "unsupported", needs: "x" },
+			advisor: { supported: false, status: "unsupported", needs: "x" },
 			todo_reminder: { supported: false, status: "unsupported", needs: "y" }
 		})
 		session.handleNotification({
-			type: "message.adviser",
+			type: "message.advisor",
 			payload: { text: "advice", details: { notes: [{ note: "advice" }] }, row_id: 3 }
 		})
 		session.handleNotification({

@@ -187,7 +187,7 @@ async def test_runtime_describe_advertises_the_matrix(tmp_path, monkeypatch):
             assert set(reply["result"]["panels"]) == set(panel_inventory.PANEL_IDS)
             # ADR-10 D6/P4: the same reply carries the transcript block table the client consumes.
             assert reply["result"]["transcript_blocks"] == panel_inventory.transcript_capabilities()
-            assert {"adviser", "skill_invocation", "tool_execution", "notice"} <= set(
+            assert {"advisor", "skill_invocation", "tool_execution", "notice"} <= set(
                 reply["result"]["transcript_blocks"])
         finally:
             await connection.close()

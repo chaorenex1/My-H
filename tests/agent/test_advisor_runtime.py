@@ -8,10 +8,66 @@ import time
 
 import pytest
 
-from agent.adviser_config import AdviserConfig
-from agent.adviser_model import AdviserUsageLimit, AdviseTool
-from agent.adviser_recorder import AdviserRecorder
-from agent.adviser_runtime import AdviserRuntime, AdviserSettings, evict_stale_tool_results
+from agent.advisor_config import AdvisorConfig
+from agent.advisor_model import AdvisorUsageLimit, AdviseTool
+from agent.advisor_recorder import AdvisorRecorder
+from agent.advisor_runtime import (
+    AdvisorRuntime,
+    AdvisorSession,
+    AdvisorSettings,
+    advisor_session_kind,
+    evict_stale_tool_results,
+)
+
+
+def test_a_named_agent_advisor_opts_an_unattended_peer_in():
+    agent = type("A", (), {"platform": "subagent", "_delegate_depth": 0,
+                           "_advisor_override": True})()
+
+    assert advisor_session_kind(agent) == "sub"
+
+
+def test_a_plain_peer_without_the_field_hosts_no_advisor():
+    agent = type("A", (), {"platform": "subagent", "_delegate_depth": 0})()
+
+    assert advisor_session_kind(agent) is None
+
+
+def test_the_agent_advisor_selector_fills_the_roster_model():
+    agent = type("A", (), {"_advisor_override": {"model": "gpt-5.2",
+                                                 "provider": "openai",
+                                                 "reasoning_effort": "high"}})()
+    session = AdvisorSession(agent, kind="sub")
+
+    config = session._override_config(AdvisorConfig(name="Reviewer", slug="reviewer"))
+
+    assert (config.provider, config.model) == ("openai", "gpt-5.2")
+    assert config.reasoning_effort == "high"
+
+
+def test_an_explicit_roster_model_beats_the_agent_selector():
+    agent = type("A", (), {"_advisor_override": {"model": "gpt-5.2"}})()
+    session = AdvisorSession(agent, kind="sub")
+
+    config = session._override_config(AdvisorConfig(name="Reviewer", model="claude-sonnet-4"))
+
+    assert config.model == "claude-sonnet-4"
+
+
+def test_the_advisor_level_reaches_the_auxiliary_call(monkeypatch):
+    from agent import auxiliary_client
+
+    seen: dict = {}
+    monkeypatch.setattr(auxiliary_client, "call_llm",
+                        lambda **kwargs: seen.update(kwargs) or {})
+    session = AdvisorSession(type("A", (), {})(), kind="sub")
+    config = AdvisorConfig(name="Reviewer", provider="openai", model="gpt-5.2",
+                           reasoning_effort="high")
+
+    session._call_model(config)(messages=[], tools=None)
+
+    assert seen["reasoning_config"] == {"enabled": True, "effort": "high"}
+    assert (seen["provider"], seen["model"]) == ("openai", "gpt-5.2")
 
 
 class _FakeModel:
@@ -36,15 +92,15 @@ class _FakeModel:
 
 @pytest.fixture(autouse=True)
 def _fast_retry(monkeypatch):
-    monkeypatch.setattr("agent.adviser_runtime.RETRY_DELAY_S", 0.0)
+    monkeypatch.setattr("agent.advisor_runtime.RETRY_DELAY_S", 0.0)
 
 
 def _runtime(tmp_path, model, *, settings=None, config=None):
-    return AdviserRuntime(
-        config=config or AdviserConfig(name="Reviewer", slug="reviewer"),
-        settings=settings or AdviserSettings(),
+    return AdvisorRuntime(
+        config=config or AdvisorConfig(name="Reviewer", slug="reviewer"),
+        settings=settings or AdvisorSettings(),
         model=model,
-        recorder=AdviserRecorder(session_id="s1", slug="reviewer", home=str(tmp_path)),
+        recorder=AdvisorRecorder(session_id="s1", slug="reviewer", directory=tmp_path),
         advise=AdviseTool(lambda *args: None),
     )
 
@@ -81,7 +137,7 @@ def test_transient_failures_retry_then_drop(tmp_path):
 
 
 def test_quota_latches_and_stops_draining(tmp_path):
-    model = _FakeModel(failures=1, exc=AdviserUsageLimit("429 usage limit"))
+    model = _FakeModel(failures=1, exc=AdvisorUsageLimit("429 usage limit"))
     runtime = _runtime(tmp_path, model)
 
     runtime.capture([{"role": "user", "content": "go"}], wip=False)
@@ -94,8 +150,8 @@ def test_quota_latches_and_stops_draining(tmp_path):
 
 
 def test_timed_429_waits_out_the_retry_after_instead_of_latching(tmp_path):
-    model = _FakeModel(failures=1, exc=AdviserUsageLimit("429 Rate limit exceeded: retry-after-ms=20"))
-    runtime = _runtime(tmp_path, model, settings=AdviserSettings(max_rate_limit_wait_s=1.0))
+    model = _FakeModel(failures=1, exc=AdvisorUsageLimit("429 Rate limit exceeded: retry-after-ms=20"))
+    runtime = _runtime(tmp_path, model, settings=AdvisorSettings(max_rate_limit_wait_s=1.0))
 
     runtime.capture([{"role": "user", "content": "go"}], wip=False)
 
@@ -105,8 +161,8 @@ def test_timed_429_waits_out_the_retry_after_instead_of_latching(tmp_path):
 
 
 def test_repeated_timed_throttles_latch_after_the_per_batch_budget(tmp_path):
-    model = _FakeModel(failures=99, exc=AdviserUsageLimit("429 retry-after-ms=1"))
-    runtime = _runtime(tmp_path, model, settings=AdviserSettings(max_rate_limit_wait_s=1.0))
+    model = _FakeModel(failures=99, exc=AdvisorUsageLimit("429 retry-after-ms=1"))
+    runtime = _runtime(tmp_path, model, settings=AdvisorSettings(max_rate_limit_wait_s=1.0))
 
     runtime.capture([{"role": "user", "content": "go"}], wip=False)
 
@@ -116,8 +172,8 @@ def test_repeated_timed_throttles_latch_after_the_per_batch_budget(tmp_path):
 
 
 def test_rate_limit_wait_beyond_the_cap_still_latches(tmp_path):
-    model = _FakeModel(failures=1, exc=AdviserUsageLimit("429 Rate limit exceeded: retry-after-ms=60000"))
-    runtime = _runtime(tmp_path, model, settings=AdviserSettings(max_rate_limit_wait_s=1.0))
+    model = _FakeModel(failures=1, exc=AdvisorUsageLimit("429 Rate limit exceeded: retry-after-ms=60000"))
+    runtime = _runtime(tmp_path, model, settings=AdvisorSettings(max_rate_limit_wait_s=1.0))
 
     runtime.capture([{"role": "user", "content": "go"}], wip=False)
 
@@ -127,7 +183,7 @@ def test_rate_limit_wait_beyond_the_cap_still_latches(tmp_path):
 
 def test_include_reasoning_false_omits_primary_thinking(tmp_path):
     model = _FakeModel()
-    runtime = _runtime(tmp_path, model, config=AdviserConfig(
+    runtime = _runtime(tmp_path, model, config=AdvisorConfig(
         name="Reviewer", slug="reviewer", include_reasoning=False))
     messages = [
         {"role": "user", "content": "verify the patch"},
@@ -167,7 +223,7 @@ def test_eviction_blanks_only_old_tool_results(tmp_path):
 
     assert evicted == 1
     assert "Stale result elided" in messages[2]["content"]
-    assert messages[2]["_adviser_pruned"] is True
+    assert messages[2]["_advisor_pruned"] is True
 
 
 class _ScriptedModel(_FakeModel):
@@ -183,12 +239,12 @@ class _ScriptedModel(_FakeModel):
 
 
 def test_context_overflow_reprime_keeps_the_failure_strikes(tmp_path):
-    from agent.adviser_model import AdviserContextOverflow
+    from agent.advisor_model import AdvisorContextOverflow
 
     model = _ScriptedModel([
         RuntimeError("boom"),
         RuntimeError("boom"),
-        AdviserContextOverflow("context length exceeded"),
+        AdvisorContextOverflow("context length exceeded"),
         RuntimeError("boom"),
         RuntimeError("boom"),
         RuntimeError("boom"),
@@ -241,15 +297,15 @@ def _final_response():
 
 
 def test_agent_end_mode_skips_mid_turn_reviews(monkeypatch, tmp_path):
-    import agent.adviser_runtime as runtime_mod
-    from agent.adviser_config import AdviserConfig, DiscoveredAdvisers
-    from agent.adviser_runtime import AdviserSession, AdviserSettings
+    import agent.advisor_runtime as runtime_mod
+    from agent.advisor_config import AdvisorConfig, DiscoveredAdvisors
+    from agent.advisor_runtime import AdvisorSession, AdvisorSettings
 
     monkeypatch.setattr(runtime_mod, "load_settings",
-                        lambda: AdviserSettings(enabled=True, review_mode="agent-end", sync_backlog="strict"))
-    monkeypatch.setattr(runtime_mod, "discover_advisers",
-                        lambda cwd, home="": DiscoveredAdvisers(advisers=[
-                            AdviserConfig(name="Reviewer", slug="reviewer", tools=[])]))
+                        lambda: AdvisorSettings(enabled=True, review_mode="agent-end", sync_backlog="strict"))
+    monkeypatch.setattr(runtime_mod, "discover_advisors",
+                        lambda cwd, home="": DiscoveredAdvisors(advisors=[
+                            AdvisorConfig(name="Reviewer", slug="reviewer", tools=[])]))
     calls: list[int] = []
     responses = [_advise_response("the test never ran", "blocker")]
 
@@ -259,9 +315,9 @@ def test_agent_end_mode_skips_mid_turn_reviews(monkeypatch, tmp_path):
             return responses.pop(0) if responses else _final_response()
         return call
 
-    monkeypatch.setattr(AdviserSession, "_call_model", _call)
+    monkeypatch.setattr(AdvisorSession, "_call_model", _call)
     agent = _SessionAgent(tmp_path)
-    session = AdviserSession(agent)
+    session = AdvisorSession(agent)
     session.bind_turn()
 
     session.on_step([{"role": "user", "content": "go"},
@@ -275,54 +331,72 @@ def test_agent_end_mode_skips_mid_turn_reviews(monkeypatch, tmp_path):
 
 
 def test_watchdog_scope_selects_which_session_builds_an_entry(monkeypatch, tmp_path):
-    import agent.adviser_runtime as runtime_mod
-    from agent.adviser_config import AdviserConfig, DiscoveredAdvisers
-    from agent.adviser_runtime import AdviserSession, AdviserSettings
+    import agent.advisor_runtime as runtime_mod
+    from agent.advisor_config import AdvisorConfig, DiscoveredAdvisors
+    from agent.advisor_runtime import AdvisorSession, AdvisorSettings
 
     roster = [
-        AdviserConfig(name="Main", slug="main", scope="main", tools=[]),
-        AdviserConfig(name="Sub", slug="sub", scope="subagent", tools=[]),
-        AdviserConfig(name="Both", slug="both", scope="all", tools=[]),
-        AdviserConfig(name="Unset", slug="unset", tools=[]),
+        AdvisorConfig(name="Main", slug="main", scope="main", tools=[]),
+        AdvisorConfig(name="Sub", slug="sub", scope="subagent", tools=[]),
+        AdvisorConfig(name="Both", slug="both", scope="all", tools=[]),
+        AdvisorConfig(name="Unset", slug="unset", tools=[]),
     ]
-    monkeypatch.setattr(runtime_mod, "load_settings", lambda: AdviserSettings(enabled=True))
-    monkeypatch.setattr(runtime_mod, "discover_advisers",
-                        lambda cwd, home="": DiscoveredAdvisers(advisers=roster))
+    monkeypatch.setattr(runtime_mod, "load_settings", lambda: AdvisorSettings(enabled=True))
+    monkeypatch.setattr(runtime_mod, "discover_advisors",
+                        lambda cwd, home="": DiscoveredAdvisors(advisors=roster))
 
-    main = AdviserSession(_SessionAgent(tmp_path), kind="main")
+    main = AdvisorSession(_SessionAgent(tmp_path), kind="main")
     main.bind_turn()
-    assert [a["name"] for a in main.status()["advisers"]] == ["Main", "Both", "Unset"]
+    assert [a["name"] for a in main.status()["advisors"]] == ["Main", "Both", "Unset"]
 
-    sub = AdviserSession(_SessionAgent(tmp_path), kind="sub")
+    sub = AdvisorSession(_SessionAgent(tmp_path), kind="sub")
     sub.bind_turn()
-    assert [a["name"] for a in sub.status()["advisers"]] == ["Sub", "Both"]
+    assert [a["name"] for a in sub.status()["advisors"]] == ["Sub", "Both"]
+
+
+def test_a_main_only_roster_still_reviews_an_agent_that_opted_in(monkeypatch, tmp_path):
+    import agent.advisor_runtime as runtime_mod
+    from agent.advisor_config import AdvisorConfig, DiscoveredAdvisors
+    from agent.advisor_runtime import AdvisorSession, AdvisorSettings
+
+    monkeypatch.setattr(runtime_mod, "load_settings", lambda: AdvisorSettings(enabled=True))
+    monkeypatch.setattr(runtime_mod, "discover_advisors",
+                        lambda cwd, home="": DiscoveredAdvisors(advisors=[
+                            AdvisorConfig(name="Main", slug="main", scope="main", tools=[])]))
+    agent = _SessionAgent(tmp_path)
+    agent._advisor_override = True
+    session = AdvisorSession(agent, kind="sub")
+
+    session.bind_turn()
+
+    assert [a["name"] for a in session.status()["advisors"]] == ["default"]
 
 
 def test_nested_sessions_never_bind_or_review(monkeypatch, tmp_path):
-    import agent.adviser_runtime as runtime_mod
-    from agent.adviser_bridge import ensure_adviser
-    from agent.adviser_config import AdviserConfig, DiscoveredAdvisers
-    from agent.adviser_runtime import AdviserSession, AdviserSettings
+    import agent.advisor_runtime as runtime_mod
+    from agent.advisor_bridge import ensure_advisor
+    from agent.advisor_config import AdvisorConfig, DiscoveredAdvisors
+    from agent.advisor_runtime import AdvisorSession, AdvisorSettings
 
-    monkeypatch.setattr(runtime_mod, "load_settings", lambda: AdviserSettings(enabled=True))
-    monkeypatch.setattr(runtime_mod, "discover_advisers",
-                        lambda cwd, home="": DiscoveredAdvisers(advisers=[
-                            AdviserConfig(name="Reviewer", slug="reviewer", tools=[])]))
+    monkeypatch.setattr(runtime_mod, "load_settings", lambda: AdvisorSettings(enabled=True))
+    monkeypatch.setattr(runtime_mod, "discover_advisors",
+                        lambda cwd, home="": DiscoveredAdvisors(advisors=[
+                            AdvisorConfig(name="Reviewer", slug="reviewer", tools=[])]))
     agent = _SessionAgent(tmp_path)
     agent._delegate_depth = 1
 
-    session = ensure_adviser(agent)
+    session = ensure_advisor(agent)
     assert session is not None  # a subagent may host subagent-scoped entries...
     session.bind_turn()
     session.on_step([{"role": "user", "content": "go"}], terminal=True)
 
     assert session._runtimes == []  # ...but this roster is main-scoped, so none are built
-    assert session.status()["advisers"] == []
+    assert session.status()["advisors"] == []
 
     cron = _SessionAgent(tmp_path)
     cron.platform = "cron"
-    assert ensure_adviser(cron) is None
+    assert ensure_advisor(cron) is None
 
     peer = _SessionAgent(tmp_path)
     peer.platform = "subagent"  # agent_run.py peer: unattended, never delegated
-    assert ensure_adviser(peer) is None
+    assert ensure_advisor(peer) is None

@@ -434,12 +434,12 @@ _CONTROL_STATE: dict[str, Any] = {
     "_supports_active_turn_redirect": True,
     # /steer: the drain hook appends the note to the last tool result after the current
     # batch — no interrupt, no new user turn (role alternation preserved). ``kind`` is
-    # "user" for an operator steer and "adviser" for plugin advice, which must not be
+    # "user" for an operator steer and "advisor" for plugin advice, which must not be
     # framed as a direct user message.
     "_pending_steer": None,
     "_pending_steer_kind": "user",
     "_pending_steer_lock": threading.Lock,
-    # Surface-installed observer for rows a plugin injects (adviser steer/continuation).
+    # Surface-installed observer for rows a plugin injects (advisor steer/continuation).
     "plugin_message_callback": None,
     # Active-turn redirect: keep the valid turn prefix, cancel only the in-flight request,
     # rebuild the tail with the correction. Drained at a role-safe boundary.
@@ -2210,7 +2210,7 @@ def init_agent(
     _init_fallback_chain(agent, fallback_model)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     _merge_extra_tools(agent, extra_tools)
-    # A caller that runs many agents against one logical conversation (the adviser) can pin the
+    # A caller that runs many agents against one logical conversation (the advisor) can pin the
     # cache scope: the prompt_cache_key derivation then keys every run of that reviewer into its
     # own shard instead of the process-wide session id. Empty keeps the host's own resolution.
     agent._declared_cache_scope = str(cache_scope or "").strip()

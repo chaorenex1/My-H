@@ -18,9 +18,9 @@ CUSTOM_STORAGE_KEY = "_custom_message"
 
 # ADR-10 P5: internal durable markers -> the custom block the projection emits. Producers write
 # ``role:"custom"`` rows; this map serves older rows and the marker rows whose model semantics
-# still need a real user row (adviser steer). The marker itself never reaches the wire.
+# still need a real user row (advisor steer). The marker itself never reaches the wire.
 DISPLAY_KIND_TO_CUSTOM_TYPE = {
-    "adviser": "advisor",
+    "advisor": "advisor",
     "skill_invocation": "skill-prompt",
     "todo_reminder": "todo-reminder",
     "model_switch": "model-switch",
@@ -43,7 +43,7 @@ LEGACY_ROLE_DISPLAY_KINDS = frozenset({"auto_continue", "failed_turn", "steer", 
 API_ROLES = frozenset({"system", "developer", "user", "assistant", "tool"})
 _CUSTOM_FIELDS = ("custom_type", "display", "display_only", "details", "attribution", "legacy_role")
 
-_ADVISER_SEVERITIES = frozenset({"nit", "concern", "blocker"})
+_ADVISOR_SEVERITIES = frozenset({"nit", "concern", "blocker"})
 
 
 def custom_fields(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -83,11 +83,11 @@ def lift_stored_fields(row: dict[str, Any]) -> None:
             row[key] = stored[key]
 
 
-def adviser_notes(text: str, *, severity: str | None = None,
-                  adviser: str | None = None) -> dict[str, Any]:
-    """The ``details.notes`` shape for an adviser card, parsed once on the gateway side.
+def advisor_notes(text: str, *, severity: str | None = None,
+                  advisor: str | None = None) -> dict[str, Any]:
+    """The ``details.notes`` shape for an advisor card, parsed once on the gateway side.
 
-    The wire format is ``- [severity · adviser] note`` between the frame markers; a row without
+    The wire format is ``- [severity · advisor] note`` between the frame markers; a row without
     parseable notes keeps its body as one note so the card is never empty.
     """
     notes: list[dict[str, Any]] = []
@@ -99,20 +99,20 @@ def adviser_notes(text: str, *, severity: str | None = None,
             parts = [part.strip() for part in match[1].split("·")]
             note_severity = parts[0].lower()
             note = {"note": match[2].strip()}
-            if note_severity in _ADVISER_SEVERITIES:
+            if note_severity in _ADVISOR_SEVERITIES:
                 note["severity"] = note_severity
             if len(parts) > 1 and parts[1]:
                 note["advisor"] = parts[1]
             notes.append(note)
             continue
-        if stripped and not stripped.startswith("[adviser") and not stripped.startswith("[end adviser"):
+        if stripped and not stripped.startswith("[advisor") and not stripped.startswith("[end advisor"):
             body.append(stripped)
     if not notes and body:
         note = {"note": "\n".join(body)}
-        if severity and severity.lower() in _ADVISER_SEVERITIES:
+        if severity and severity.lower() in _ADVISOR_SEVERITIES:
             note["severity"] = severity.lower()
-        if adviser:
-            note["advisor"] = adviser
+        if advisor:
+            note["advisor"] = advisor
         notes.append(note)
     return {"notes": notes}
 
@@ -157,9 +157,9 @@ def legacy_details(row: Mapping[str, Any], *, display_kind: str) -> dict[str, An
     text = row.get("content") if isinstance(row.get("content"), str) else ""
     text = str(text)
     metadata = row.get("display_metadata")
-    if display_kind == "adviser":
+    if display_kind == "advisor":
         severity = metadata.get("severity") if isinstance(metadata, Mapping) else None
-        notes = adviser_notes(text, severity=severity if isinstance(severity, str) else None).get("notes")
+        notes = advisor_notes(text, severity=severity if isinstance(severity, str) else None).get("notes")
         details = {"notes": notes or []}
         if isinstance(severity, str) and severity:
             details["severity"] = severity
@@ -228,7 +228,7 @@ def project_for_api(message: dict[str, Any], *, custom_messages: bool) -> list[d
 
 __all__ = [
     "API_ROLES", "CUSTOM_STORAGE_KEY", "DISPLAY_KIND_TO_CUSTOM_TYPE",
-    "DISPLAY_ONLY_CUSTOM_TYPES", "LEGACY_ROLE_DISPLAY_KINDS", "MESSAGE_CUSTOM_TYPES", "adviser_notes",
+    "DISPLAY_ONLY_CUSTOM_TYPES", "LEGACY_ROLE_DISPLAY_KINDS", "MESSAGE_CUSTOM_TYPES", "advisor_notes",
     "custom_fields", "custom_type_of", "legacy_details", "lift_stored_fields",
     "project_for_api", "skill_details", "storage_metadata", "todo_details",
 ]

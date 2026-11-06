@@ -505,8 +505,8 @@ live 会话，故 live 事件组整体是 P/N 混合。
 |---|---|---|---|
 | `btw_delta {recordId,delta}` | 无 | N | **新增** `btw.delta {record_id,delta}` |
 | `btw_record {record}` | `btw.complete {task_id,text,question?}` | P | 只有终态；`BtwHistoryRecord` 的 `id/leafId/followUps/status/createdAt/updatedAt/error/images` **新增**；建议 **新增** `btw.record {record}` 并在每次生命周期变化时广播 |
-| `irc_message {message}` | 无（`message.adviser {id,text,severity,label,display_kind}` 是另一语义） | N | **新增** `custom.message {message: CustomMessage}`，或明确不支持。`message` 是 `role:"custom"` 的 `CustomMessage`：`irc:incoming` 可进入模型上下文（默认 `developer`，`attribution:"agent"`；parent steer 另走 `user`），`irc:relay` 只发 UI、不持久化；契约必须带 `custom_type`/`attribution`/`display`，`display` 只控制渲染 |
-| `advisor_cost_changed {}` | 无 | N | **新增** `advisor.cost_changed {cost?}`；Hermes 只有 `message.adviser` |
+| `irc_message {message}` | 无（`message.advisor {id,text,severity,label,display_kind}` 是另一语义） | N | **新增** `custom.message {message: CustomMessage}`，或明确不支持。`message` 是 `role:"custom"` 的 `CustomMessage`：`irc:incoming` 可进入模型上下文（默认 `developer`，`attribution:"agent"`；parent steer 另走 `user`），`irc:relay` 只发 UI、不持久化；契约必须带 `custom_type`/`attribution`/`display`，`display` 只控制渲染 |
+| `advisor_cost_changed {}` | 无 | N | **新增** `advisor.cost_changed {cost?}`；Hermes 只有 `message.advisor` |
 | `advisor_yielded {}` | 无 | N | **新增** `advisor.yielded {}` |
 | `ttsr_triggered {rules}` | 无 | N | **新增** `ttsr.triggered {rules:{name,description?,content?}[]}`（ADR-6 D3） |
 | 无（omp 的 `replaceMessages` 回滚） | 无 | N | **新增** `message.rewind {reason:"ttsr",message_id?,segment?}`：live-only，只让客户端丢弃作废的 assistant draft；不是 transcript 行（ADR-6 D13） |
@@ -628,6 +628,6 @@ emitter 的事件判为 orphan，而伪造数据会污染 wire。落地它们需
 | `compaction.start/end`、`retry.start/end/fallback_*`、`cache_warming.start/end` | 结构化数据只存在于 `agent/compaction_events.py`（Relay/OTel + `post_compaction` plugin hook）与 `agent/turn_recovery.py` 的内部变量；需要网关可订阅的 in-process 回调（cache warming 功能本身不存在） |
 | `subagent.*` 的 `agent`/`agent_source`/`description`/`task`/`assignment`/`session_file`/`parent_tool_call_id`/`detached`/`progress`、`subagent.event` | `delegate_task` 不接收命名 agent/描述/父 tool call id；子代理原始事件只进 live-transcript 文件，无网关转发路径 |
 | `voice.levels`、`capture_id`、`voice.ended` | 录音器只有内部 int RMS（0–32767），无输出电平、无 capture id、无独立的结束/错误帧 |
-| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`custom.message` | 侧问是非流式一次性返回；adviser 成本只在 JSONL 汇总。“带 `custom_type`/`attribution` 的 custom 消息事件”已由 ADR-9 P1 以 `transcript.custom {message}` 落地（载荷就是 `session.resume` 的同一行投影；当前消费者是 `custom_type:"lsp-late-diagnostic"`，其它 custom 类型可复用），因此 `custom.message` 这个占位名不再需要：omp 的 custom 消息本身可能是模型上下文消息（默认 `developer`，user 归因的 skill/collab→`user`），新事件没有把它降级成 `display_metadata`。`ttsr.triggered` 已由 ADR-6 P1 生产（见 A.11），不再属于缺口 |
+| `btw.delta`、`btw.record`、`advisor.cost_changed`、`advisor.yielded`、`custom.message` | 侧问是非流式一次性返回；advisor 成本只在 JSONL 汇总。“带 `custom_type`/`attribution` 的 custom 消息事件”已由 ADR-9 P1 以 `transcript.custom {message}` 落地（载荷就是 `session.resume` 的同一行投影；当前消费者是 `custom_type:"lsp-late-diagnostic"`，其它 custom 类型可复用），因此 `custom.message` 这个占位名不再需要：omp 的 custom 消息本身可能是模型上下文消息（默认 `developer`，user 归因的 skill/collab→`user`），新事件没有把它降级成 `display_metadata`。`ttsr.triggered` 已由 ADR-6 P1 生产（见 A.11），不再属于缺口 |
 | `ui.select/confirm/input/editor/widget/editor_text/open_url` | 当前没有任何后端流程会发起这些请求；每个都需要一个真实调用者才能通过 orphan 门 |
 | `host.tool.*`、`host.uri.*` | Hermes 全部工具在服务端执行，没有“请宿主执行工具”的子协议 |

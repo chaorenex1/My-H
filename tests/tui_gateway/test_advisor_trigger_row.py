@@ -1,4 +1,4 @@
-"""A leftover adviser steer becomes the next turn; its row must stay an adviser card."""
+"""A leftover advisor steer becomes the next turn; its row must stay an advisor card."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from tui_gateway import prompt_turn
 def _run(monkeypatch, result):
     session = {"history_lock": threading.RLock(), "transport": None}
     rows: list[tuple[dict, str | None]] = []
-    monkeypatch.setattr(prompt_turn, "_enqueue_prompt", lambda s, t, tr: {"text": t}, raising=False)
+    monkeypatch.setattr(prompt_turn, "_enqueue_prompt", lambda s, t, tr, **kw: {"text": t}, raising=False)
     monkeypatch.setattr(
         prompt_turn, "_persist_queued_user_row", lambda s, e, k: rows.append((e, k)),
         raising=False)
@@ -19,15 +19,15 @@ def _run(monkeypatch, result):
     return rows
 
 
-def test_leftover_adviser_steer_is_labelled(monkeypatch):
+def test_leftover_advisor_steer_is_labelled(monkeypatch):
     rows = _run(monkeypatch, {
-        "pending_steer": "[adviser — advisory only]\n- [concern · reviewer] check it",
-        "pending_steer_kind": "adviser",
+        "pending_steer": "[advisor — advisory only]\n- [concern · reviewer] check it",
+        "pending_steer_kind": "advisor",
     })
     assert len(rows) == 1
     envelope, kind = rows[0]
-    assert kind == "adviser"
-    assert envelope["text"].startswith("[adviser")
+    assert kind == "advisor"
+    assert envelope["text"].startswith("[advisor")
 
 
 def test_leftover_human_steer_stays_an_ordinary_turn(monkeypatch):

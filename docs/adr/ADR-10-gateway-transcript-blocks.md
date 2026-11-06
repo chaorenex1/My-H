@@ -1,6 +1,6 @@
 # ADR-10：Transcript 区块先由 Hermes 网关生产（omp-ui 只做映射）
 
-**状态**：已决定（2026-11-03）。**P1 已落地**（2026-11-03：D1 契约与投影、D2 canonical adviser、D7
+**状态**：已决定（2026-11-03）。**P1 已落地**（2026-11-03：D1 契约与投影、D2 canonical advisor、D7
 `transcript.notice`、D9 `custom_messages`/`project_custom_messages` 双门、D10 角色枚举与座位表、D11
 provider 转换与 OpenAI `developer` 降级；客户端 opt-in、单一投影与 `satisfies never` 已接）；**P2 已落地**
 （2026-11-03：D4 `include_tool_content`/`include_outline`/entries 与 `session.resume` 参数、D5 tool 行
@@ -10,11 +10,11 @@ wire 工具名分离）；**P3 已落地**（2026-11-03：D3 `todo.reminder` sto
 `requested_model`/`served_model`、capability 中 `todo_reminder`/`cache_miss_marker`/
 `served_model_marker` 转 ready；客户端删除对应 seat、assistant 消息改用 `step_usage`（tool-only
 步的 usage 计入 TurnUsageTally）并把 `served_model` 写入 `upstreamModel`）；**P4 已落地**（2026-11-03：
-D6 `transcript_blocks` 补齐 plan 目录中的 `adviser`/`skill_invocation`/`tool_execution`/`notice`，
+D6 `transcript_blocks` 补齐 plan 目录中的 `advisor`/`skill_invocation`/`tool_execution`/`notice`，
 ADR-3/5/6/9 的 `background_tan`/`recap`/`ttsr_notification`/`late_diagnostics` 按各自 ADR 报
 `supported:false` + `needs`；omp-ui 删除 `GATEWAY_PENDING_TRANSCRIPT_BLOCKS`，
 `connectGatewayOmpSession` 非阻塞读取 `runtime.describe.transcript_blocks` 并暴露
-`transcriptBlock(id)`；非角色区块的 live 挂载点（`transcript.notice`/`message.adviser`/
+`transcriptBlock(id)`；非角色区块的 live 挂载点（`transcript.notice`/`message.advisor`/
 `todo.reminder`）只挂载显式 `supported:true` 的区块，角色行照常按 D10 渲染；
 `compaction_summary` 保持 `partial`，ADR-5 P1 已升为 `produced`）；**P5 已落地**（2026-11-03：wire 删除 `display_kind`/
 `display_metadata`，`TranscriptMessage`/`HistoryEntry` 不再携带；自定义区块一律 `role:"custom"` +
@@ -24,7 +24,7 @@ ADR-3/5/6/9 的 `background_tan`/`recap`/`ttsr_notification`/`late_diagnostics` 
 `custom_type`/`details`，Desktop rewind 改读 `synthetic_kind`；`custom_messages` 仍是 create-only
 session 标志，Desktop/Ink 的原始行与模型上下文保持旧形状）。分阶段：**P1** `role:"custom"` + `custom_type`/`details` 契约、投影/模型转换、
 `TranscriptRole` 角色全集与 `TRANSCRIPT_ROLES` 座位表 +
-canonical `message.adviser` + `transcript.notice` 去重；**P2** `session.history` 的 `entries`/`include_tool_content`/`include_outline` 与工具行补全（legacy `display_metadata` 仅 P5 前兼容）；
+canonical `message.advisor` + `transcript.notice` 去重；**P2** `session.history` 的 `entries`/`include_tool_content`/`include_outline` 与工具行补全（legacy `display_metadata` 仅 P5 前兼容）；
 **P3** `todo.reminder` stop gate、`message.complete` 的 `step_usage`/`served_model`；
 **P4** 按 ADR-3/5/6/9 接入其余区块，并用同一份 capability 清单收口；**P5** 删除 `display_kind`/`display_metadata` 与 legacy 回投影。落地前
 `docs/omp-ui-panels-gateway-plan.md` §2.3.2.1 的对应行保持原文，客户端不画假块（§0.1）。
@@ -36,7 +36,7 @@ ADR-5（Recap/压缩）、ADR-6（TTSR）、ADR-9（Late diagnostics）；`tui_g
 `tui_gateway/contracts/sessions.py`、`tui_gateway/contracts/events.py`、
 `tui_gateway/contracts/canonical.py`、`tui_gateway/session_history.py`、
 `tui_gateway/agent_callbacks.py`、`gateway/run_turn_progress.py`、`gateway/run_turn_runner.py`、
-`gateway/local_viewer_events.py`、`gateway/panel_inventory.py`、`agent/adviser_delivery.py`、
+`gateway/local_viewer_events.py`、`gateway/panel_inventory.py`、`agent/advisor_delivery.py`、
 `agent/turn_stop_gates.py`、`agent/turn_usage.py`、`omp-ui/src/modes/rpc/gateway-session.ts`、
 `omp-ui/src/modes/controllers/event-controller.ts`、`omp-ui/src/session/agent-session.ts`、
 `omp-ui/src/modes/utils/ui-helpers.ts`。
@@ -44,14 +44,14 @@ ADR-5（Recap/压缩）、ADR-6（TTSR）、ADR-9（Late diagnostics）；`tui_g
 **范围**：只讨论 omp-ui ↔ Hermes canonical local gateway。消息平台、Desktop、Ink sidecar、ACP、
 compute-host 的 worker 帧不新增设计；所有新增字段默认值保持旧 payload 逐字不变。落地顺序是
 **网关结构先行、omp-ui 映射随后**（同一阶段的后半）：网关先产出稳定、可测试的结构，客户端只消费
-（D8）。本 ADR 不要求 omp-ui 先于网关生产结构；现有 `omp-ui` 里对 `adviser` 文本、`/skill:` 文本、
+（D8）。本 ADR 不要求 omp-ui 先于网关生产结构；现有 `omp-ui` 里对 `advisor` 文本、`/skill:` 文本、
 todo 文本的解析一律视为临时兜底，D1/D2/D3 落地后删除，不得作为长期契约。
 
 **取代关系（逐条，避免文档互斥）**：
 
 - ADR-2 **D1/D2** 的客户端消费面继续有效；但“先在客户端按 `display_kind` 解析文本并留 seat”不再
   是落地顺序。本 ADR 的 D1/D7 先定义网关结构，客户端投影只做字段改名与组件选择。
-- ADR-2 **D3**（canonical 本地 viewer 补发 `message.adviser`）由本 ADR **D2** 具体化为：行先持久化，
+- ADR-2 **D3**（canonical 本地 viewer 补发 `message.advisor`）由本 ADR **D2** 具体化为：行先持久化，
   事件后发，`row_id`/`id` 可回指；sidecar 行为不变。
 - ADR-2 **D5/D6/D8/D10** 的 `session.history`、`include_tool_content`、工具行投影由本 ADR
   **D4/D5** 收口；默认 payload 与 `include_tool_content="none"` 不变。
@@ -68,7 +68,7 @@ omp-ui 的 transcript 有 27 类区块，但网关目前给客户端的主要是
 `session.history` 的 `TranscriptMessage` 只有 `text`、`display_kind`、`display_metadata` 和少量
 工具字段（`tui_gateway/contracts/common.py:168-186`）。部分区块因此变成“客户端猜文本”：
 
-- `adviser` 行只有 `display_metadata.severity`；`message.adviser` 的 canonical producer 未接，
+- `advisor` 行只有 `display_metadata.severity`；`message.advisor` 的 canonical producer 未接，
   omp-ui 若从 `text` 的 `- [concern · reviewer] …` 反解 notes，网关换文案就坏。
 - `skill_invocation` 行只有 `/skill:name args` 文本；`SkillMessageComponent` 需要
   `{name,path,args,prompt,lineCount}`，客户端只能猜 name/args，path 永远缺失。
@@ -81,7 +81,7 @@ omp-ui 的 transcript 有 27 类区块，但网关目前给客户端的主要是
 - `agent.print` 与 `status.update` 会为同一条 lifecycle line 各发一次；客户端去重只是补丁。
 
 共同结论：**语义属于网关**。客户端可以做 camelCase/snake_case、组件选择、折叠状态，但不应解析
-adviser/ skill / todo 的正文来还原结构化数据，也不应靠本地常量猜测“网关有没有 producer”。
+advisor/ skill / todo 的正文来还原结构化数据，也不应靠本地常量猜测“网关有没有 producer”。
 
 ## 决策
 
@@ -113,14 +113,14 @@ legacy_role: str          # 回投影用；不进入模型上下文
 
 规则：
 
-- `advisor` 是 wire `custom_type`；`adviser` 只作为旧 `display_kind`/block id，两者不得混用。
+- `advisor` 是 wire `custom_type`，也是 `display_kind`/block id 的规范名。
 - `custom_messages:true` 会话的新 producer 只写 `role:"custom"` + 上表字段；**不得再写**
   `display_kind` 或 `display_metadata`。未开启该标志的会话（Desktop/Ink）保留 legacy 原始行，
   由其 hydration 直接读取；wire 投影对两种形状都归一成 custom（P5）。
 - `display_kind` / `display_metadata` 标记为 **DEPRECATED-FOR-DELETION**：P5 删除了 viewer 门控的
   legacy wire 回投影（`project_custom_messages` 分支与客户端回退映射）。服务端一次性
-  marker→custom 归一保留（`_marker_custom_type`/`legacy_details`/`todo_details`，覆盖旧 adviser/
-  todo/通知行与 adviser steer），输出仍只有 `custom_type`/`details`；不回写 DB。
+  marker→custom 归一保留（`_marker_custom_type`/`legacy_details`/`todo_details`，覆盖旧 advisor/
+  todo/通知行与 advisor steer），输出仍只有 `custom_type`/`details`；不回写 DB。
 - 持久化：`messages` 表没有 custom 列，writer 把六个 custom 字段放进
   `display_metadata["_custom_message"]` 信封（`agent/custom_messages.py`），读取时 lift 回顶层；
   producer 本身仍只写顶层字段，不写该信封，也不写 `display_kind`/`display_metadata`。
@@ -129,21 +129,21 @@ legacy_role: str          # 回投影用；不进入模型上下文
 - 客户端不再解析 `text` 反解 notes/name/todos；只读 `details`。缺 `details` 时只渲染 text-only
   通用块。
 - `display_only:true` 只用于纯展示标记（model-switch 等）；`display_only:false` 的
-  adviser/skill/todo/ttsr-injection 才走 D9 的 custom→developer/user 转换。`auto-continue`/`failed-turn`
+  advisor/skill/todo/ttsr-injection 才走 D9 的 custom→developer/user 转换。`auto-continue`/`failed-turn`
   不转 custom，保持原 user/assistant 行，避免丢掉模型可见的续跑/失败信息。
 - `details`/`display_only`/`legacy_role` 是 display-only/内部字段，不进入 provider 请求。
 
-### D2. canonical `message.adviser` 由网关补发，行/事件可回指
+### D2. canonical `message.advisor` 由网关补发，行/事件可回指
 
-- `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` 安装只过滤 `display_kind=="adviser"` 的
-  `plugin_message_callback`，复用 `tui_gateway/agent_callbacks.py::_adviser_payload`。
-- 持久化行先 append，再发 `message.adviser`；payload 增加 `row_id`（durable `_row_id`）与
-  `details.notes`（D1；旧行兼容读 `display_metadata.adviser.notes`）。客户端用 `row_id` 去重：快照已有该行时，实时事件只更新
+- `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` 安装只过滤 `display_kind=="advisor"` 的
+  `plugin_message_callback`，复用 `tui_gateway/agent_callbacks.py::_advisor_payload`。
+- 持久化行先 append，再发 `message.advisor`；payload 增加 `row_id`（durable `_row_id`）与
+  `details.notes`（D1；旧行兼容读 `display_metadata.advisor.notes`）。客户端用 `row_id` 去重：快照已有该行时，实时事件只更新
   同一组件，不追加第二块。
 - 行形状随 D9 的 **session** 标志：`custom_messages:true` 时 append `role:"custom"` +
   `custom_type:"advisor"`、`display:true`、`details`、`attribution:"agent"`、`legacy_role:"user"`；
-  `false` 时保持 legacy `role:"user"` + `display_kind:"adviser"`。
-- `_adviser_payload` 从行文本解析 notes 只作为**网关侧**兼容旧行的 helper；新 adviser 产生时应直接
+  `false` 时保持 legacy `role:"user"` + `display_kind:"advisor"`。
+- `_advisor_payload` 从行文本解析 notes 只作为**网关侧**兼容旧行的 helper；新 advisor 产生时应直接
   传入结构化 notes，不在客户端解析。canonical live handler 直接用 payload 的 `details`/`row_id`
   走 D8.1 的同一投影，不再从 `text` 重建行。
 - sidecar（`tui_gateway/agent_callbacks.py`）的行为与 payload 保持；canonical 与 sidecar 共用同一
@@ -238,7 +238,7 @@ TranscriptBlockCapability {
 }
 ```
 
-- block id 使用 plan §2.3.2 的稳定 id（`adviser`、`skill_invocation`、`todo_reminder`、
+- block id 使用 plan §2.3.2 的稳定 id（`advisor`、`skill_invocation`、`todo_reminder`、
   `compaction_summary`、`recap`、`ttsr_notification`、`late_diagnostics`、`cache_miss_marker`、
   `served_model_marker`、`stripped_tool_calls`、`reaction`、`tool_execution`、`notice` 等）。这些是
   capability 表的键，沿用 plan 的 snake_case，**不是** D1 的 wire `custom_type`（`advisor`/
@@ -272,14 +272,14 @@ event("transcript.notice", {id, level, text, source, row_id?})
 `omp-ui/src/modes/controllers/event-controller.ts`（live 工具卡）、`omp-ui/src/session/agent-session.ts`
 （`tools.list` 展平）、生成的 `gateway-contract.generated.ts` 及其测试。不改 `omp-ui/src/vendor/` 与
 `@oh-my-pi/pi-tui` 的布局/折叠/键位，不新增 `transcript-blocks.ts` 之类的平行实现。角色穷举、
-seated 与 `bash/python/fileMention/hook` 的渲染移植见 D10；adviser/todo 的 `row_id` 去重契约见
+seated 与 `bash/python/fileMention/hook` 的渲染移植见 D10；advisor/todo 的 `row_id` 去重契约见
 D2/D3。
 
 **现状（本 ADR 要删除的临时兜底）**：
 
 - `rowToAgentMessage`（`gateway-session.ts:653`）是快照的唯一投影点，`snapshotFrom`（`:786`）优先
-  `display_messages`。`displayKindMessage`（`:330`）当前从 `text` 解析 adviser notes、`/skill:`
-  name/args、todo 行；`#onAdviserMessage`（`:1346`）与 `#onTodoReminder`（`:1368`）再手工造一条
+  `display_messages`。`displayKindMessage`（`:330`）当前从 `text` 解析 advisor notes、`/skill:`
+  name/args、todo 行；`#onAdvisorMessage`（`:1346`）与 `#onTodoReminder`（`:1368`）再手工造一条
   `TranscriptMessage` 复用同一解析。这些 helper 在 P1/P3 删除。
 - 工具行当前在投影处就把 `name` 换成 `gatewayToolName(name)`（`:700`，`read_file`→`read`、
   `todo_list`→`todo`），`ToolResultMessage.toolName` 因此只剩 render key，卡片标题显示 `read`
@@ -292,7 +292,7 @@ D2/D3。
 **D8.1 单一投影点**：
 
 - 快照与实时事件必须产生同一种 `AgentMessage`。抽出一个 `customRowToMessage(fields)`，供
-  `rowToAgentMessage`、`#onAdviserMessage`、`#onTodoReminder` 共用；live handler 直接读 payload 的
+  `rowToAgentMessage`、`#onAdvisorMessage`、`#onTodoReminder` 共用；live handler 直接读 payload 的
   `custom_type`/`details`/`row_id`，**不得**再构造假行或调用文本解析 helper。
 - 现有 `text`/`timestamp`/`model`/`tool_call_id`/`name`/`context`/`reasoning` 继续读；新增只读
   `custom_type`/`display`/`details`/`attribution`/`legacy_role`/`is_error`/`content`/`args`/`labels`/
@@ -387,7 +387,7 @@ D1 的五个 `custom_type` + `details.level`。
 `custom_message`（该 entry 重建后的消息角色才是 `custom`）；自定义区块在 wire 上只有
 `role:"custom"` 一种表示。完整 transcript 角色全集见 D10；客户端直接使用该角色名。
 
-- **行形状**：D1 的字段；message-bearing 的 adviser/skill-prompt/todo-reminder/ttsr-injection 为
+- **行形状**：D1 的字段；message-bearing 的 advisor/skill-prompt/todo-reminder/ttsr-injection 为
   `display_only:false`，通知/操作行为 `display_only:true`。
 - **两个开关**：
   - **模型侧 session 标志 `custom_messages`**：create 时解析并持久化到 session state；决定
@@ -403,7 +403,7 @@ D1 的五个 `custom_type` + `details.level`。
   `role:"custom"` 行，以及仍为 `user`/`assistant` + message-bearing legacy
   `display_kind` 的旧行；**不能只匹配 role**。规则与 omp `convertToLlm` 一致：
   - `display_only:true` 的纯展示标记 → 丢弃（不进入模型上下文）；`auto-continue`/`failed-turn` 不走此转换；
-  - 默认 message-bearing（adviser/todo/ttsr-injection 等）→ `developer`；
+  - 默认 message-bearing（advisor/todo/ttsr-injection 等）→ `developer`；
   - `custom_type:"skill-prompt"`/`"collab-prompt"` 且 `attribution:"user"` → `user`；
   - 普通 custom 含 image 块 → 文本 `developer` + 图片 `user`；user 归因 skill prompt 不拆分；
   - `display:false` 仍进入模型上下文；`display` 只控制 UI。
@@ -430,7 +430,7 @@ D1 的五个 `custom_type` + `details.level`。
   - P5 删除 `TranscriptMessage`/`HistoryEntry` 的 `display_kind`/`display_metadata`、
     `_legacy_display_kind` 与 viewer 门控的 legacy wire 回投影；合成行改用 `synthetic_kind`/
     `live_steered`，compaction counters 移到 `details.compaction`。服务端保留一次性
-    marker→custom 归一（旧行与 adviser steer 仍渲染成 custom block），输出不变。
+    marker→custom 归一（旧行与 advisor steer 仍渲染成 custom block），输出不变。
   - 存储列保留为网关内部 marker（`hidden`/`steer`/`auto_continue`/`failed_turn`/model-switch
     pivot）与 custom envelope 的载体；`PERSISTENCE_ONLY_MESSAGE_FIELDS` 继续剥离它们，因为
     Desktop/Ink 的原生行与 provider 副本仍读同一份 durable dict。wire 上不再出现这两个字段。
@@ -478,7 +478,7 @@ TranscriptRoleSpec {
   `runtime.describe.transcript_blocks` 的角色项；
 - `scripts/gen_gateway_contracts.py`：TS 角色联合 + 客户端角色 seat 子集。
 
-**非角色区块不归本表**：`adviser`、`skill_invocation`、`todo_reminder`、`recap`、
+**非角色区块不归本表**：`advisor`、`skill_invocation`、`todo_reminder`、`recap`、
 `ttsr_notification`、`late_diagnostics`、`stripped_tool_calls`、`collab_prompt`、`reply_write`、
 `background_tan`、`cache_miss_marker`、`served_model_marker`、`tool_execution`、`notice` 是 D6 的
 block 座位，不是角色。生成器只
@@ -580,7 +580,7 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 
 | 阶段 | 网关改动 | 客户端改动 |
 |---|---|---|
-| P1 | D1 契约与 `_history_to_messages` 补投影；D9 `custom_messages` 会话标志 + custom 投影/转换；D2 canonical adviser；D7 `transcript.notice`；D10 `TranscriptRole` 枚举 + `TRANSCRIPT_ROLES` + 生成器/客户端 seat；D11 角色转换表 | `session.create` 带 `client:{name:"omp-ui"}`/`custom_messages:true`，`session.resume` 带 `project_custom_messages:true`；`rowToAgentMessage` 与 live handler 共用 D8.1 投影，删除 adviser 文本解析；忽略旧 notice 通道；switch 改 `satisfies never` |
+| P1 | D1 契约与 `_history_to_messages` 补投影；D9 `custom_messages` 会话标志 + custom 投影/转换；D2 canonical advisor；D7 `transcript.notice`；D10 `TranscriptRole` 枚举 + `TRANSCRIPT_ROLES` + 生成器/客户端 seat；D11 角色转换表 | `session.create` 带 `client:{name:"omp-ui"}`/`custom_messages:true`，`session.resume` 带 `project_custom_messages:true`；`rowToAgentMessage` 与 live handler 共用 D8.1 投影，删除 advisor 文本解析；忽略旧 notice 通道；switch 改 `satisfies never` |
 | P2 | D4 `session.history`/`session.resume` 的 `include_tool_content`、entries/outline；D5 tool 行 | `resume` 传 `include_tool_content:"full"`，`history()` 传 `include_tool_content:"full"`/`include_outline:true`/`project_custom_messages:true`；用 entries 重建选择器与卡片；toolResult 读 `is_error`/`content`/`args`/`labels` |
 | P3 | D3 todo stop gate + `todo.reminder`；`message.complete.step_usage`/`served_model`/`requested_model`（ADR-2 D1/D2） | 删 todo seat；cache/served 标记读新字段 |
 | P4 | D6 capability 清单收口 ADR-3/5/6/9 的区块 | 删 `GATEWAY_PENDING_TRANSCRIPT_BLOCKS`；`connectGatewayOmpSession` 读 `runtime.describe.transcript_blocks`；只按 capability 渲染，pending 保持空 |
@@ -607,15 +607,15 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 | 投影 | `gateway/session_tui_ops.py` / `tui_gateway/methods_session_history.py` | 从请求参数读 `project_custom_messages`/`include_tool_content`；其他快照调用保持默认 |
 | 投影 | `tui_gateway/history_paging.py` | `outline`/分页 entries 的同一来源；entries 带 custom 可选字段 |
 | 生成 | `scripts/gen_gateway_contracts.py` | 重跑 `gateway-contract.generated.ts` / OpenRPC |
-| adviser | `agent/adviser_delivery.py::append_card` | 写入 `details.notes`（D1 的 custom 形状）；`display_metadata.adviser.notes` 仅 `custom_messages:false` 的 legacy 行，P5 删除 |
-| adviser | `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` | 安装 canonical `message.adviser` callback |
-| adviser | `tui_gateway/agent_callbacks.py::_adviser_payload` | 共用 payload；`row_id`/notes |
+| advisor | `agent/advisor_delivery.py::append_card` | 写入 `details.notes`（D1 的 custom 形状）；`display_metadata.advisor.notes` 仅 `custom_messages:false` 的 legacy 行，P5 删除 |
+| advisor | `gateway/run_turn_runner.py::_wire_turn_agent_callbacks` | 安装 canonical `message.advisor` callback |
+| advisor | `tui_gateway/agent_callbacks.py::_advisor_payload` | 共用 payload；`row_id`/notes |
 | todo | `agent/turn_stop_gates.py` | stop gate append reminder 行 + `todo.reminder` |
 | usage | `agent/turn_usage.py` | `_last_step_usage`/`_last_step_cost_usd` |
 | usage | `gateway/run_turn_progress.py` / `tui_gateway/prompt_turn.py` | `step_usage`、`served_model`、`requested_model` |
 | notice | `gateway/local_viewer_events.py` / `agent/status_output.py` | `transcript.notice` 单发与去重 |
 | capability | `gateway/panel_inventory.py` | `TRANSCRIPT_BLOCKS` 静态清单与 `capabilities()` |
-| 客户端 | `omp-ui/src/modes/rpc/gateway-session.ts::rowToAgentMessage` / `#notificationHandlers` | 单一投影 helper；只读 `custom_type`/`display`/`details`/`attribution`/`is_error`/`content`/`args`/`labels`/`row_id`；`toolName` 保留 wire `name`，删除 `gatewayToolName`；删除 `adviserDetails`/`skillDetails`/`todoReminderDetails` 文本解析；按 `row_id` 去重 |
+| 客户端 | `omp-ui/src/modes/rpc/gateway-session.ts::rowToAgentMessage` / `#notificationHandlers` | 单一投影 helper；只读 `custom_type`/`display`/`details`/`attribution`/`is_error`/`content`/`args`/`labels`/`row_id`；`toolName` 保留 wire `name`，删除 `gatewayToolName`；删除 `advisorDetails`/`skillDetails`/`todoReminderDetails` 文本解析；按 `row_id` 去重 |
 | 客户端 | `omp-ui/src/modes/rpc/gateway-session.ts::connectGatewayOmpSession` / `history()` | create 带 `client`/`custom_messages`；resume/history 带 `project_custom_messages`/`include_tool_content`/`include_outline`；缓存 `runtime.describe.transcript_blocks` |
 | 客户端 | `omp-ui/src/modes/rpc/gateway-session.ts::GATEWAY_PENDING_TRANSCRIPT_BLOCKS` | 删除手写 seat 清单；能力改读 D6 表 |
 | 客户端 | `omp-ui/src/modes/controllers/event-controller.ts::#handleToolExecutionStart` / `#handleToolExecutionEnd` | live 工具卡用 `getToolByName`/`toolRenderName`；read-group 的 start/end 判定（`:363`/`:411`）用 render key，卡片 label 保留真实名 |
@@ -629,12 +629,12 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 |---|---|
 | 旧客户端不认新 `display_metadata` 子对象 | 全部为可选新增；旧行保持原顶层 `severity` 等字段 |
 | `session.history` payload 变大 | `include_tool_content` 默认 `none`；`include_outline` 默认 false；单行字节上限 |
-| adviser 行与事件重复 | 行先写、事件带 `row_id`；客户端按 `row_id` 合并 |
+| advisor 行与事件重复 | 行先写、事件带 `row_id`；客户端按 `row_id` 合并 |
 | `transcript.notice` 与 `notification.show` 重复 | 只让 `_emit_status_kind`/`_print_fn` 走 `transcript.notice`；`notification.show` 保持独立语义 |
 | capability 广告与实现漂移 | 静态清单 + 生成器/测试门；`supported:true` 必须有 producer 测试 |
-| client-side 解析残留 | P1 后删除；代码审查禁止从 adviser/skill/todo 文本反解 |
+| client-side 解析残留 | P1 后删除；代码审查禁止从 advisor/skill/todo 文本反解 |
 | 工具名映射污染展示/历史 | `ToolResultMessage.toolName` 保留 wire `name`；render key 只用于组件选择与行为分支，卡片 label 显式传真实名 |
-| prompt cache | `display_metadata`/`details` 不进模型消息；但 `custom_messages:true` 的会话把 adviser/todo 行转成 custom→developer/user，会改前缀，必须 session 内固定；默认 false 不变 |
+| prompt cache | `display_metadata`/`details` 不进模型消息；但 `custom_messages:true` 的会话把 advisor/todo 行转成 custom→developer/user，会改前缀，必须 session 内固定；默认 false 不变 |
 | 跨客户端 resume | `project_custom_messages` 是 per-viewer；Desktop/Ink 默认 false 拿回 legacy role + display_kind，不因 omp-ui 会话的 session 标志而破 |
 | 旧 display_kind 行不转换 | `build_api_messages` 在 `custom_messages:true` 时同时转换 message-bearing 的 legacy display_kind 行，不只匹配 role custom |
 | resume 快照缺工具 `content` | D4 把 `include_tool_content` 加到 `CanonicalResumeParams`；omp-ui 的 resume 传 `"full"`，一次快照带齐，不二次分页回填 |
@@ -646,8 +646,8 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 
 1. `runtime.describe.transcript_blocks` 覆盖 plan §2.3.2 的网关区块；`supported:false` 必带
    `needs`，且对应事件/行确实不存在；客户端不画占位。
-2. adviser：`custom_type:"advisor"` 的行有 `details.notes`（custom_messages:false 的 legacy 形状才读
-   `display_metadata.adviser.notes`）；canonical `message.adviser` 每行恰好一次，带 `row_id`；
+2. advisor：`custom_type:"advisor"` 的行有 `details.notes`（custom_messages:false 的 legacy 形状才读
+   `display_metadata.advisor.notes`）；canonical `message.advisor` 每行恰好一次，带 `row_id`；
    resume 与 live 不产生第二块。
 3. skill：行有 `custom_type:"skill-prompt"` + `{name,path,args,prompt,lineCount}`；客户端不解析
    `/skill:` 文本即可渲染 name/args/prompt。
@@ -658,7 +658,7 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
    `include_tool_content` 三态与 `is_error`/`args`/`labels` 正确。`session.resume` 传
    `include_tool_content:"full"` 时 `display_messages` 的工具行同样带 display-safe `content`；不传时
    与今天逐字一致。
-6a. `custom_messages:true` 的会话 + `project_custom_messages:true`：adviser/skill_invocation/
+6a. `custom_messages:true` 的会话 + `project_custom_messages:true`：advisor/skill_invocation/
    todo_reminder 三类旧行投影为 `role:"custom"` + `custom_type:"advisor"`/`"skill-prompt"`/
    `"todo-reminder"`，并带 `display`/`details`/`attribution`；模型侧同一会话把这三类转成
    developer/user，provider 请求中不出现 custom。
@@ -691,8 +691,8 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
     `project_custom_messages:true`/`include_tool_content:"full"`，`session.history` 带
     `include_tool_content:"full"`/`include_outline:true`；Desktop/Ink 不传这些参数时 payload 与今天
     逐字一致，且 resume 不改变 session 的 `custom_messages`。
-16. 同一条 adviser/todo 行在快照与 live 事件中产生同一个 `AgentMessage`，按 `row_id` 只有一块；
-    `display:false` 不渲染；缺 `details` 只画 text-only 通用块；客户端不再有 `adviserDetails`/
+16. 同一条 advisor/todo 行在快照与 live 事件中产生同一个 `AgentMessage`，按 `row_id` 只有一块；
+    `display:false` 不渲染；缺 `details` 只画 text-only 通用块；客户端不再有 `advisorDetails`/
     `skillDetails`/`todoReminderDetails` 文本解析或 `gateway-notice` 自造类型。
 17. `GATEWAY_PENDING_TRANSCRIPT_BLOCKS` 删除后，`connectGatewayOmpSession` 读取的
     `runtime.describe.transcript_blocks` 仍让 seated 分支不可达；`bun run check` 与
@@ -705,7 +705,7 @@ provider 归一化（与 omp 一致；规则以 vendored 源码为准，如
 
 ## 不采纳
 
-- 在 omp-ui 里继续从 `text` 反解 adviser/skill/todo：网关换文案即失效，且无法恢复 path/notes。
+- 在 omp-ui 里继续从 `text` 反解 advisor/skill/todo：网关换文案即失效，且无法恢复 path/notes。
 - 在客户端维护无 producer 的 seat 常量：能力应由网关 `runtime.describe.transcript_blocks` 广告。
 - 用 `notification.show`/`status.update`/`agent.print` 冒充压缩/recap/TTSR/错误块：保持 ADR-2 D9
   与各专用 ADR 的边界。

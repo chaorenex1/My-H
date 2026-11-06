@@ -1,6 +1,6 @@
-"""Admission policy for adviser ``advise`` calls.
+"""Admission policy for advisor ``advise`` calls.
 
-Port of oh-my-pi's ``advisor/emission-guard.ts``: everything the adviser model may
+Port of oh-my-pi's ``advisor/emission-guard.ts``: everything the advisor model may
 emit goes through one gate that (in order) drops empty notes and content-free
 self-talk, applies rank-aware session dedupe, and charges a per-update budget for
 non-blocker notes. A ``blocker`` is exempt from the budget so it can always

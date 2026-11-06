@@ -149,38 +149,38 @@ export const MessageLine = memo(function MessageLine({
     )
   }
 
-  // Plugin adviser guidance: a card, not a "you" bubble — the model saw this row,
+  // Plugin advisor guidance: a card, not a "you" bubble — the model saw this row,
   // the human never typed it.
-  if (msg.adviser) {
+  if (msg.advisor) {
     const toneFor = (severity: string) =>
       severity === 'blocker' ? t.color.error : severity === 'concern' ? t.color.warn : t.color.muted
 
-    const tone = toneFor(msg.adviser.severity)
-    const adviserGutter = transcriptGutterWidth('system', t.brand.prompt)
-    const adviserWidth = transcriptBodyWidth(cols, 'system', t.brand.prompt, TERMUX_TUI_MODE)
+    const tone = toneFor(msg.advisor.severity)
+    const advisorGutter = transcriptGutterWidth('system', t.brand.prompt)
+    const advisorWidth = transcriptBodyWidth(cols, 'system', t.brand.prompt, TERMUX_TUI_MODE)
 
     return (
       <Box flexDirection="column" marginBottom={1} marginTop={leadGap ? 1 : 0}>
         <Box>
-          <NoSelect flexShrink={0} fromLeftEdge width={adviserGutter}>
+          <NoSelect flexShrink={0} fromLeftEdge width={advisorGutter}>
             <Text color={tone}>◆ </Text>
           </NoSelect>
-          <Text bold color={tone}>{`adviser · ${msg.adviser.label}`}</Text>
+          <Text bold color={tone}>{`advisor · ${msg.advisor.label}`}</Text>
         </Box>
         <Box>
-          <NoSelect flexShrink={0} fromLeftEdge width={adviserGutter}>
+          <NoSelect flexShrink={0} fromLeftEdge width={advisorGutter}>
             <Text> </Text>
           </NoSelect>
-          <Box flexDirection="column" width={adviserWidth}>
-            {msg.adviser.items.length > 0 ? (
-              msg.adviser.items.map((item, index) => (
+          <Box flexDirection="column" width={advisorWidth}>
+            {msg.advisor.items.length > 0 ? (
+              msg.advisor.items.map((item, index) => (
                 <Box flexDirection="column" key={`${index}-${item.label}`}>
                   <Text color={toneFor(item.severity)}>{item.label}</Text>
-                  <Md cols={adviserWidth} compact={compact} t={t} text={item.text} />
+                  <Md cols={advisorWidth} compact={compact} t={t} text={item.text} />
                 </Box>
               ))
             ) : (
-              <Md cols={adviserWidth} compact={compact} t={t} text={msg.text} />
+              <Md cols={advisorWidth} compact={compact} t={t} text={msg.text} />
             )}
           </Box>
         </Box>

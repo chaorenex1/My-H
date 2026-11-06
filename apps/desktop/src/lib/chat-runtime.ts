@@ -475,7 +475,7 @@ export function toRuntimeMessage(message: ChatMessage): ThreadMessage {
           ...timelineMeta,
           ...(message.asyncResult ? { asyncResult: message.asyncResult } : {}),
           ...(message.asyncResultKind ? { asyncResultKind: message.asyncResultKind } : {}),
-          ...(message.adviser ? { adviser: message.adviser } : {}),
+          ...(message.advisor ? { advisor: message.advisor } : {}),
           ...contentRefusedMeta(message)
         }
       }

@@ -26205,9 +26205,9 @@
         "title": "McpServersTestResult",
         "type": "object"
       },
-      "MessageAdviserPayload": {
+      "MessageAdvisorPayload": {
         "additionalProperties": false,
-        "description": "``agent_callbacks.plugin_message_callback``: one injected adviser row. ``row_id`` is the\ndurable row the live event refers to (a snapshot that already has it merges, never appends);\n``details`` is ADR-10 D1's advisor shape, so a client never parses the note text.",
+        "description": "``agent_callbacks.plugin_message_callback``: one injected advisor row. ``row_id`` is the\ndurable row the live event refers to (a snapshot that already has it merges, never appends);\n``details`` is ADR-10 D1's advisor shape, so a client never parses the note text.",
         "properties": {
           "id": {
             "title": "Id",
@@ -26254,7 +26254,7 @@
           "severity",
           "label"
         ],
-        "title": "MessageAdviserPayload",
+        "title": "MessageAdvisorPayload",
         "type": "object"
       },
       "MessageBlockEndPayload": {
@@ -28038,7 +28038,7 @@
       },
       "ModelRoleRow": {
         "additionalProperties": false,
-        "description": "One role as the profile's ``config.yaml`` stores it.\n\n``reasoning_effort`` is the slot's own override: a level, ``\"none\"``, or ``null`` (inherit\n``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config\nsection the row writes (``auxiliary``, ``delegation``, ``adviser`` or ``chain`` \u2014\n``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots,\nplugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base\nslot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the\nslot's stored values, exactly like the dashboard's auxiliary rows).",
+        "description": "One role as the profile's ``config.yaml`` stores it.\n\n``reasoning_effort`` is the slot's own override: a level, ``\"none\"``, or ``null`` (inherit\n``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config\nsection the row writes (``auxiliary``, ``delegation``, ``advisor`` or ``chain`` \u2014\n``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots,\nplugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base\nslot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the\nslot's stored values, exactly like the dashboard's auxiliary rows).",
         "properties": {
           "id": {
             "title": "Id",
@@ -28115,7 +28115,7 @@
             "enum": [
               "auxiliary",
               "delegation",
-              "adviser",
+              "advisor",
               "chain"
             ],
             "title": "Target",
@@ -47839,7 +47839,7 @@
       },
       "SubagentConfigParams": {
         "additionalProperties": false,
-        "description": "Per-agent custom configuration stored in the profile's state.db (not config.yaml):\nmodel/provider, adviser/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves\nthe running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster\nfile path). Omitted fields keep their stored value.",
+        "description": "Per-agent custom configuration stored in the profile's state.db (not config.yaml):\nmodel/provider, advisor/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves\nthe running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster\nfile path). Omitted fields keep their stored value.",
         "properties": {
           "profile": {
             "anyOf": [
@@ -56599,13 +56599,13 @@
       ]
     },
     {
-      "name": "message.adviser",
-      "summary": "Plugin adviser advice injected into the live transcript; render as an adviser card.",
+      "name": "message.advisor",
+      "summary": "Plugin advisor advice injected into the live transcript; render as an advisor card.",
       "params": [
         {
           "name": "payload",
           "schema": {
-            "$ref": "#/components/schemas/MessageAdviserPayload"
+            "$ref": "#/components/schemas/MessageAdvisorPayload"
           }
         }
       ]

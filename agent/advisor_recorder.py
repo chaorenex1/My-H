@@ -1,10 +1,11 @@
-"""Append-only adviser transcript, one JSONL per adviser per session.
+"""Append-only advisor transcript, one JSONL per advisor per session.
 
-Port of oh-my-pi's ``advisor/transcript-recorder.ts``. Adviser context is not
+Port of oh-my-pi's ``advisor/transcript-recorder.ts``. Advisor context is not
 part of the primary session, so without this a failed review or a later
 investigation has no record of what the reviewer saw or spent. The file lives
-under ``<HERMES_HOME>/adviser/<session_id>/<slug>.jsonl`` (never in the session
-DB): it is telemetry, not conversation state, and a re-prime discards the
+inside the session bundle — ``<bundle>/_advisor.jsonl`` for the main session and
+``<bundle>/<topic>/_advisor.jsonl`` for a named subagent run — never in the
+session DB: it is telemetry, not conversation state, and a re-prime discards the
 reviewer's context while the record survives.
 
 Replay window: a failed review is retried with the *same* user deltas, so a user
@@ -21,31 +22,32 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from agent.adviser_delta import fingerprint_message
-from hermes_constants import get_hermes_home
+import hermes_session_paths as session_paths
+from agent.advisor_delta import fingerprint_message
 
 logger = logging.getLogger(__name__)
 
-TRANSCRIPT_STEM = "__adviser"
-DEFAULT_FILENAME = "__adviser.jsonl"
+TRANSCRIPT_STEM = session_paths.ADVISOR_STEM
+DEFAULT_FILENAME = f"{TRANSCRIPT_STEM}.jsonl"
 
 
-def adviser_transcript_filename(slug: str) -> str:
-    return f"{TRANSCRIPT_STEM}.{slug}.jsonl" if slug else DEFAULT_FILENAME
+def advisor_transcript_filename(slug: str) -> str:
+    return session_paths.advisor_path(Path("."), slug).name
 
 
-def is_adviser_transcript_name(name: str) -> bool:
+def is_advisor_transcript_name(name: str) -> bool:
     return name == DEFAULT_FILENAME or (name.startswith(f"{TRANSCRIPT_STEM}.") and name.endswith(".jsonl"))
 
 
-class AdviserRecorder:
+class AdvisorRecorder:
     """Thread-safe JSONL writer with a user-row replay window."""
 
-    def __init__(self, *, session_id: str, slug: str, cwd: str = "", home: Optional[str] = None) -> None:
+    def __init__(self, *, session_id: str, slug: str, cwd: str = "",
+                 directory: Optional[str | Path] = None) -> None:
         self.session_id = str(session_id or "")
         self.slug = str(slug or "")
         self.cwd = str(cwd or "")
-        self._home = Path(home) if home else None
+        self._directory = Path(directory) if directory is not None else None
         self._lock = threading.Lock()
         self._window: list[Optional[str]] = []
         self._cursor = 0
@@ -53,10 +55,9 @@ class AdviserRecorder:
 
     @property
     def path(self) -> Optional[Path]:
-        if not self.session_id:
+        if not self.session_id or self._directory is None:
             return None
-        home = self._home or get_hermes_home()
-        return Path(home) / "adviser" / self.session_id / adviser_transcript_filename(self.slug)
+        return session_paths.advisor_path(self._directory, self.slug)
 
     def begin_review(self) -> None:
         with self._lock:
@@ -73,7 +74,7 @@ class AdviserRecorder:
             self._cursor = 0
 
     def record(self, message: dict[str, Any]) -> None:
-        """Persist one adviser-visible message, skipping a replayed user batch row."""
+        """Persist one advisor-visible message, skipping a replayed user batch row."""
         if not isinstance(message, dict):
             return
         role = str(message.get("role") or "")
@@ -104,16 +105,16 @@ class AdviserRecorder:
                 if not self._header_written:
                     handle.write(json.dumps({
                         "type": "session", "version": 1, "id": self.session_id,
-                        "timestamp": time.time(), "cwd": self.cwd, "adviser": self.slug,
+                        "timestamp": time.time(), "cwd": self.cwd, "advisor": self.slug,
                     }, ensure_ascii=False) + "\n")
                     self._header_written = True
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except OSError as exc:
-            logger.debug("adviser recorder write failed (%s): %s", path, exc)
+            logger.debug("advisor recorder write failed (%s): %s", path, exc)
 
 
-def load_adviser_costs(directory: Optional[str]) -> dict[str, float]:
-    """Sum ``message.usage.cost`` per adviser slug from a session's transcript directory."""
+def load_advisor_costs(directory: Optional[str]) -> dict[str, float]:
+    """Sum ``message.usage.cost`` per advisor slug from a session's transcript directory."""
     costs: dict[str, float] = {}
     if not directory:
         return costs
@@ -122,7 +123,7 @@ def load_adviser_costs(directory: Optional[str]) -> dict[str, float]:
     except OSError:
         return costs
     for entry in entries:
-        if not is_adviser_transcript_name(entry.name):
+        if not is_advisor_transcript_name(entry.name):
             continue
         slug = "" if entry.name == DEFAULT_FILENAME else entry.name[len(TRANSCRIPT_STEM) + 1:-len(".jsonl")]
         total = 0.0
@@ -153,8 +154,8 @@ def load_adviser_costs(directory: Optional[str]) -> dict[str, float]:
 __all__ = [
     "DEFAULT_FILENAME",
     "TRANSCRIPT_STEM",
-    "AdviserRecorder",
-    "adviser_transcript_filename",
-    "is_adviser_transcript_name",
-    "load_adviser_costs",
+    "AdvisorRecorder",
+    "advisor_transcript_filename",
+    "is_advisor_transcript_name",
+    "load_advisor_costs",
 ]

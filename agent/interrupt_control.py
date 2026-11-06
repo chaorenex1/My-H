@@ -112,10 +112,10 @@ def _set_steer_parts(agent, parts: list) -> None:
     agent._pending_steer_parts = parts
     agent._pending_steer = "\n".join(text for _, text, _ in parts) or None
     # Advice from a plugin reviewer must not borrow the user's authority: the drained row carries
-    # ``display_kind="adviser"`` only when every buffered part is advice. A mixed buffer is an
+    # ``display_kind="advisor"`` only when every buffered part is advice. A mixed buffer is an
     # ordinary user row, so user text never ends up dressed as machine advice.
     agent._pending_steer_kind = (
-        "adviser" if parts and all(kind == "adviser" for _, _, kind in parts) else "user"
+        "advisor" if parts and all(kind == "advisor" for _, _, kind in parts) else "user"
     )
 
 
@@ -333,21 +333,21 @@ class InterruptControlMixin:
         interrupt); multiple calls concatenate with newlines. Returns False for empty text. ``ticket``
         names the submission, so ``withdraw_steer`` can settle exactly it, whatever text others carry.
 
-        ``kind="adviser"`` marks the row so the model is not told the text is a direct user
+        ``kind="advisor"`` marks the row so the model is not told the text is a direct user
         message: a plugin reviewer's advice must not borrow the user's authority.
         """
         if not text or not text.strip():
             return False
         cleaned = text.strip()
-        is_adviser = str(kind or "").lower() == "adviser"
+        is_advisor = str(kind or "").lower() == "advisor"
         with _ic_lock(self, "_pending_steer_lock"):
             _set_steer_parts(
                 self,
-                _steer_parts(self) + [(ticket, cleaned, "adviser" if is_adviser else "user")],
+                _steer_parts(self) + [(ticket, cleaned, "advisor" if is_advisor else "user")],
             )
         # A reviewer's advice is not a user intervention: first-task-done detection must keep
         # reading the turn as unattended. Only a human steer clears that flag.
-        if not is_adviser:
+        if not is_advisor:
             self._turn_user_intervened = True
         return True
 

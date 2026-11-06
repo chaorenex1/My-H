@@ -44,4 +44,4 @@ export {
   withUniqueToolCallIdsWithinMessage
 } from './tool-parts'
 export type { PendingClarifyProjection, SettledClarifyProjection } from './tool-parts'
-export type { AdviserDisplay, ChatMessage, ChatMessagePart, GatewayEventPayload, TimelinePartMetadata } from './types'
+export type { AdvisorDisplay, ChatMessage, ChatMessagePart, GatewayEventPayload, TimelinePartMetadata } from './types'

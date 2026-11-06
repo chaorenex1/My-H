@@ -7,7 +7,7 @@ the freeze for a stall, and releases on resume, Stop, or the end of its executio
 generation. It never gates ADMISSION — ``agent.estop`` keeps that job — so an idle session
 can be "frozen" with no effect on later prompts.
 
-Subagents and the adviser share the parent's gate object (``share_gate``); nothing here
+Subagents and the advisor share the parent's gate object (``share_gate``); nothing here
 allocates per boundary.
 """
 

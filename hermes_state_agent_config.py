@@ -1,8 +1,8 @@
 """Per-agent (role) custom configuration in the profile's ``state.db``.
 
-The Agent Hub's role editor stores model/provider, adviser/prewalk toggles, reasoning effort and
+The Agent Hub's role editor stores model/provider, advisor/prewalk toggles, reasoning effort and
 pattern per agent id. This is profile state, so it lives beside the sessions rather than in
-``config.yaml`` (which stays the profile-wide defaults) or ``WATCHDOG.yml`` (the adviser roster).
+``config.yaml`` (which stays the profile-wide defaults) or ``WATCHDOG.yml`` (the advisor roster).
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Adviser model loop: one private conversation per adviser, tools included.
+"""Advisor model loop: one private conversation per advisor, tools included.
 
 Port of oh-my-pi's ``advisor/advise-tool.ts`` plus the prompt-cycle half of
 ``advisor/runtime.ts``. The loop is deliberately small and stateful:
@@ -9,7 +9,7 @@ Port of oh-my-pi's ``advisor/advise-tool.ts`` plus the prompt-cycle half of
 * the only side channel out is the ``advise`` tool, admitted by
   :class:`EmissionGuard`; read-only tools come from the Hermes registry and their
   output is returned as ordinary tool results;
-* a response is quarantined before it enters the adviser transcript when it
+* a response is quarantined before it enters the advisor transcript when it
   contains output-only destructive directives, and a repeated identical tool call
   is corrected once and then aborts the update.
 """
@@ -22,12 +22,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from agent.adviser_emission import (
+from agent.advisor_emission import (
     DEFAULT_BUDGET_PER_UPDATE,
     EmissionGuard,
     severity_rank,
 )
-from agent.adviser_prompts import ADVISE_TOOL_DESCRIPTION
+from agent.advisor_prompts import ADVISE_TOOL_DESCRIPTION
 
 logger = logging.getLogger(__name__)
 
@@ -69,28 +69,28 @@ ADVISE_SCHEMA = {
 }
 
 
-class AdviserTurnError(RuntimeError):
-    """The adviser turn produced no assistant response (not a provider failure)."""
+class AdvisorTurnError(RuntimeError):
+    """The advisor turn produced no assistant response (not a provider failure)."""
 
 
-class AdviserOutputQuarantined(RuntimeError):
+class AdvisorOutputQuarantined(RuntimeError):
     """Generated output carried output-only destructive directives; the turn was discarded."""
 
 
-class AdviserContextOverflow(RuntimeError):
-    """The adviser's own context no longer fits its model window."""
+class AdvisorContextOverflow(RuntimeError):
+    """The advisor's own context no longer fits its model window."""
 
 
-class AdviserUsageLimit(RuntimeError):
+class AdvisorUsageLimit(RuntimeError):
     """Provider quota/rate-limit: latch the runtime until an explicit reset."""
 
 
-class AdviserPermanentError(RuntimeError):
+class AdvisorPermanentError(RuntimeError):
     """A request shape/model the provider will never accept for this configuration."""
 
 
-class AdviserLoopAborted(RuntimeError):
-    """The adviser ignored a tool-call loop correction."""
+class AdvisorLoopAborted(RuntimeError):
+    """The advisor ignored a tool-call loop correction."""
 
 
 _PERMANENT_RE = re.compile(
@@ -116,9 +116,9 @@ _HAZARDS = (
 def classify_error(exc: BaseException) -> str:
     """``quota`` | ``overflow`` | ``refusal`` | ``permanent`` | ``transient``."""
     message = str(exc or "")
-    if isinstance(exc, AdviserUsageLimit):
+    if isinstance(exc, AdvisorUsageLimit):
         return "quota"
-    if isinstance(exc, AdviserContextOverflow):
+    if isinstance(exc, AdvisorContextOverflow):
         return "overflow"
     if _QUOTA_RE.search(message):
         return "quota"
@@ -181,7 +181,7 @@ def _tool_call_parts(call: Any, index: int) -> tuple[str, str, dict[str, Any]]:
 
 
 class AdviseTool:
-    """The adviser's only outward channel: admit, defer, and acknowledge every note."""
+    """The advisor's only outward channel: admit, defer, and acknowledge every note."""
 
     def __init__(self, on_advice: Callable[[str, Optional[str], Optional[int], bool], None],
                  guard: Optional[EmissionGuard] = None) -> None:
@@ -259,13 +259,13 @@ class AdviseTool:
 
 
 def _note_key(note: str) -> str:
-    from agent.adviser_emission import normalize_note
+    from agent.advisor_emission import normalize_note
 
     return normalize_note(note)
 
 
-class AdviserModel:
-    """Stateful adviser conversation, one instance per configured adviser."""
+class AdvisorModel:
+    """Stateful advisor conversation, one instance per configured advisor."""
 
     def __init__(self, *, system_blocks: list[str], tools: list[dict[str, Any]],
                  advise: AdviseTool, run_tool: Callable[[str, dict[str, Any]], str],
@@ -303,7 +303,7 @@ class AdviserModel:
             source_text = _source_text(self._messages, deltas)
             reason = quarantine_generated(content, source_text)
             if reason:
-                raise AdviserOutputQuarantined(f"generated output-only destructive directives: {reason}")
+                raise AdvisorOutputQuarantined(f"generated output-only destructive directives: {reason}")
             assistant: dict[str, Any] = {"role": "assistant", "content": content or ""}
             if calls:
                 assistant["tool_calls"] = calls
@@ -316,7 +316,7 @@ class AdviserModel:
                 self._append({
                     "role": "tool", "tool_call_id": call_id, "name": name or "tool", "content": result,
                 })
-        raise AdviserLoopAborted(f"adviser exceeded {MAX_TOOL_ROUNDS} tool rounds")
+        raise AdvisorLoopAborted(f"advisor exceeded {MAX_TOOL_ROUNDS} tool rounds")
 
     def _dispatch(self, name: str, args: dict[str, Any]) -> str:
         if name == "advise":
@@ -325,7 +325,7 @@ class AdviserModel:
         self._loop_counts[signature] = self._loop_counts.get(signature, 0) + 1
         if self._loop_counts[signature] >= LOOP_GUARD_THRESHOLD:
             if self._loop_corrected:
-                raise AdviserLoopAborted(f"adviser repeated {name} after a loop redirect")
+                raise AdvisorLoopAborted(f"advisor repeated {name} after a loop redirect")
             self._loop_corrected = True
             self._loop_counts[signature] = 0
             self._append({
@@ -336,7 +336,7 @@ class AdviserModel:
         try:
             return str(self._run_tool(name, args))
         except Exception as exc:  # health: allow BLE001 -- a tool failure is a result, never a loop failure
-            logger.debug("adviser tool %s failed", name, exc_info=True)
+            logger.debug("advisor tool %s failed", name, exc_info=True)
             return json.dumps({"error": f"{type(exc).__name__}: {exc}"})
 
     def _append(self, message: dict[str, Any]) -> None:
@@ -344,7 +344,7 @@ class AdviserModel:
         try:
             self._on_record(message)
         except Exception:
-            logger.debug("adviser recorder failed", exc_info=True)
+            logger.debug("advisor recorder failed", exc_info=True)
 
     def clear_loop_guard(self) -> None:
         self._loop_counts.clear()
@@ -355,7 +355,7 @@ def _read_response(response: Any) -> tuple[str, list[dict[str, Any]]]:
     try:
         choice = response.choices[0]
     except (AttributeError, IndexError, TypeError):
-        raise AdviserTurnError("adviser provider returned no choices") from None
+        raise AdvisorTurnError("advisor provider returned no choices") from None
     message = getattr(choice, "message", None)
     if message is None and isinstance(choice, dict):
         message = choice.get("message")
@@ -390,13 +390,13 @@ __all__ = [
     "ADVISE_SCHEMA",
     "MAX_QUARANTINE_RETRIES",
     "AdviseTool",
-    "AdviserContextOverflow",
-    "AdviserLoopAborted",
-    "AdviserModel",
-    "AdviserOutputQuarantined",
-    "AdviserPermanentError",
-    "AdviserTurnError",
-    "AdviserUsageLimit",
+    "AdvisorContextOverflow",
+    "AdvisorLoopAborted",
+    "AdvisorModel",
+    "AdvisorOutputQuarantined",
+    "AdvisorPermanentError",
+    "AdvisorTurnError",
+    "AdvisorUsageLimit",
     "classify_error",
     "quarantine_generated",
 ]

@@ -1,8 +1,8 @@
-"""Delta rendering: cursors, wip marker, rewritten-prefix replay, adviser-row filtering."""
+"""Delta rendering: cursors, wip marker, rewritten-prefix replay, advisor-row filtering."""
 
 from __future__ import annotations
 
-from agent.adviser_delta import WIP_MARKER, DeltaTracker, fingerprint_message, render_delta
+from agent.advisor_delta import WIP_MARKER, DeltaTracker, fingerprint_message, render_delta
 
 
 def _user(text: str) -> dict:
@@ -61,10 +61,10 @@ def test_shrunk_transcript_replays():
     assert delta is not None and delta.reset is True
 
 
-def test_adviser_rows_and_system_messages_are_not_rendered():
+def test_advisor_rows_and_system_messages_are_not_rendered():
     text = render_delta([
         {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": "[adviser — advisory only]\n- [nit] stale", "display_kind": "adviser"},
+        {"role": "user", "content": "[advisor — advisory only]\n- [nit] stale", "display_kind": "advisor"},
         _assistant("answer"),
     ])
 

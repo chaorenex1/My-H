@@ -279,7 +279,7 @@ def _role_block(spec) -> TranscriptBlock:
 # ``supported:false`` means the gateway sends no row/event, and ``needs`` says what is missing.
 TRANSCRIPT_BLOCKS: tuple[TranscriptBlock, ...] = (
     *(_role_block(spec) for spec in TRANSCRIPT_ROLES),
-    TranscriptBlock("adviser", True, READY, ("message.adviser",),
+    TranscriptBlock("advisor", True, READY, ("message.advisor",),
                     fields=("custom_type", "details", "row_id")),
     # A skill row is durable-only: the invocation is rebuilt from session.history/session.resume.
     TranscriptBlock("skill_invocation", True, READY,

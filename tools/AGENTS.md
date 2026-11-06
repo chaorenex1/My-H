@@ -146,9 +146,10 @@ it is never the first signal a live parent receives.
 ## Named agents (`tools/agent_tool.py`, `tools/agent_out_tool.py`)
 
 `agents` toolset. One `agent` call = one agent session: the tool mints `agent_session_id` and a
-unique `subject`, returns only those, and writes `sessions/<agent>/<agent_session_id>.jsonl`. No
-implicit continuation (`continue_from` seeds it). The `agent_session` row is inserted pre-dispatch
-and settled by the finishing thread; `agent_out` reads final_response / artifact / history.
+unique `subject`, returns only those, and writes `<parent bundle>/<topic>.jsonl`. No implicit
+continuation (`continue_from` seeds it). The `agent_session` row is inserted pre-dispatch and
+settled by the finishing thread; `agent_out` reads history / artifact / ast_summary / inbox (no
+`final_response`).
 
 ## Delegation (`tools/delegate_tool.py`)
 

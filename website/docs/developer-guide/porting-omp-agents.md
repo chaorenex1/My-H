@@ -44,7 +44,7 @@ are out of scope. Users can still drop equivalents into `~/.hermes/agents/`.
 | Need | `agent` | `delegate_task` |
 |---|---|---|
 | Stable persona name | Definition file on disk | Ad-hoc prompt per call |
-| Durable per-persona history | One JSONL per agent session: `sessions/<agent>/<agent_session_id>.jsonl` | Isolated child per call |
+| Durable per-persona history | One JSONL per agent session in the parent bundle: `sessions/<project>/<timestamp>_<parent-id>/<topic>.jsonl`, plus `<topic>.md` / `<topic>_ast.json` at settle | Isolated child per call |
 | Definition-owned tools/model | Yes, after this design | Route per task via delegation backend |
 | Anonymous fan-out | Awkward | Native batch `tasks[]` |
 | Worktree isolation | Yes — `worktree: true` at call time or in the definition | Yes (`delegation` worktree config) |
@@ -93,6 +93,17 @@ Rules:
   `write_file`, `patch`, `agent` and `skill_manage`. It is **not a sandbox**: `terminal` can still
   mutate the workspace.
 - The body becomes the system prompt exactly as today; the frontmatter is never sent to the model.
+
+### Ported omp front-matter switches
+
+These omp definition fields are now part of the Hermes contract:
+
+| Field | Hermes behavior |
+|---|---|
+| `structured` | `false` suppresses the definition's `output` contract; `true`/omitted keeps it. An agent without `output` has no parent-session schema in Hermes. |
+| `autoloadSkills` | Loads the named skills from the parent session and injects them as hidden blocks before the first child prompt; unknown/disabled names are skipped with a warning. |
+| `advisor` | Opts the spawned named-agent session into the native advisor (`advisor.enabled` is still the global gate); accepts `true` or a model selector, and `@role:level` / `provider:model:level` carries the effort into the reviewer call. The Agent Hub's stored `agent_config.advisor` toggle overrides frontmatter. |
+| `read-summarize` / `readSummarize` | Per-run override of `read.summarize.enabled`; whole-file reads only. tree-sitter is primary, with Python `ast` / a declaration heuristic as fallback. Summaries stay in memory for the run and settle writes them into `<topic>_ast.json`, read back with `agent_out(mode="ast_summary")`. |
 
 ### Precedence
 
@@ -243,12 +254,12 @@ from tools rather than deleted.
 
 | omp construct | Hermes expression |
 |---|---|
-| `yield` | Named agents have no hidden completion tool. The final assistant message is the handoff; state that contract in the body. When the source declares a structured `output`, route the call through `delegate_task` with `output_schema` instead of inventing a `yield` call. |
-| `agent://<id>` | Named-agent output: `agent` returns `agent_session_id` and `subject`; read them back with `agent_out(agent_session_id=…\|subject=…, mode="final_response"\|"history")`. `delegate_task` output arrives in the completion, not a URI. There is no implicit continuation: a follow-up passes `continue_from=<agent_session_id>` to `agent`, which starts a new session seeded from that transcript. No peer-messaging URI exists. |
+| `yield` | Named agents have no hidden completion tool. The final assistant message is the handoff; state that contract in the body. A definition's `output` (or `structured: true`) is validated with the same OUTPUT CONTRACT and one bounded retry the delegated children get; use `delegate_task(output_schema=...)` when the caller, not the definition, owns the schema. |
+| `agent://<id>` | Named-agent output: `agent` returns `agent_session_id` and `subject`; read them back with `agent_out(agent_session_id=…\|subject=…, mode="history"\|"artifact"\|"ast_summary")`. `delegate_task` output arrives in the completion, not a URI. There is no implicit continuation: a follow-up passes `continue_from=<agent_session_id>` to `agent`, which starts a new session seeded from that transcript. No peer-messaging URI exists. |
 | `history://<id>` | Main conversations live in SessionDB: `session_search(session_id=...)`, optionally with `around_message_id`/`window` to scroll. A named `agent` run's transcript is read with `agent_out(mode="history")`; `read_file` is only for a path the caller already holds. |
 | `proc://<id>` | `process_manage(action="poll"\|"log"\|"wait"\|"kill", session_id=...)`; start work with `terminal(background=true, notify_on_complete=true)`. A delegation is not a process: turn interrupts only reach foreground children, and only `/stop` ends background delegations. |
 | `local://<name>` | A project-relative path written with `write_file` and read with `read_file`; hand it to a child through `context_files` (or a path in `context`). |
-| `artifact://<id>` | Hermes has no artifact URI. An agent run reports `agent_out(mode="artifact")` (the manifest, `null` until a run records one) and always names its `transcript_path`; resolve any other concrete file and `read_file` it. Do not assume `sessions/<agent>/<agent_session_id>.jsonl` is the universal path. |
+| `artifact://<id>` | Hermes has no artifact URI. `agent_out(mode="artifact")` reads the run's settle files: `kind=report` (`<topic>.md`, verbatim), `kind=tool` (`<topic>/<step>.<tool>.log` plus the `-original.log` when truncated) or `kind=all` (the file list); `ast_summary` reads `<topic>_ast.json`. The identity carries `bundle_dir`/`report_path`/`ast_summary_path`. Do not assume a `sessions/<agent>/<agent_session_id>.jsonl` path from an id. |
 | `task` batch JSON | `delegate_task(tasks=[{goal, context, group?}])`; `solutionSpace` has no field, so fold it into `goal`/`context` text. |
 | plan mode | A read-only definition (`read_only: true` plus read-only `toolsets`) and a two-phase prompt: investigate first, report before acting. Enforce with the tool surface, not prose. |
 | spawn controls (`spawns`, depth) | Grant the `agents` toolset for `agent(agent_name=...)` or the `delegation` toolset for `delegate_task`; recursion is capped at `MAX_DEPTH=3`. Rewrite omp's `spawns` frontmatter into the granted toolset, not a new frontmatter key. |
@@ -292,7 +303,7 @@ lands in the project instead of a branch.
 `@session:<profile>/<id>` link) in `user_prompts` or `context`; the definition then calls
 `session_search(session_id=..., profile=...)` to read it. Use `agent_out` when the caller has an
 `agent_session_id` or subject, and `read_file` only when it also supplies a concrete JSONL path;
-never construct `sessions/<agent>/<agent_session_id>.jsonl` from an id and assume it exists.
+never construct a transcript path from an id and assume it exists — read the row's `transcript_path` or use `agent_out(mode="history")`.
 
 Suggested model policy: leave `model` empty in the shipped files so each profile uses its own
 route. Operators can pin a cheaper model for `sonic` or a stronger one for `security-reviewer` by

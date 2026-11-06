@@ -1,4 +1,4 @@
-"""WATCHDOG.yml discovery, validation and serialization for the native adviser.
+"""WATCHDOG.yml discovery, validation and serialization for the native advisor.
 
 Port of oh-my-pi's ``coding-agent/src/advisor/config.ts`` + ``watchdog.ts`` with the
 search path adapted to Hermes: the user level is ``$HERMES_HOME`` and the project
@@ -30,23 +30,23 @@ PROJECT_CONFIG_DIR = ".hermes"
 
 REVIEW_MODES = ("turn", "agent-end")
 SYNC_BACKLOG_MODES = ("off", "1", "3", "5", "strict")
-ADVISER_SCOPES = ("main", "subagent", "all")
+ADVISOR_SCOPES = ("main", "subagent", "all")
 _SYNC_BACKLOG_NUMERIC = {1: "1", 3: "3", 5: "5"}
 
-#: oh-my-pi release this adviser port is pinned to (advisor subsystem, session roster and
-#: prompts). Bump all three together with ``website/docs/user-guide/features/adviser.md``
-#: when re-porting; ``UPSTREAM_ADVISER_COMMIT`` is the ``v18.14.0`` tag commit.
-UPSTREAM_ADVISER_REPO = "can1357/oh-my-pi"
-UPSTREAM_ADVISER_RELEASE = "18.14.0"
-UPSTREAM_ADVISER_COMMIT = "31147f9d1a76608549821c3759f8487b4d66c72d"
-UPSTREAM_ADVISER_PATHS = (
+#: oh-my-pi release this advisor port is pinned to (advisor subsystem, session roster and
+#: prompts). Bump all three together with ``website/docs/user-guide/features/advisor.md``
+#: when re-porting; ``UPSTREAM_ADVISOR_COMMIT`` is the ``v18.14.0`` tag commit.
+UPSTREAM_ADVISOR_REPO = "can1357/oh-my-pi"
+UPSTREAM_ADVISOR_RELEASE = "18.14.0"
+UPSTREAM_ADVISOR_COMMIT = "31147f9d1a76608549821c3759f8487b4d66c72d"
+UPSTREAM_ADVISOR_PATHS = (
     "packages/coding-agent/src/advisor/",
     "packages/coding-agent/src/session/session-advisors.ts",
     "packages/coding-agent/src/prompts/advisor/",
     "docs/advisor-watchdog.md",
 )
 
-#: The read-only investigative set an adviser gets when its entry omits ``tools``.
+#: The read-only investigative set an advisor gets when its entry omits ``tools``.
 DEFAULT_TOOL_NAMES = ("read_file", "search_files")
 
 #: Legacy oh-my-pi tool names and the Hermes tool that serves the same purpose.
@@ -75,7 +75,7 @@ class Candidate:
 
 
 @dataclass
-class AdviserConfig:
+class AdvisorConfig:
     name: str
     slug: str = ""
     model: Optional[str] = None
@@ -89,20 +89,21 @@ class AdviserConfig:
     instructions: Optional[str] = None
     enabled: Optional[bool] = None
     max_notes_per_update: Optional[int] = None
+    reasoning_effort: Optional[str] = None
     source: str = ""
 
 
 @dataclass
-class DiscoveredAdvisers:
-    advisers: list[AdviserConfig] = field(default_factory=list)
+class DiscoveredAdvisors:
+    advisors: list[AdvisorConfig] = field(default_factory=list)
     shared_instructions: Optional[str] = None
     shared_max_notes_per_update: Optional[int] = None
     warnings: list[str] = field(default_factory=list)
 
 
-def slugify_adviser_name(name: str) -> str:
+def slugify_advisor_name(name: str) -> str:
     slug = _SLUG_STRIP.sub("-", str(name or "").strip().lower()).strip("-")
-    return slug or "adviser"
+    return slug or "advisor"
 
 
 def _expand(path: str) -> str:
@@ -188,7 +189,7 @@ def collect_config_candidates(cwd: str, home: str, filenames: Iterable[str]) -> 
         except FileNotFoundError:
             continue
         except OSError as exc:
-            logger.warning("adviser: cannot read %s: %s", absolute, exc)
+            logger.warning("advisor: cannot read %s: %s", absolute, exc)
             continue
         kept.append((Candidate(absolute, content, "user" if is_user else "project", depth), depth))
     kept.sort(key=lambda item: (0 if item[0].level == "user" else 1, -item[1]))
@@ -247,7 +248,7 @@ def _normalize_tools(raw: Any, source: str) -> Optional[list[str]]:
     if raw is None:
         return None
     if not isinstance(raw, list):
-        logger.warning("adviser: %s: tools must be a list — ignored", source)
+        logger.warning("advisor: %s: tools must be a list — ignored", source)
         return None
     names: list[str] = []
     for item in raw:
@@ -263,7 +264,7 @@ def _normalize_tools(raw: Any, source: str) -> Optional[list[str]]:
 def parse_watchdog_doc(
     doc: Any, path: str
 ) -> tuple[Optional[str], list[dict[str, Any]], Optional[int], list[str]]:
-    """Validate one YAML document per entry, so one bad adviser never drops the file."""
+    """Validate one YAML document per entry, so one bad advisor never drops the file."""
     warnings: list[str] = []
     if not isinstance(doc, dict):
         raise ValueError("expected a YAML mapping")
@@ -274,17 +275,17 @@ def parse_watchdog_doc(
     shared_max = _positive_int(doc.get("maxNotesPerUpdate"))
     if shared_max is not None:
         shared_max = min(MAX_NOTES_CAP, shared_max)
-    raw_advisers = doc.get("advisors")
-    if raw_advisers is not None and not isinstance(raw_advisers, list):
+    raw_advisors = doc.get("advisors")
+    if raw_advisors is not None and not isinstance(raw_advisors, list):
         warnings.append(f"{path}: advisors must be a list — ignored")
     entries = [
-        entry for index, raw in enumerate(raw_advisers if isinstance(raw_advisers, list) else [])
-        if (entry := _parse_adviser_entry(raw, index, path, warnings)) is not None
+        entry for index, raw in enumerate(raw_advisors if isinstance(raw_advisors, list) else [])
+        if (entry := _parse_advisor_entry(raw, index, path, warnings)) is not None
     ]
     return instructions, entries, shared_max, warnings
 
 
-def _parse_adviser_entry(raw: Any, index: int, path: str,
+def _parse_advisor_entry(raw: Any, index: int, path: str,
                          warnings: list[str]) -> Optional[dict[str, Any]]:
     """Validate one roster entry; ``None`` drops it with a warning naming the entry."""
     if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
@@ -318,8 +319,8 @@ def _parse_adviser_entry(raw: Any, index: int, path: str,
             entry["syncBacklog"] = backlog
     if raw.get("scope") is not None:
         scope = str(raw.get("scope") or "").strip()
-        if scope not in ADVISER_SCOPES:
-            warnings.append(f"{label} dropped — scope must be one of {ADVISER_SCOPES}")
+        if scope not in ADVISOR_SCOPES:
+            warnings.append(f"{label} dropped — scope must be one of {ADVISOR_SCOPES}")
             return None
         entry["scope"] = scope
     if raw.get("includeReasoning") is not None:
@@ -339,11 +340,11 @@ def _parse_adviser_entry(raw: Any, index: int, path: str,
     return entry
 
 
-def discover_advisers(cwd: str, home: str = "") -> DiscoveredAdvisers:
+def discover_advisors(cwd: str, home: str = "") -> DiscoveredAdvisors:
     """Walk every ``WATCHDOG.yml``/``.yaml`` on the search path and merge the roster."""
     home = home or str(get_hermes_home())
     items = collect_config_candidates(cwd, home, CONFIG_FILENAMES)
-    by_slug: dict[str, AdviserConfig] = {}
+    by_slug: dict[str, AdvisorConfig] = {}
     shared_parts: list[str] = []
     shared_max: Optional[int] = None
     warnings: list[str] = []
@@ -352,7 +353,7 @@ def discover_advisers(cwd: str, home: str = "") -> DiscoveredAdvisers:
             parsed = yaml.safe_load(item.content)
         except yaml.YAMLError as exc:
             warnings.append(f"{item.path}: failed to parse YAML ({exc}) — file skipped")
-            logger.warning("adviser config: %s: %s", item.path, exc)
+            logger.warning("advisor config: %s: %s", item.path, exc)
             continue
         if parsed is None:
             continue
@@ -370,8 +371,8 @@ def discover_advisers(cwd: str, home: str = "") -> DiscoveredAdvisers:
         if doc_max is not None:
             shared_max = doc_max
         for entry in entries:
-            slug = slugify_adviser_name(entry["name"])
-            by_slug[slug] = AdviserConfig(
+            slug = slugify_advisor_name(entry["name"])
+            by_slug[slug] = AdvisorConfig(
                 name=entry["name"],
                 slug=slug,
                 model=entry.get("model"),
@@ -387,16 +388,16 @@ def discover_advisers(cwd: str, home: str = "") -> DiscoveredAdvisers:
                 max_notes_per_update=entry.get("maxNotesPerUpdate"),
                 source=item.path,
             )
-    advisers = list(by_slug.values())
+    advisors = list(by_slug.values())
     used: dict[str, int] = {}
-    for adviser in advisers:
-        base = adviser.slug or "adviser"
+    for advisor in advisors:
+        base = advisor.slug or "advisor"
         count = used.get(base, 0)
         used[base] = count + 1
         if count:
-            adviser.slug = f"{base}-{count + 1}"
-    return DiscoveredAdvisers(
-        advisers=advisers,
+            advisor.slug = f"{base}-{count + 1}"
+    return DiscoveredAdvisors(
+        advisors=advisors,
         shared_instructions="\n\n".join(shared_parts) if shared_parts else None,
         shared_max_notes_per_update=shared_max,
         warnings=warnings,
@@ -414,7 +415,7 @@ def discover_watchdog_files(cwd: str, home: str = "") -> str:
     return "\n\n".join(blocks)
 
 
-def adviser_config_path(scope: str, project_dir: str, home: str = "") -> str:
+def advisor_config_path(scope: str, project_dir: str, home: str = "") -> str:
     """Canonical ``WATCHDOG.yml`` a scope edits (user → HERMES_HOME, project → project dir)."""
     directory = (home or str(get_hermes_home())) if scope == "user" else project_dir
     return os.path.join(directory, CONFIG_FILENAMES[0])
@@ -422,7 +423,7 @@ def adviser_config_path(scope: str, project_dir: str, home: str = "") -> str:
 
 def resolve_edit_path(scope: str, project_dir: str, home: str = "") -> str:
     """Prefer an existing ``WATCHDOG.yaml`` when no canonical ``WATCHDOG.yml`` exists."""
-    canonical = adviser_config_path(scope, project_dir, home)
+    canonical = advisor_config_path(scope, project_dir, home)
     if os.path.exists(canonical):
         return canonical
     alternate = canonical[:-4] + ".yaml"
@@ -436,7 +437,7 @@ def load_watchdog_config_file(path: str) -> dict[str, Any]:
         text = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
-            logger.warning("adviser config: cannot read %s: %s", path, exc)
+            logger.warning("advisor config: cannot read %s: %s", path, exc)
         return doc
     try:
         parsed = yaml.safe_load(text)
@@ -453,10 +454,10 @@ def load_watchdog_config_file(path: str) -> dict[str, Any]:
     shared_max = _positive_int(parsed.get("maxNotesPerUpdate"))
     if shared_max is not None:
         doc["maxNotesPerUpdate"] = min(MAX_NOTES_CAP, shared_max)
-    advisers = parsed.get("advisors")
-    if isinstance(advisers, list):
+    advisors = parsed.get("advisors")
+    if isinstance(advisors, list):
         doc["advisors"] = [
-            entry for raw in advisers
+            entry for raw in advisors
             if (entry := _clean_entry_for_edit(raw, path)) is not None
         ]
     return doc
@@ -480,7 +481,7 @@ def _clean_entry_for_edit(raw: Any, path: str) -> Optional[dict[str, Any]]:
     backlog = _normalize_sync_backlog(raw.get("syncBacklog"))
     if backlog is not None:
         entry["syncBacklog"] = backlog
-    if raw.get("scope") in ADVISER_SCOPES:
+    if raw.get("scope") in ADVISOR_SCOPES:
         entry["scope"] = raw["scope"]
     if raw.get("includeReasoning") is not None:
         entry["includeReasoning"] = bool(raw.get("includeReasoning"))
@@ -540,7 +541,7 @@ def _serialize_entry_fields(entry: dict[str, Any]) -> list[str]:
         lines.append(f"{field_indent}reviewMode: {_yaml_scalar(entry['reviewMode'])}")
     if entry.get("syncBacklog") in SYNC_BACKLOG_MODES:
         lines.append(f"{field_indent}syncBacklog: {_yaml_scalar(entry['syncBacklog'])}")
-    if entry.get("scope") in ADVISER_SCOPES:
+    if entry.get("scope") in ADVISOR_SCOPES:
         lines.append(f"{field_indent}scope: {_yaml_scalar(entry['scope'])}")
     if entry.get("includeReasoning") is not None:
         lines.append(f"{field_indent}includeReasoning: {'true' if entry['includeReasoning'] else 'false'}")
@@ -600,7 +601,7 @@ def save_watchdog_config_file(path: str, doc: dict[str, Any]) -> None:
 
 
 __all__ = [
-    "ADVISER_SCOPES",
+    "ADVISOR_SCOPES",
     "CONFIG_FILENAMES",
     "DEFAULT_TOOL_NAMES",
     "MAX_NOTES_CAP",
@@ -608,17 +609,17 @@ __all__ = [
     "REVIEW_MODES",
     "SYNC_BACKLOG_MODES",
     "TOOL_ALIASES",
-    "UPSTREAM_ADVISER_COMMIT",
-    "UPSTREAM_ADVISER_PATHS",
-    "UPSTREAM_ADVISER_RELEASE",
-    "UPSTREAM_ADVISER_REPO",
+    "UPSTREAM_ADVISOR_COMMIT",
+    "UPSTREAM_ADVISOR_PATHS",
+    "UPSTREAM_ADVISOR_RELEASE",
+    "UPSTREAM_ADVISOR_REPO",
     "WATCHDOG_MD_FILENAME",
-    "AdviserConfig",
+    "AdvisorConfig",
     "Candidate",
-    "DiscoveredAdvisers",
-    "adviser_config_path",
+    "DiscoveredAdvisors",
+    "advisor_config_path",
     "collect_config_candidates",
-    "discover_advisers",
+    "discover_advisors",
     "discover_watchdog_files",
     "expand_at_imports",
     "load_watchdog_config_file",
@@ -627,5 +628,5 @@ __all__ = [
     "resolve_edit_path",
     "save_watchdog_config_file",
     "serialize_watchdog_config",
-    "slugify_adviser_name",
+    "slugify_advisor_name",
 ]

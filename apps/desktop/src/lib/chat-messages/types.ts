@@ -32,7 +32,7 @@ export interface TimelinePartMetadata {
 
 export type ChatMessagePart = Exclude<ThreadMessageLike['content'], string>[number] & TimelinePartMetadata
 
-export type AdviserDisplay = {
+export type AdvisorDisplay = {
   severity: string
   label: string
   body: string
@@ -46,9 +46,9 @@ export type ChatMessage = {
   /** Result body only; the system text remains the compact completion label. */
   asyncResult?: string
   asyncResultKind?: 'process'
-  /** Plugin adviser guidance (`display_kind="adviser"`), parsed for the card. */
-  adviser?: AdviserDisplay
-  /** Stable id of an injected adviser row; lets a live event and a later hydrate dedupe. */
+  /** Plugin advisor guidance (`display_kind="advisor"`), parsed for the card. */
+  advisor?: AdvisorDisplay
+  /** Stable id of an injected advisor row; lets a live event and a later hydrate dedupe. */
   pluginMessageId?: string
   timestamp?: number
   completedAt?: number

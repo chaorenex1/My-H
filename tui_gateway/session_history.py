@@ -278,7 +278,7 @@ def _marker_custom_type(m: dict) -> str | None:
     """ADR-10 P5: the custom block a stored internal marker projects to, else ``None``.
 
     Producers write ``role:"custom"`` rows; this map keeps older rows and the live marker rows
-    (adviser steer, delegation notices) renderable. The marker itself never reaches the wire.
+    (advisor steer, delegation notices) renderable. The marker itself never reaches the wire.
     """
     kind = m.get("display_kind")
     return DISPLAY_KIND_TO_CUSTOM_TYPE.get(kind) if isinstance(kind, str) else None
@@ -307,7 +307,7 @@ def _custom_message(m: dict, *, text: str) -> dict:
     """ADR-10 P5: one custom row as the wire shape. Always ``role:"custom"``.
 
     Legacy ``display_kind`` rows are normalised here (gateway-side, once) so clients never parse
-    text and never read a marker: adviser steer rows, older adviser/todo rows, and the
+    text and never read a marker: advisor steer rows, older advisor/todo rows, and the
     delegation/notice markers all arrive as ``custom_type`` + ``details``.
     """
     from agent.custom_messages import DISPLAY_ONLY_CUSTOM_TYPES, custom_fields, legacy_details

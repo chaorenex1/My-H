@@ -230,7 +230,7 @@ def test_rows_carry_omp_tags_imported_roles_and_targets(home):
     assert [row.id for row in result.roles if row.group == "imported"] == ["task", "advisor"]
     task, advisor = rows["task"], rows["advisor"]
     assert (task.label, task.target, task.tag) == ("Task", "delegation", "TASK")
-    assert (advisor.label, advisor.target, advisor.tag) == ("Advisor", "adviser", "ADVISOR")
+    assert (advisor.label, advisor.target, advisor.tag) == ("Advisor", "advisor", "ADVISOR")
     # "auto" for an imported role is the empty provider (inherit the parent route).
     assert (task.provider, task.model) == ("", "")
     assert (advisor.provider, advisor.model) == ("", "")
@@ -268,15 +268,15 @@ def test_imported_task_role_writes_delegation_and_clear_restores_auto(home):
     assert delegation.get("fallback_providers") is None
 
 
-def test_imported_advisor_writes_adviser_and_refuses_chain_and_effort(home):
+def test_imported_advisor_writes_advisor_and_refuses_chain_and_effort(home):
     from tui_gateway.contracts.model_roles import ModelRolesSetResult
 
     result = ModelRolesSetResult.model_validate(_result("model.roles.set", {
         "role": "advisor", "provider": "nous", "model": "hermes-4.5-405b",
     })).role
     assert (result.provider, result.model) == ("nous", "hermes-4.5-405b")
-    assert (result.group, result.target, result.tag) == ("imported", "adviser", "ADVISOR")
-    assert _stored_cfg(home)["adviser"] == {"provider": "nous", "model": "hermes-4.5-405b"}
+    assert (result.group, result.target, result.tag) == ("imported", "advisor", "ADVISOR")
+    assert _stored_cfg(home)["advisor"] == {"provider": "nous", "model": "hermes-4.5-405b"}
 
     error = _error("model.roles.set", {
         "role": "advisor", "provider": "nous", "reasoning_effort": "high"})
@@ -288,7 +288,7 @@ def test_imported_advisor_writes_adviser_and_refuses_chain_and_effort(home):
         "fallback_chain": [{"provider": "openrouter", "model": "vendor/model"}]})
     assert error["code"] == 5127
     assert "fallback chain" in error["message"]
-    assert _stored_cfg(home)["adviser"] == {"provider": "nous", "model": "hermes-4.5-405b"}
+    assert _stored_cfg(home)["advisor"] == {"provider": "nous", "model": "hermes-4.5-405b"}
 
     # The hub always submits its thinking selection ("inherit" = no override) and an empty chain
     # for a role that has neither; that must assign the model instead of failing every time.
@@ -297,7 +297,7 @@ def test_imported_advisor_writes_adviser_and_refuses_chain_and_effort(home):
         "reasoning_effort": "inherit", "fallback_chain": [],
     })).role
     assert (hub_shaped.provider, hub_shaped.model) == ("nous", "hermes-4.5-405b")
-    assert _stored_cfg(home)["adviser"] == {"provider": "nous", "model": "hermes-4.5-405b"}
+    assert _stored_cfg(home)["advisor"] == {"provider": "nous", "model": "hermes-4.5-405b"}
 
     cleared = ModelRolesSetResult.model_validate(
         _result("model.roles.set", {"role": "advisor", "clear": True})).role

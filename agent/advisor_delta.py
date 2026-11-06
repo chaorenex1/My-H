@@ -1,9 +1,9 @@
-"""Incremental transcript rendering for the adviser.
+"""Incremental transcript rendering for the advisor.
 
 Port of oh-my-pi's ``advisor/runtime.ts`` render half plus
 ``advisor/message-fingerprint.ts`` and ``advisor/delta-split.ts``, narrowed to the
 message shapes Hermes actually sends (OpenAI-style ``system | user | assistant |
-tool`` dicts). Each boundary renders only the tail past the adviser's cursor; a
+tool`` dicts). Each boundary renders only the tail past the advisor's cursor; a
 changed prefix (compaction, undo, branch) rewinds the cursor so the next update
 replays the rewritten transcript.
 
@@ -23,7 +23,7 @@ from typing import Any, Iterable, Optional
 WIP_MARKER = "\n\n---\n\n[in progress — more steps follow]"
 SESSION_UPDATE_HEADING = "### Session update"
 #: A single rendered message is capped so one giant tool result cannot poison every
-#: later adviser request; the primary agent already saw the full text.
+#: later advisor request; the primary agent already saw the full text.
 MAX_MESSAGE_CHARS = 24_000
 
 _FINGERPRINT_FIELDS = (
@@ -112,13 +112,13 @@ def _render_message(message: dict[str, Any], *, include_reasoning: bool = True) 
     return f"**{role}**\n{body}" if body else ""
 
 
-def _adviser_visible(message: Any) -> bool:
-    """Skip rows the adviser itself injected: re-feeding them causes advice loops."""
+def _advisor_visible(message: Any) -> bool:
+    """Skip rows the advisor itself injected: re-feeding them causes advice loops."""
     if not isinstance(message, dict):
         return False
     if message.get("role") == "system":
         return False
-    return message.get("display_kind") != "adviser"
+    return message.get("display_kind") != "advisor"
 
 
 def render_delta(messages: Iterable[Any], *, wip: bool = False,
@@ -127,7 +127,7 @@ def render_delta(messages: Iterable[Any], *, wip: bool = False,
     blocks = [
         block for block in (
             _render_message(message, include_reasoning=include_reasoning)
-            for message in messages if _adviser_visible(message)
+            for message in messages if _advisor_visible(message)
         ) if block
     ]
     if not blocks:

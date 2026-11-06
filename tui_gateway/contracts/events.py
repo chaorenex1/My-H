@@ -245,8 +245,8 @@ event("message.block_end", MessageBlockEndPayload,
       doc="An assistant message block closed, with its full content.")
 
 
-class MessageAdviserPayload(Payload):
-    """``agent_callbacks.plugin_message_callback``: one injected adviser row. ``row_id`` is the
+class MessageAdvisorPayload(Payload):
+    """``agent_callbacks.plugin_message_callback``: one injected advisor row. ``row_id`` is the
     durable row the live event refers to (a snapshot that already has it merges, never appends);
     ``details`` is ADR-10 D1's advisor shape, so a client never parses the note text."""
 
@@ -258,8 +258,8 @@ class MessageAdviserPayload(Payload):
     details: JsonValue | None = None
 
 
-event("message.adviser", MessageAdviserPayload,
-      doc="Plugin adviser advice injected into the live transcript; render as an adviser card.")
+event("message.advisor", MessageAdvisorPayload,
+      doc="Plugin advisor advice injected into the live transcript; render as an advisor card.")
 
 
 class TranscriptNoticePayload(Payload):

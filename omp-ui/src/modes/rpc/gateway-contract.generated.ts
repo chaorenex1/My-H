@@ -2102,7 +2102,7 @@ export interface ModelRolesGetResult {
   presets?: ModelPresetsSummary
   model_chains?: Record<string, ModelRoleFallbackEntry[]>
 }
-/** One role as the profile's ``config.yaml`` stores it. ``reasoning_effort`` is the slot's own override: a level, ``"none"``, or ``null`` (inherit ``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config section the row writes (``auxiliary``, ``delegation``, ``adviser`` or ``chain`` — ``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots, plugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base slot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the slot's stored values, exactly like the dashboard's auxiliary rows). */
+/** One role as the profile's ``config.yaml`` stores it. ``reasoning_effort`` is the slot's own override: a level, ``"none"``, or ``null`` (inherit ``default_thinking_level``). ``fallback_chain`` is ``[]`` while unset. ``target`` is the config section the row writes (``auxiliary``, ``delegation``, ``advisor`` or ``chain`` — ``auxiliary.fallback_chains[<id>]``); ``group`` separates built-in picker slots, plugin-registered tasks, imported omp roles and model-keyed chains. A plugin row names the base slot it inherits from in ``inherit_from`` (its own ``provider``/``model``/``base_url`` stay the slot's stored values, exactly like the dashboard's auxiliary rows). */
 export interface ModelRoleRow {
   id: string
   label?: string
@@ -2115,7 +2115,7 @@ export interface ModelRoleRow {
   reasoning_effort?: string | null
   fallback_chain?: ModelRoleFallbackEntry[]
   group?: 'builtin' | 'plugin' | 'imported' | 'chain'
-  target?: 'auxiliary' | 'delegation' | 'adviser' | 'chain'
+  target?: 'auxiliary' | 'delegation' | 'advisor' | 'chain'
   inherit_from?: string | null
 }
 /** One ``auxiliary.<task>.fallback_chain`` route (``hermes_cli/aux_fallback.py``): ``provider`` + ``model`` are required to serve, ``base_url`` pins an explicit endpoint. */
@@ -5222,7 +5222,7 @@ export interface PlanApproveParams {
 export interface PlanApproveResult {
   status: PlanStatus
 }
-/** Per-agent custom configuration stored in the profile's state.db (not config.yaml): model/provider, adviser/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves the running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster file path). Omitted fields keep their stored value. */
+/** Per-agent custom configuration stored in the profile's state.db (not config.yaml): model/provider, advisor/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves the running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster file path). Omitted fields keep their stored value. */
 export interface SubagentConfigParams {
   profile?: string | null
   subagent_id: string
@@ -6508,8 +6508,8 @@ export interface MessageBlockEndPayload {
   content?: unknown
   message_id?: string | null
 }
-/** ``agent_callbacks.plugin_message_callback``: one injected adviser row. ``row_id`` is the durable row the live event refers to (a snapshot that already has it merges, never appends); ``details`` is ADR-10 D1's advisor shape, so a client never parses the note text. */
-export interface MessageAdviserPayload {
+/** ``agent_callbacks.plugin_message_callback``: one injected advisor row. ``row_id`` is the durable row the live event refers to (a snapshot that already has it merges, never appends); ``details`` is ADR-10 D1's advisor shape, so a client never parses the note text. */
+export interface MessageAdvisorPayload {
   id: string
   text: string
   severity: string
@@ -8147,8 +8147,8 @@ export interface BackendGatewayEventMap {
   'free_tier.challenge': FreeTierChallengePayload
   /** First frame of a connection: the resolved skin, the change-event capability and the replay epoch. */
   'gateway.ready': GatewayReadyPayload
-  /** Plugin adviser advice injected into the live transcript; render as an adviser card. */
-  'message.adviser': MessageAdviserPayload
+  /** Plugin advisor advice injected into the live transcript; render as an advisor card. */
+  'message.advisor': MessageAdvisorPayload
   /** An assistant message block closed, with its full content. */
   'message.block_end': MessageBlockEndPayload
   /** An assistant message block (text) began; its deltas carry the same content_index. */
@@ -8317,7 +8317,7 @@ export const GATEWAY_EVENT_TYPES = [
   'error',
   'free_tier.challenge',
   'gateway.ready',
-  'message.adviser',
+  'message.advisor',
   'message.block_end',
   'message.block_start',
   'message.complete',

@@ -5,14 +5,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agent.adviser_config import (
-    discover_advisers,
+from agent.advisor_config import (
+    discover_advisors,
     discover_watchdog_files,
     expand_at_imports,
     load_watchdog_config_file,
     save_watchdog_config_file,
     serialize_watchdog_config,
-    slugify_adviser_name,
+    slugify_advisor_name,
 )
 
 
@@ -39,10 +39,10 @@ advisors:
     model: leaf-model
 """)
 
-    found = discover_advisers(str(project), str(home))
+    found = discover_advisors(str(project), str(home))
 
-    assert [a.name for a in found.advisers] == ["Reviewer"]
-    entry = found.advisers[0]
+    assert [a.name for a in found.advisors] == ["Reviewer"]
+    entry = found.advisors[0]
     assert entry.model == "leaf-model"
     # A more specific entry replaces the whole entry, so the user tools do not leak through.
     assert entry.tools is None
@@ -55,9 +55,9 @@ def test_hidden_project_dir_uses_hermes_dir(tmp_path):
     project.mkdir()
     _write(project / ".hermes" / "WATCHDOG.yml", "advisors:\n  - name: Hidden Reviewer\n")
 
-    found = discover_advisers(str(project), str(home))
+    found = discover_advisors(str(project), str(home))
 
-    assert [a.slug for a in found.advisers] == ["hidden-reviewer"]
+    assert [a.slug for a in found.advisors] == ["hidden-reviewer"]
 
 
 def test_bad_entry_is_dropped_and_healthy_ones_load(tmp_path):
@@ -75,11 +75,11 @@ advisors:
     reviewInterval: 0
 """)
 
-    found = discover_advisers(str(project), str(home))
+    found = discover_advisors(str(project), str(home))
 
-    assert [a.name for a in found.advisers] == ["Good", "Bad Mode", "Bad Interval"]
-    assert found.advisers[1].review_mode is None
-    assert found.advisers[2].review_interval is None
+    assert [a.name for a in found.advisors] == ["Good", "Bad Mode", "Bad Interval"]
+    assert found.advisors[1].review_mode is None
+    assert found.advisors[2].review_interval is None
     assert any("name is required" in warning for warning in found.warnings)
     assert any("reviewMode" in warning for warning in found.warnings)
     assert any("reviewInterval" in warning for warning in found.warnings)
@@ -97,10 +97,10 @@ advisors:
     tools: []
 """)
 
-    found = discover_advisers(str(project), str(home))
+    found = discover_advisors(str(project), str(home))
 
-    assert found.advisers[0].tools == ["read_file", "search_files"]
-    assert found.advisers[1].tools == []
+    assert found.advisors[0].tools == ["read_file", "search_files"]
+    assert found.advisors[1].tools == []
 
 
 def test_watchdog_md_blocks_follow_the_same_search_path(tmp_path):
@@ -180,17 +180,17 @@ advisors:
     scope: worker-only
 """)
 
-    found = discover_advisers(str(project), str(home))
+    found = discover_advisors(str(project), str(home))
 
-    assert [a.name for a in found.advisers] == ["Main Only", "Subagent Only"]
-    main_only = found.advisers[0]
+    assert [a.name for a in found.advisors] == ["Main Only", "Subagent Only"]
+    main_only = found.advisors[0]
     assert main_only.scope == "main"
     assert main_only.include_reasoning is False
-    assert found.advisers[1].scope == "subagent"
-    assert found.advisers[1].include_reasoning is None
+    assert found.advisors[1].scope == "subagent"
+    assert found.advisors[1].include_reasoning is None
     assert any("Bad Scope" in warning and "scope" in warning for warning in found.warnings)
 
 
 def test_slug_falls_back_when_nothing_survives():
-    assert slugify_adviser_name("Security Reviewer!") == "security-reviewer"
-    assert slugify_adviser_name("!!!") == "adviser"
+    assert slugify_advisor_name("Security Reviewer!") == "security-reviewer"
+    assert slugify_advisor_name("!!!") == "advisor"

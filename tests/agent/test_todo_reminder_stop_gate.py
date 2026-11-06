@@ -17,7 +17,7 @@ class _Agent:
         self._session_messages: list = []
         self._todo_store = TodoStore()
         self.quiet_mode = True
-        self.adviser = None
+        self.advisor = None
         self.plugin_message_callback = None
         self.flushed = 0
 

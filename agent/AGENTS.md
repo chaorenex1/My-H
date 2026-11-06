@@ -119,27 +119,27 @@ validation and `_normalize_lang` accept; `SUPPORTED_LANGUAGES` stays the bundled
 `surface_catalog` serves (the TUI ships English only in TS). Endonyms for bundled ids live in `i18n_languages.py` and must agree with
 `apps/shared/src/i18n.ts`.
 
-## Adviser (native second-model reviewer)
+## Advisor (native second-model reviewer)
 
-`agent/adviser_runtime.py` owns the per-agent roster (`AdviserSession`, attached as
-`agent.adviser` by `init_agent`) and one worker per configured reviewer; the turn loop only calls
+`agent/advisor_runtime.py` owns the per-agent roster (`AdvisorSession`, attached as
+`agent.advisor` by `init_agent`) and one worker per configured reviewer; the turn loop only calls
 `on_step(messages, terminal=...)` at two boundaries — after a tool round (`turn_tool_round`) and
 before the stop gates (`turn_final_response`, with the candidate answer appended to a copy). Do not
-add a third capture site without checking the cursor in `adviser_delta.DeltaTracker`: a rewritten
+add a third capture site without checking the cursor in `advisor_delta.DeltaTracker`: a rewritten
 prefix replays the whole transcript and resets the reviewer's private context.
-`adviser_config.py` = `WATCHDOG.yml` roster; `adviser_prompts.py` = system prompt;
-`adviser_emission.py` = admission; `adviser_model.py` = private tool loop + quarantine;
-`adviser_delivery.py` = steer/interrupt/continuation/card (the row format the CLI/TUI/Desktop
-adviser card parses); `adviser_recorder.py` = JSONL telemetry. Delivery reuses the native
-`agent.steer(kind="adviser")` and `agent.interrupt` paths; the stop gate drains
-`agent.adviser.take_continuation()` before plugin continuations. A failing reviewer must never park
+`advisor_config.py` = `WATCHDOG.yml` roster; `advisor_prompts.py` = system prompt;
+`advisor_emission.py` = admission; `advisor_model.py` = private tool loop + quarantine;
+`advisor_delivery.py` = steer/interrupt/continuation/card (the row format the CLI/TUI/Desktop
+advisor card parses); `advisor_recorder.py` = JSONL telemetry. Delivery reuses the native
+`agent.steer(kind="advisor")` and `agent.interrupt` paths; the stop gate drains
+`agent.advisor.take_continuation()` before plugin continuations. A failing reviewer must never park
 the primary: catch-up waits release on `failing`/`halted`/`quota`. Off by default
-(`adviser.enabled`), because every reviewed turn is one extra completion.
+(`advisor.enabled`), because every reviewed turn is one extra completion.
 `WATCHDOG.yml` entries carry `scope` (`main` default, `subagent`, `all`) and `includeReasoning`;
-`adviser_session_kind` decides which kinds a session hosts (cron and detached forks host none), and
-a declared throttle wait inside `adviser.max_rate_limit_wait_s` is slept instead of latching. The
-port is pinned to oh-my-pi 18.14.0 via `UPSTREAM_ADVISER_*` in `adviser_config.py`; bump those with
-`website/docs/user-guide/features/adviser.md` § Upstream pin.
+`advisor_session_kind` decides which kinds a session hosts (cron and detached forks host none), and
+a declared throttle wait inside `advisor.max_rate_limit_wait_s` is slept instead of latching. The
+port is pinned to oh-my-pi 18.14.0 via `UPSTREAM_ADVISOR_*` in `advisor_config.py`; bump those with
+`website/docs/user-guide/features/advisor.md` § Upstream pin.
 
 ## Memory, context engines, curator
 

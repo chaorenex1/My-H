@@ -1,24 +1,24 @@
-"""How an adviser note reaches the primary agent — natively, in this process.
+"""How an advisor note reaches the primary agent — natively, in this process.
 
 Port of oh-my-pi's ``resolveAdvisorDeliveryChannel`` + ``#deliverAdvisorBatch``
 adapted to Hermes' own machinery:
 
-* **steer** — a standalone ``role:"user"`` row with ``display_kind="adviser"``,
+* **steer** — a standalone ``role:"user"`` row with ``display_kind="advisor"``,
   queued by :meth:`agent.interrupt_control.InterruptControlMixin.steer` and drained
   after the current tool batch. A queued nit is Hermes' aside: it does not
   interrupt, and it lands at the next safe boundary.
 * **interrupt** — a ``blocker`` also aborts the running tool batch.
 * **continuation** — at a terminal boundary the note is handed to the stop gate,
-  which appends the adviser row and lets the model answer once more.
+  which appends the advisor row and lets the model answer once more.
 * **card** — after the run (or when the surface must not be woken) the row is
   appended to the durable transcript and announced to the surface.
 
-The wire format is the fork's adviser contract, parsed by
-``hermes_cli.cli_agent_setup_mixin._adviser_items``::
+The wire format is the fork's advisor contract, parsed by
+``hermes_cli.cli_agent_setup_mixin._advisor_items``::
 
-    [adviser — advisory only]
+    [advisor — advisory only]
     - [concern · reviewer] re-read the failing test
-    [end adviser]
+    [end advisor]
 """
 
 from __future__ import annotations
@@ -27,18 +27,18 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from agent.adviser_emission import is_interrupting, meets_severity
-from agent.adviser_prompts import BOUNDARY_GUIDANCE
+from agent.advisor_emission import is_interrupting, meets_severity
+from agent.advisor_prompts import BOUNDARY_GUIDANCE
 
 logger = logging.getLogger(__name__)
 
-FRAME_OPEN = "[adviser — advisory only]"
-FRAME_CLOSE = "[end adviser]"
+FRAME_OPEN = "[advisor — advisory only]"
+FRAME_CLOSE = "[end advisor]"
 
 
 def format_batch(notes: list[tuple[str, Optional[str], Optional[str]]], *,
                  include_guidance: bool = False) -> str:
-    """Render ``(note, severity, adviser name)`` rows as the agent-facing message."""
+    """Render ``(note, severity, advisor name)`` rows as the agent-facing message."""
     lines: list[str] = []
     if include_guidance:
         lines.append(BOUNDARY_GUIDANCE)
@@ -80,52 +80,52 @@ def _live_facts(agent: Any) -> dict[str, Any]:
     }
 
 
-def deliver(adviser: Any, notes: list[tuple[str, Optional[str], Optional[str]]], *,
+def deliver(advisor: Any, notes: list[tuple[str, Optional[str], Optional[str]]], *,
             turn: Optional[int] = None, terminal: bool = False) -> str:
     """Route one batch and return the channel actually used (``steer``/``preserve``/``continuation``)."""
-    agent = adviser.agent
+    agent = advisor.agent
     text = format_batch(notes, include_guidance=terminal and len(notes) > 1)
     severity = notes[0][1] if notes else None
     facts = _live_facts(agent)
     terminal_idle = terminal and not facts["streaming"] and not facts["tool_batch"] and not facts["aborting"]
     channel = resolve_channel(
         severity=severity,
-        continue_severity=getattr(adviser, "continue_severity", "concern"),
-        auto_resume_suppressed=bool(getattr(agent, "_adviser_auto_resume_suppressed", False)),
+        continue_severity=getattr(advisor, "continue_severity", "concern"),
+        auto_resume_suppressed=bool(getattr(agent, "_advisor_auto_resume_suppressed", False)),
         streaming=facts["streaming"],
         aborting=facts["aborting"],
         terminal_idle=terminal_idle,
-        interrupt_immune=adviser.interrupt_immune_active(),
-        preserve_only=not adviser.turn_live(),
+        interrupt_immune=advisor.interrupt_immune_active(),
+        preserve_only=not advisor.turn_live(),
     )
     if channel == "preserve":
-        adviser.preserve_card(text, severity=severity, turn=turn)
+        advisor.preserve_card(text, severity=severity, turn=turn)
         return "preserve"
     if channel == "aside":
-        agent.steer(text, kind="adviser")
+        agent.steer(text, kind="advisor")
         return "steer"
     # A terminal note at/above continueSeverity wakes the model once more instead of
     # parking advice the idle primary would never read.
-    if terminal and meets_severity(severity, getattr(adviser, "continue_severity", "concern")):
-        if adviser.set_continuation(text, source=notes[0][2] if notes else ""):
+    if terminal and meets_severity(severity, getattr(advisor, "continue_severity", "concern")):
+        if advisor.set_continuation(text, source=notes[0][2] if notes else ""):
             return "continuation"
-        adviser.preserve_card(text, severity=severity, turn=turn)
+        advisor.preserve_card(text, severity=severity, turn=turn)
         return "preserve"
-    agent.steer(text, kind="adviser")
+    agent.steer(text, kind="advisor")
     if severity == "blocker":
-        agent.interrupt(tool_reason="adviser")
+        agent.interrupt(tool_reason="advisor")
     return "steer"
 
 
 def append_card(agent: Any, text: str, *, severity: Optional[str] = None,
                 metadata: Optional[dict[str, Any]] = None) -> bool:
-    """Append a durable adviser row to the live transcript and announce it to the surface."""
+    """Append a durable advisor row to the live transcript and announce it to the surface."""
     messages = getattr(agent, "_session_messages", None)
     if not isinstance(messages, list):
         messages = getattr(agent, "messages", None)
     if not isinstance(messages, list):
         return False
-    from agent.custom_messages import adviser_notes
+    from agent.custom_messages import advisor_notes
     from agent.plugin_events import notify_plugin_message
     from agent.prompt_builder import advisory_user_row
     from gateway.session_policy import active_policy
@@ -133,7 +133,7 @@ def append_card(agent: Any, text: str, *, severity: Optional[str] = None,
     # ADR-10 P5: the session flag decides the durable shape. omp-ui sessions (custom_messages)
     # get the custom row; Desktop/Ink sessions keep the raw user row their hydrators read.
     if getattr(active_policy(), "custom_messages", False):
-        details = adviser_notes(text, severity=severity)
+        details = advisor_notes(text, severity=severity)
         if severity:
             details["severity"] = severity
         row = {"role": "custom", "content": str(text), "custom_type": "advisor",
@@ -155,7 +155,7 @@ def append_card(agent: Any, text: str, *, severity: Optional[str] = None,
     try:
         agent._flush_messages_to_session_db(messages, None)
     except Exception:
-        logger.debug("adviser card flush failed", exc_info=True)
+        logger.debug("advisor card flush failed", exc_info=True)
     notify_plugin_message(agent, row)
     return True
 
