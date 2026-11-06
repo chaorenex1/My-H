@@ -35,8 +35,9 @@ _HERMES_CORE_TOOLS = [
     "computer_use",
     # Code graph: read-only queries + evidence-constrained updates (ADR-8).
     "code_intel", "code_graph_update",
-    # Semantic find over the workspace (ADR-11 D14); service-gated by judgment.tools.enabled.
-    "judgglob", "judggrep",
+    # Judgment-routed search over the workspace (ADR-11 D14); service-gated by
+    # judgment.tools.enabled.
+    "judgrg",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -107,10 +108,12 @@ TOOLSETS = {
         ["code_intel", "code_graph_update"],
     ),
     "judgment": _ts(
-        "Semantic, read-only find over the workspace: rank paths by a description "
-        "(judgglob) and locate the file ranges implementing a behavior (judggrep). "
-        "Requires a native judgment route unless judgment.tools.enabled is 'on'.",
-        ["judgglob", "judggrep"],
+        "Judgment-routed, read-only search over the workspace: a restricted choice "
+        "question classifies the request's intent (literal/symbol/call/type/config/"
+        "todo/pattern/unknown implementation/cross-language) and runs ripgrep, "
+        "ast-grep, or rg-then-ast-grep. Requires a native judgment route unless "
+        "judgment.tools.enabled is 'on'.",
+        ["judgrg"],
     ),
     "terminal": _ts("Terminal/command execution and process management tools", ["terminal", "process_manage"]),
     "skills": _ts(

@@ -1,64 +1,57 @@
-"""Read-only semantic find: the engine behind ``judgglob`` / ``judggrep`` (ADR-11 D14).
+"""``judgrg``: judgment-routed, read-only search over a workspace (ADR-11 D14).
 
-Both tools build *only* the restricted ``noul`` questions this module defines — a
-caller cannot pass a questions map or a state, so the judgment engine never becomes
-a general classifier. Everything here is read-only: no file writes, no git, no
-hidden/credential/binary files, bounded by the caps below.
+One restricted choice question decides which strategy answers the query, then the
+engine runs an external matcher:
 
-``judgglob`` ranks paths by name/location. ``judggrep`` runs a small cascade:
-keyword prefilter → sketch scoring → verification of the surviving windows.
+* ``files``   — ``rg --files``
+* ``path``    — ``rg --files -g``
+* ``content`` — ``rg`` (JSON matches)
+* ``ast``     — ``ast-grep`` (structural/code patterns)
+
+The caller cannot pass questions or arbitrary state, so the judgment engine never
+becomes a general classifier. Everything here is read-only: no writes, no git, no
+credentials/binaries in the results, and every subprocess is wall-clock bounded.
 """
 
 from __future__ import annotations
 
-import contextvars
 import fnmatch
+import json
 import logging
 import os
 import re
-import threading
+import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Sequence
 
 from agent.judgment.chain import has_native_judge, resolve_judge
 from agent.judgment.config import load_judgment_settings
+from agent.judgment.decision import IntentPlan, load_decision
 from agent.judgment.types import (
+    ChoiceAnswer,
+    ChoiceQuestion,
     Judge,
     JudgmentAborted,
     JudgmentError,
     JudgmentRequest,
+    JudgmentState,
     JudgmentUnavailable,
-    NoulAnswer,
-    NoulQuestion,
 )
 from agent.redact import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
-GLOB_NAME_BATCH = 64
-GLOB_CANDIDATES = 128
-GREP_FILES = 20
-GREP_WINDOWS = 24
-GREP_WINDOW_BYTES = 8 * 1024
-GREP_SKETCH_BYTES = 384
-GREP_SKETCH_CARDS = 46
-GREP_FULL_LIMIT = 40
-GREP_CUTOFF = 0.45
-GREP_THRESHOLD = 0.20
-GREP_READ_LIMIT = 4 * 1024 * 1024
-GREP_PARALLEL = 16
-GREP_TIMEOUT_S = 20.0
-SKETCH_STATE_BYTES = 18_000
-VERIFY_STATE_BYTES = 24 * 1024
-SCAN_FILE_LIMIT = 4_000
+RG_TIMEOUT_S = 20.0
+AST_GREP_TIMEOUT_S = 20.0
+MAX_PER_FILE = 20
+MAX_RANGES = 20
 SNIPPET_CHARS = 200
 
 TASK = (
-    "Semantic search over a source tree: decide whether each entry matches a "
-    "plain-language description. Entries are judged independently."
+    "Read-only search over a source tree: choose which search strategy answers the "
+    "plain-language query in the state."
 )
 
 _IGNORED_DIRS = frozenset({
@@ -82,27 +75,26 @@ they thing things this through to two up use used user using via was way we were
 where which will with within without would you your
 """.split())
 
-
-# ── keywords and paths ──────────────────────────────────────────────────────
-
-
-def _stem(token: str) -> str:
-    for suffix in ("ing", "ed", "es", "s"):
-        if token.endswith(suffix) and len(token) - len(suffix) >= 4:
-            return token[: -len(suffix)]
-    return token
+_STRUCTURAL_RE = re.compile(r"\$[A-Za-z_]\w*|\$\$\$|=>|->|::|[(){}\[\];]")
 
 
-def keywords_from_query(query: str, extra: Sequence[str] = ()) -> list[str]:
-    """Quoted phrases whole, then tokens minus stopwords; plus caller keywords."""
-    found: list[str] = []
-    rest = ""
+class FindBackendUnavailable(RuntimeError):
+    """The chosen strategy's executable is missing or failed to run."""
+
+
+# ── query → terms, globs, patterns ──────────────────────────────────────────
+
+
+def _split_quoted(query: str) -> tuple[str, list[str]]:
+    """Quoted phrases whole, plus the text outside the quotes."""
+    phrases: list[str] = []
+    rest: list[str] = []
     chars = list(query)
     index = 0
     while index < len(chars):
         char = chars[index]
         if char not in "\"'":
-            rest += char
+            rest.append(char)
             index += 1
             continue
         index += 1
@@ -115,32 +107,64 @@ def keywords_from_query(query: str, extra: Sequence[str] = ()) -> list[str]:
                 break
             phrase += chars[index]
             index += 1
-        phrase = phrase.strip().lower()
-        if closed and len(phrase.encode("utf-8")) >= 3:
-            if phrase not in found:
-                found.append(phrase)
-            rest += " "
+        phrase = phrase.strip()
+        if closed and len(phrase) >= 2:
+            phrases.append(phrase)
+            rest.append(" ")
         else:
-            rest += f"{phrase} "
+            rest.append(f"{phrase} ")
+    return "".join(rest), phrases
+
+
+def search_terms(query: str) -> list[str]:
+    """Quoted phrases whole, then word tokens minus stopwords; case preserved."""
+    rest, terms = _split_quoted(query)
+    seen = {term.lower() for term in terms}
     for token in re.split(r"[^\w]+", rest, flags=re.UNICODE):
         lower = token.lower()
-        if len(lower.encode("utf-8")) < 3 or lower.isdigit() or lower in _STOPWORDS:
+        if len(token) < 2 or token.isdigit() or lower in _STOPWORDS or lower in seen:
             continue
-        stemmed = _stem(lower)
-        if stemmed not in found:
-            found.append(stemmed)
-    for raw in extra:
-        keyword = str(raw).strip().lower()
-        if keyword and keyword not in found:
-            found.append(keyword)
-    return found
+        seen.add(lower)
+        terms.append(token)
+    return terms
 
 
-@dataclass(frozen=True)
-class FileEntry:
-    path: Path
-    rel: str
-    size: int
+def _glob_term(term: str) -> str:
+    """Drop glob metacharacters: a backslash escape is a path separator on Windows."""
+    return re.sub(r"[{}*?\[\],!\\:/]", "", term)
+
+
+def path_glob(query: str, terms: Sequence[str]) -> str | None:
+    """A name glob for ``rg --files -g``: the query's own glob, else ``*{terms}*``."""
+    raw = query.strip()
+    if raw and " " not in raw and any(char in raw for char in "*?["):
+        return raw
+    if not terms:
+        return None
+    if len(terms) == 1:
+        return f"**/*{_glob_term(terms[0])}*"
+    return "**/*{" + ",".join(_glob_term(term) for term in terms) + "}*"
+
+
+def content_pattern(terms: Sequence[str]) -> str | None:
+    """One case-insensitive alternation over the literal query terms."""
+    ordered: list[str] = sorted(terms, key=len, reverse=True)
+    if not ordered:
+        return None
+    return "|".join(re.escape(term) for term in ordered)
+
+
+def looks_structural(text: str) -> bool:
+    """True for a code-shaped query (``foo($X)``, ``Path.cwd()``), not prose."""
+    body = str(text or "").strip()
+    if not body:
+        return False
+    if "$" in body:
+        return True
+    return not any(char.isspace() for char in body) and bool(_STRUCTURAL_RE.search(body))
+
+
+# ── scope and safety ────────────────────────────────────────────────────────
 
 
 def _display_path(path: Path) -> str:
@@ -148,102 +172,6 @@ def _display_path(path: Path) -> str:
         return Path(os.path.relpath(path, Path.cwd())).as_posix()
     except ValueError:  # different drive on Windows
         return path.as_posix()
-
-
-def _gitignore_patterns(root: Path) -> tuple[str, ...]:
-    path = root / ".gitignore"
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ()
-    patterns: list[str] = []
-    for line in lines:
-        entry = line.strip()
-        if not entry or entry.startswith("#") or entry.startswith("!"):
-            continue
-        patterns.append(entry)
-    return tuple(patterns)
-
-
-def _matches_gitignore(rel: str, name: str, patterns: Sequence[str]) -> bool:
-    for pattern in patterns:
-        directory_only = pattern.endswith("/")
-        candidate = pattern.rstrip("/")
-        if "/" in candidate:
-            if fnmatch.fnmatchcase(rel, candidate) or rel.startswith(candidate + "/"):
-                return True
-        elif (fnmatch.fnmatchcase(name, candidate)
-              or (directory_only and candidate in rel.split("/"))):
-            return True
-    return False
-
-
-def _credentials_file(name: str) -> bool:
-    lower = name.lower()
-    if lower in _CREDENTIAL_NAMES:
-        return True
-    return any(fnmatch.fnmatchcase(lower, pattern) for pattern in _CREDENTIAL_PATTERNS)
-
-
-def _binary_name(name: str) -> bool:
-    from tools.binary_extensions import has_binary_extension
-
-    return has_binary_extension(name)
-
-
-def _eligible(path: Path, name: str, rel: str, size: int,
-              patterns: Sequence[str]) -> bool:
-    if size <= 0 or _credentials_file(name) or _binary_name(name):
-        return False
-    return not _matches_gitignore(rel, name, patterns)
-
-
-def list_files(scope: Path, *, hidden: bool = False,
-               deadline: float | None = None) -> list[FileEntry]:
-    """Walk ``scope`` in sorted order, skipping VCS/cache dirs, credentials and binaries."""
-    if scope.is_file():
-        try:
-            size = scope.stat().st_size
-        except OSError:
-            return []
-        if _credentials_file(scope.name) or _binary_name(scope.name) or size <= 0:
-            return []
-        return [FileEntry(scope, _display_path(scope), size)]
-    patterns = _gitignore_patterns(scope)
-    entries: list[FileEntry] = []
-    root = str(scope)
-    for dirpath, dirnames, filenames in os.walk(root):
-        if deadline is not None and time.monotonic() > deadline:
-            break
-        current = Path(dirpath)
-        rel_dir = current.relative_to(scope).as_posix()
-        rel_dir = "" if rel_dir == "." else rel_dir
-        kept: list[str] = []
-        for name in sorted(dirnames):
-            if name in _IGNORED_DIRS:
-                continue
-            if not hidden and name.startswith("."):
-                continue
-            child_rel = f"{rel_dir}/{name}" if rel_dir else name
-            if _matches_gitignore(child_rel, name, patterns):
-                continue
-            kept.append(name)
-        dirnames[:] = kept
-        for name in sorted(filenames):
-            if not hidden and name.startswith("."):
-                continue
-            path = current / name
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            rel = f"{rel_dir}/{name}" if rel_dir else name
-            if not _eligible(path, name, rel, size, patterns):
-                continue
-            entries.append(FileEntry(path, _display_path(path), size))
-            if len(entries) >= SCAN_FILE_LIMIT:
-                return entries
-    return entries
 
 
 def _scope(raw: str | None) -> Path:
@@ -266,63 +194,48 @@ def validate_scope(path: str | None, glob_pattern: str | None = None) -> None:
         _check_glob(glob_pattern)
 
 
-def _glob_regex(pattern: str) -> re.Pattern[str]:
-    out = ["^"]
-    index = 0
-    while index < len(pattern):
-        char = pattern[index]
-        if char == "*":
-            if pattern[index:index + 2] == "**":
-                out.append(".*")
-                index += 2
-                if pattern[index:index + 1] == "/":
-                    index += 1
-                continue
-            out.append("[^/]*")
-        elif char == "?":
-            out.append("[^/]")
-        else:
-            out.append(re.escape(char))
-        index += 1
-    out.append("$")
-    return re.compile("".join(out))
+def _credentials_file(name: str) -> bool:
+    lower = name.lower()
+    if lower in _CREDENTIAL_NAMES:
+        return True
+    return any(fnmatch.fnmatchcase(lower, pattern) for pattern in _CREDENTIAL_PATTERNS)
 
 
-def _match_glob(rel: str, pattern: str) -> bool:
-    candidate = pattern.replace("\\", "/").removeprefix("./")
-    return bool(_glob_regex(candidate).match(rel))
+def _binary_name(name: str) -> bool:
+    from tools.binary_extensions import has_binary_extension
+
+    return has_binary_extension(name)
+
+
+def _dir_exclusions() -> list[str]:
+    return [f"!{name}/**" for name in sorted(_IGNORED_DIRS)]
+
+
+def _credential_globs() -> list[str]:
+    """Case-insensitive globs: a tracked ``.ENV``/``ID_RSA`` is still a credential file."""
+    return ["!.env", *(f"!{pattern}" for pattern in _CREDENTIAL_PATTERNS)]
 
 
 # ── judging ─────────────────────────────────────────────────────────────────
 
 
-def _probability(result: Any, key: str) -> float | None:
-    answer = result.answers.get(key)
-    if isinstance(answer, NoulAnswer):
-        return float(answer.noul)
-    return None
-
-
 class _RunStats:
-    """Counters for one find call; dispatch runs requests on worker threads."""
+    """Counters for one judgrg call: one intent request, then the matcher."""
 
-    def __init__(self, **extra: int) -> None:
-        self._lock = threading.Lock()
-        self._counters = {"requests": 0, "failed": 0, **extra}
-        self.timed_out = False
+    def __init__(self) -> None:
+        self.requests = 0
+        self.failed = 0
         self.uncalibrated = False
 
     def record(self, *, api: str = "", failed: bool = False) -> None:
-        with self._lock:
-            self._counters["requests"] += 1
-            if failed:
-                self._counters["failed"] += 1
-            if api == "text":
-                self.uncalibrated = True
+        self.requests += 1
+        if failed:
+            self.failed += 1
+        if api == "text":
+            self.uncalibrated = True
 
     def snapshot(self) -> dict[str, int]:
-        with self._lock:
-            return dict(self._counters)
+        return {"requests": self.requests, "failed": self.failed}
 
 
 def _ask(judge: Judge, request: JudgmentRequest, *, purpose: str,
@@ -339,407 +252,444 @@ def _ask(judge: Judge, request: JudgmentRequest, *, purpose: str,
     return result, api
 
 
-def _coverage(stats: _RunStats) -> str:
-    counters = stats.snapshot()
-    requests = counters["requests"]
-    failed = counters["failed"]
-    if requests and failed == requests:
-        return "unavailable"
-    if failed or stats.timed_out:
-        return "partial"
-    return "complete"
+def _intent_request(query: str) -> JudgmentRequest:
+    """One restricted choice question whose criteria come from the packaged table."""
+    table = load_decision()
+    state: JudgmentState = {"task": TASK, "query": query}
+    question = ChoiceQuestion(table.instructions, table.criteria)
+    return JudgmentRequest(state=state, questions={"intent": question})
 
 
-def _dispatch(jobs: Sequence[Any], worker, *, deadline: float) -> bool:
-    """Run ``worker(job)`` with at most ``GREP_PARALLEL`` in flight.
-
-    Returns True when ``deadline`` stopped jobs before they ran, so the caller can
-    report ``partial`` coverage instead of a complete-looking empty result.
-    """
-    if not jobs:
-        return False
-    take_lock = threading.Lock()
-    cursor = [0]
-    # Judge calls write the session ledger from these threads; a bare pool thread has no
-    # accounting ContextVar, so every request would be silently unbilled.
-    parent_context = contextvars.copy_context()
-
-    def take() -> Any | None:
-        with take_lock:
-            if cursor[0] >= len(jobs):
-                return None
-            job = jobs[cursor[0]]
-            cursor[0] += 1
-            return job
-
-    def run() -> None:
-        while True:
-            if time.monotonic() > deadline:
-                return
-            job = take()
-            if job is None:
-                return
-            parent_context.copy().run(worker, job)
-
-    with ThreadPoolExecutor(max_workers=min(GREP_PARALLEL, len(jobs))) as pool:
-        for future in [pool.submit(run) for _ in range(min(GREP_PARALLEL, len(jobs)))]:
-            future.result()
-    return cursor[0] < len(jobs)
+def _guess_intent(query: str) -> str:
+    """Deterministic intent when the judge answers with an unusable choice."""
+    return "pattern" if looks_structural(query) else "unknown_implementation"
 
 
-# ── judgglob ────────────────────────────────────────────────────────────────
+def choose_intent(judge: Judge, query: str, stats: _RunStats) -> str | None:
+    """One restricted choice question; ``None`` when the judge could not answer."""
+    result, _api = _ask(judge, _intent_request(query), purpose="find", stats=stats)
+    if result is None:
+        return None
+    answer = result.answers.get("intent")
+    labels = load_decision().criteria
+    if isinstance(answer, ChoiceAnswer) and answer.choice in labels:
+        return answer.choice
+    return _guess_intent(query)
 
 
-def _path_score(rel: str, keywords: Sequence[str]) -> float:
-    lower = rel.lower()
-    return sum(3.0 * lower.count(keyword) for keyword in keywords)
-
-
-def _glob_request(query: str, entries: Sequence[FileEntry]) -> JudgmentRequest:
-    state: dict[str, Any] = {
-        "task": TASK,
-        "search": query,
-        "files": {
-            f"e{index:03d}": {"path": entry.rel, "bytes": entry.size}
-            for index, entry in enumerate(entries)
-        },
-    }
-    questions = {
-        f"e{index:03d}": NoulQuestion(
-            "Should this file be returned for the search in the state? "
-            f"File: `{entry.rel}` ({entry.size} bytes).")
-        for index, entry in enumerate(entries)
-    }
-    return JudgmentRequest(state=state, questions=questions)
-
-
-def judgglob(
-    query: str,
-    *,
-    judge: Judge,
-    path: str | None = None,
-    limit: int = 32,
-    hidden: bool = False,
-) -> dict[str, Any]:
-    entries = list_files(_scope(path), hidden=hidden)
-    keywords = keywords_from_query(query)
-    if not keywords:
-        keywords = [query.strip().lower()]
-    ranked = sorted(entries, key=lambda entry: (-_path_score(entry.rel, keywords), entry.rel))
-    candidates = ranked[:GLOB_CANDIDATES]
-    stats = _RunStats(files=len(entries), candidates=len(candidates))
-    hits: list[dict[str, Any]] = []
-    for start in range(0, len(candidates), GLOB_NAME_BATCH):
-        batch = candidates[start:start + GLOB_NAME_BATCH]
-        result, _api = _ask(judge, _glob_request(query, batch), purpose="judgglob", stats=stats)
-        if result is None:
-            continue
-        for index, entry in enumerate(batch):
-            probability = _probability(result, f"e{index:03d}")
-            if probability is None:
-                continue
-            hits.append({"path": entry.rel, "score": probability, "confidence": probability})
-    hits.sort(key=lambda hit: (-hit["score"], hit["path"]))
-    payload: dict[str, Any] = {
-        "query": query,
-        "hits": hits[:max(1, limit)],
-        "coverage": _coverage(stats),
-        "stats": stats.snapshot(),
-    }
-    if stats.uncalibrated:
-        payload["uncalibrated"] = True
-    return payload
-
-
-# ── judggrep: windows, sketches, verification ───────────────────────────────
+# ── planning ────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class Window:
-    start: int
-    end: int
-    text: str
-    score: float
+class _Plan:
+    mode: str
+    expression: str | None = None
+    fallback: str = ""
+    ast_pattern: str | None = None
 
 
-def _read_text(path: Path) -> str | None:
+def _single_identifier(terms: Sequence[str]) -> str | None:
+    """The one identifier-like term a natural-language query named, if any."""
+    if len(terms) != 1:
+        return None
+    term = terms[0].strip()
+    return term if re.fullmatch(r"[A-Za-z_]\w*", term) else None
+
+
+def plan_search(intent: str, query: str, scope: Path,
+                glob_pattern: str | None) -> _Plan:
+    """Map the judged intent through the JSON table to a runnable plan."""
+    entry: IntentPlan = load_decision().plan_for(intent)
+    terms = search_terms(query)
+    fallback = ""
+    mode = entry.mode
+    ast_pattern = query.strip() if looks_structural(query) else None
+    if mode == "ast" and ast_pattern is None:
+        term = _single_identifier(terms)
+        if intent == "call" and term:
+            ast_pattern = f"{term}($$$)"  # portable call template
+        else:
+            fallback = "the query is not a code pattern; searched contents instead"
+            mode = "content"
+    if mode == "ast" and not resolve_ast_grep():
+        fallback = "ast-grep is not installed (hermes pm install ast-grep)"
+        mode = "content"
+        ast_pattern = None
+    if mode == "ast":
+        return _Plan("ast", ast_pattern, fallback)
+    if mode == "hybrid":
+        ast_pattern = ast_pattern or _single_identifier(terms)
+        if ast_pattern is None:
+            fallback = fallback or "no code-shaped pattern in the query; searched contents only"
+        elif not resolve_ast_grep():
+            fallback = "ast-grep is not installed; searched contents only"
+            ast_pattern = None
+    if mode in ("content", "hybrid"):
+        raw_glob = path_glob(query, ())
+        if raw_glob and mode == "content":
+            return _Plan("path", raw_glob, fallback)
+        expression = content_pattern(terms)
+        if expression:
+            return _Plan(mode, expression, fallback, ast_pattern)
+        mode = "path" if path_glob(query, terms) else "files"
+        fallback = fallback or "the query has no searchable terms"
+    if mode == "path":
+        expression = path_glob(query, terms)
+        if expression:
+            return _Plan("path", expression, fallback)
+        fallback = fallback or "no name pattern could be derived from the query"
+    return _Plan("files", None, fallback)
+
+
+# ── execution ───────────────────────────────────────────────────────────────
+
+
+def _resolve_binary(name: str, package: str) -> str | None:
+    """The PM-managed executable, else one on PATH; never installs anything."""
+    env_path = None
     try:
-        with path.open("rb") as handle:
-            raw = handle.read(GREP_READ_LIMIT)
-    except OSError:
+        from pm.install import env_for
+
+        env = env_for(package)
+        env_path = env.get("PATH") if isinstance(env, dict) else None
+    except Exception:  # health: allow BLE001 -- optional backend must not fail a find
+        logger.debug("judgrg: PM lookup failed for %s", name, exc_info=True)
+    try:
+        from hermes_platform.resolver import LookupContext, locate_command
+    except Exception:  # health: allow BLE001 -- imported lazily for test isolation
         return None
-    if b"\0" in raw[:4096]:
+    try:
+        resolution = locate_command(
+            name, LookupContext(path=env_path) if env_path else None)
+    except Exception:  # health: allow BLE001 -- optional backend must not fail a find
+        logger.debug("judgrg: %s resolution failed", name, exc_info=True)
         return None
-    return raw.decode("utf-8", errors="replace")
+    return resolution.command[0] if resolution.command else None
 
 
-def _windows(text: str, keywords: Sequence[str]) -> list[Window]:
-    lines = text.splitlines()
-    windows: list[Window] = []
-    index = 0
-    while index < len(lines):
-        start = index
-        parts: list[str] = []
-        used = 0
-        while index < len(lines):
-            line = lines[index]
-            encoded = len(line.encode("utf-8")) + 1
-            if index > start and used + encoded > GREP_WINDOW_BYTES:
-                break
-            if index == start and encoded > GREP_WINDOW_BYTES:
-                line = line.encode("utf-8")[:GREP_WINDOW_BYTES].decode("utf-8", "ignore")
-                encoded = GREP_WINDOW_BYTES
-            parts.append(line)
-            used += encoded
-            index += 1
-            if used >= GREP_WINDOW_BYTES:
-                break
-        body = "\n".join(parts)
-        lower = body.lower()
-        score = float(sum(lower.count(keyword) for keyword in keywords))
-        windows.append(Window(start + 1, index, body, score))
-    return windows
+def resolve_rg() -> str | None:
+    return _resolve_binary("rg", "ripgrep")
 
 
-def _select_windows(windows: Sequence[Window], limit: int | None = None) -> list[Window]:
-    limit = GREP_WINDOWS if limit is None else limit
-    if len(windows) <= limit:
-        return list(windows)
-    if all(window.score == 0 for window in windows):
-        step = max(limit - 1, 1)
-        keep = {int(index * (len(windows) - 1) / step) for index in range(limit)}
-        return [window for index, window in enumerate(windows) if index in keep]
-    best = sorted(windows, key=lambda window: (-window.score, window.start))[:limit]
-    return sorted(best, key=lambda window: window.start)
+def resolve_ast_grep() -> str | None:
+    return _resolve_binary("ast-grep", "ast-grep")
 
 
-def _sketch(window: Window, keywords: Sequence[str]) -> str:
-    lines = window.text.splitlines()
-    ranked: list[tuple[float, int]] = []
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        lower = line.lower()
-        score = 0.1 if "(" in line else 0.0
-        score += sum(1.0 for keyword in keywords if keyword in lower)
-        ranked.append((score, index))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
-    selected: list[tuple[int, str]] = []
-    used = 0
-    for _score, index in ranked:
-        text = f"{window.start + index}: {lines[index].strip()[:180]}"
-        cost = len(text.encode("utf-8")) + 1
-        if used + cost > GREP_SKETCH_BYTES:
-            break
-        used += cost
-        selected.append((index, text))
-    selected.sort(key=lambda item: item[0])
-    return "\n".join(text for _index, text in selected)
+@dataclass(frozen=True)
+class _Output:
+    stdout: str
+    stderr: str
+    code: int
+    timed_out: bool = False
 
 
-def _rank_content(entries: Sequence[FileEntry], keywords: Sequence[str],
-                  deadline: float) -> list[FileEntry]:
-    scored: list[tuple[float, FileEntry]] = []
-    for entry in entries:
-        if time.monotonic() > deadline:
-            break
-        text = _read_text(entry.path)
-        if text is None:
-            continue
-        lower = text.lower()
-        count = sum(lower.count(keyword) for keyword in keywords)
-        path_bonus = sum(2.0 for keyword in keywords if keyword in entry.rel.lower())
-        scored.append((count + path_bonus, entry))
-    scored.sort(key=lambda item: (-item[0], item[1].rel))
-    return [entry for _score, entry in scored[:GREP_FILES]]
+def _run(argv: Sequence[str], *, cwd: Path, timeout: float) -> _Output:
+    try:
+        completed = subprocess.run(
+            list(argv), cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False)
+    except FileNotFoundError:
+        raise FindBackendUnavailable(f"{argv[0]} not found") from None
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        return _Output(stdout or "", "", 124, True)
+    except OSError as exc:
+        raise FindBackendUnavailable(f"{argv[0]} failed to start: {exc}") from None
+    return _Output(completed.stdout or "", completed.stderr or "", completed.returncode)
 
 
-def _sketch_requests(query: str, cards: Sequence[tuple[FileEntry, Window, str]]
-                     ) -> Iterator[tuple[JudgmentRequest, list[tuple[FileEntry, Window]]]]:
-    for start in range(0, len(cards), GREP_SKETCH_CARDS):
-        batch = cards[start:start + GREP_SKETCH_CARDS]
-        files: dict[str, str] = {}
-        passages: dict[str, str] = {}
-        selected: list[tuple[FileEntry, Window]] = []
-        for index, (entry, window, sketch) in enumerate(batch):
-            key = f"p{index:02d}"
-            files[f"f{index:02d}"] = entry.rel
-            passages[key] = sketch
-            selected.append((entry, window))
-        state_bytes = sum(
-            len(key.encode("utf-8")) + len(value.encode("utf-8"))
-            for key, value in files.items())
-        state_bytes += sum(
-            len(key.encode("utf-8")) + len(value.encode("utf-8"))
-            for key, value in passages.items())
-        if state_bytes > SKETCH_STATE_BYTES:
-            half = max(1, len(batch) // 2)
-            yield from _sketch_requests(query, batch[:half])
-            yield from _sketch_requests(query, batch[half:])
-            continue
-        state: dict[str, Any] = {"task": TASK, "search": query, "files": files, "passages": passages}
-        questions = {
-            f"p{index:02d}": NoulQuestion(
-                "Does this excerpt contain a substantive implementation, definition, or "
-                "explanation matching the search in the state?")
-            for index in range(len(batch))
-        }
-        yield JudgmentRequest(state=state, questions=questions), selected
+def _root(scope: Path) -> tuple[Path, str]:
+    return (scope.parent, scope.name) if scope.is_file() else (scope, ".")
 
 
-def _verify_requests(query: str, entries: Sequence[FileEntry],
-                     windows: Sequence[Window]) -> Iterator[
-                         tuple[JudgmentRequest, list[tuple[FileEntry, Window]]]]:
-    batches: list[list[tuple[FileEntry, Window]]] = []
-    current: list[tuple[FileEntry, Window]] = []
-    used = 0
-    for entry, window in zip(entries, windows):
-        size = len(window.text.encode("utf-8"))
-        if current and used + size > VERIFY_STATE_BYTES:
-            batches.append(current)
-            current, used = [], 0
-        current.append((entry, window))
-        used += size
-    if current:
-        batches.append(current)
-    for batch in batches:
-        passages = {f"p{index:02d}": window.text for index, (_entry, window) in enumerate(batch)}
-        rels = {entry.rel for entry, _window in batch}
-        file_label = rels.pop() if len(rels) == 1 else ", ".join(sorted(rels))
-        state: dict[str, Any] = {
-            "task": TASK, "search": query, "file": file_label, "passages": passages}
-        questions = {
-            f"p{index:02d}": NoulQuestion(
-                "Does this passage contain an implementation, definition, or substantive "
-                "explanation matching the search in the state?")
-            for index in range(len(batch))
-        }
-        yield JudgmentRequest(state=state, questions=questions), batch
+def _hit_path(scope: Path, rel: str) -> str:
+    if scope.is_file():
+        return _display_path(scope)
+    return _display_path(scope / rel.removeprefix("./"))
 
 
-def _merge_ranges(ranges: Sequence[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
-    kept = sorted(
-        (dict(item) for item in ranges if item["p"] >= threshold and item["p"] > 0),
-        key=lambda item: (item["start"], item["end"]))
-    merged: list[dict[str, Any]] = []
-    for item in kept:
-        last = merged[-1] if merged else None
-        if last is not None and item["start"] <= last["end"] + 1:
-            last["end"] = max(last["end"], item["end"])
-            last["p"] = max(last["p"], item["p"])
-            continue
-        merged.append(item)
-    merged.sort(key=lambda item: (-item["p"], item["start"]))
-    return merged
-
-
-def _snippet(text: str) -> str:
-    for line in text.splitlines():
+def _snippet_breakdown(text: str) -> str:
+    for line in str(text or "").splitlines():
         stripped = line.strip()
         if stripped:
             return redact_sensitive_text(stripped[:SNIPPET_CHARS], file_read=True)
     return ""
 
 
-def judggrep(
+def _merge_ranges(ranges: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept = sorted((dict(item) for item in ranges), key=lambda item: (item["start"], item["end"]))
+    merged: list[dict[str, Any]] = []
+    for item in kept:
+        last = merged[-1] if merged else None
+        if last is not None and item["start"] <= last["end"] + 1:
+            last["end"] = max(last["end"], item["end"])
+            continue
+        merged.append(item)
+    return merged
+
+
+def _merge_hit_sets(*sets: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Union of rg and ast-grep hits, merged per path and sorted by path."""
+    merged: dict[str, list[dict[str, Any]]] = {}
+    for hits in sets:
+        for hit in hits:
+            merged.setdefault(str(hit["path"]), []).extend(hit.get("ranges", ()))
+    out: list[dict[str, Any]] = []
+    for path, ranges in merged.items():
+        item: dict[str, Any] = {"path": path}
+        if ranges:
+            item["ranges"] = _merge_ranges(ranges)[:MAX_RANGES]
+        out.append(item)
+    out.sort(key=lambda hit: hit["path"])
+    return out
+
+
+def _combine_outputs(primary: _Output, secondary: _Output) -> _Output:
+    code = primary.code if primary.code not in (0, 1) else secondary.code
+    return _Output(
+        primary.stdout, primary.stderr or secondary.stderr, code,
+        primary.timed_out or secondary.timed_out)
+
+
+def _file_hits(entries: Sequence[str], *, scope: Path,
+               limit: int) -> tuple[list[dict[str, Any]], bool]:
+    kept: list[str] = []
+    seen: set[str] = set()
+    for raw in entries:
+        rel = raw.strip()
+        if not rel:
+            continue
+        name = Path(rel).name
+        if _credentials_file(name) or _binary_name(name):
+            continue
+        # One match per real path: rg may list the same file under two roots.
+        key = _hit_path(scope, rel)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(key)
+    return [{"path": path} for path in kept[:limit]], len(kept) > limit
+
+
+def _search_files(rg: str, scope: Path, *, glob_pattern: str | None,
+                  ignore_case: bool = False,
+                  hidden: bool, limit: int) -> tuple[list[dict[str, Any]], bool, _Output]:
+    cwd, root = _root(scope)
+    argv = [rg, "--files", "--color", "never"]
+    if hidden:
+        argv.append("--hidden")
+    if glob_pattern:
+        argv += ["--iglob" if ignore_case else "-g", glob_pattern]
+    for exclude in _dir_exclusions():
+        argv += ["-g", exclude]
+    for exclude in _credential_globs():
+        argv += ["--iglob", exclude]
+    argv += ["--", root]
+    output = _run(argv, cwd=cwd, timeout=RG_TIMEOUT_S)
+    hits, truncated = _file_hits(
+        output.stdout.splitlines(), scope=scope, limit=limit)
+    return hits, truncated, output
+
+
+def _json_matches(stdout: str) -> list[tuple[str, int, str]]:
+    rows: list[tuple[str, int, str]] = []
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get("type") != "match":
+            continue
+        data = record.get("data") or {}
+        path = str((data.get("path") or {}).get("text") or "")
+        number = data.get("line_number")
+        text = str((data.get("lines") or {}).get("text") or "")
+        if path and isinstance(number, int):
+            rows.append((path, number, text))
+    return rows
+
+
+def _content_search(rg: str, scope: Path, *, expression: str,
+                    glob_pattern: str | None, hidden: bool, limit: int,
+                    context_lines: int) -> tuple[list[dict[str, Any]], bool, _Output]:
+    cwd, root = _root(scope)
+    argv = [rg, "--json", "--color", "never", "-i",
+            "--max-count", str(MAX_PER_FILE)]
+    if hidden:
+        argv.append("--hidden")
+    if glob_pattern:
+        argv += ["-g", glob_pattern]
+    for exclude in _dir_exclusions():
+        argv += ["-g", exclude]
+    for exclude in _credential_globs():
+        argv += ["--iglob", exclude]
+    argv += ["--", expression, root]
+    output = _run(argv, cwd=cwd, timeout=RG_TIMEOUT_S)
+    context = max(0, context_lines)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for rel, number, text in _json_matches(output.stdout):
+        if _credentials_file(Path(rel).name):
+            continue
+        grouped.setdefault(rel, []).append({
+            "start": max(1, number - context),
+            "end": number + context,
+            "snippet": _snippet_breakdown(text),
+        })
+    hits = [
+        {"path": _hit_path(scope, rel), "ranges": _merge_ranges(ranges)[:MAX_RANGES]}
+        for rel, ranges in grouped.items()
+    ]
+    hits.sort(key=lambda hit: hit["path"])
+    return hits[:limit], len(hits) > limit, output
+
+
+def _ast_matches(stdout: str) -> list[tuple[str, int, int, str]]:
+    rows: list[tuple[str, int, int, str]] = []
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        path = str(record.get("file") or "")
+        span = record.get("range") or {}
+        start = (span.get("start") or {}).get("line")
+        end = (span.get("end") or {}).get("line")
+        if not path or not isinstance(start, int) or not isinstance(end, int):
+            continue
+        rows.append((path, start + 1, end + 1, str(record.get("text") or "")))
+    return rows
+
+
+def _ast_search(sg: str, scope: Path, *, pattern: str, lang: str | None,
+                glob_pattern: str | None, limit: int,
+                context_lines: int) -> tuple[list[dict[str, Any]], bool, _Output]:
+    cwd, root = _root(scope)
+    argv = [sg, "run", "--pattern", pattern, "--json=stream", "--color", "never"]
+    if lang:
+        argv += ["--lang", lang]
+    if glob_pattern:
+        argv += ["--globs", glob_pattern]
+    for exclude in _dir_exclusions() + _credential_globs():
+        argv += ["--globs", exclude]
+    argv += ["--", root]
+    output = _run(argv, cwd=cwd, timeout=AST_GREP_TIMEOUT_S)
+    context = max(0, context_lines)
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for rel, start, end, text in _ast_matches(output.stdout):
+        if _credentials_file(Path(rel).name):
+            continue
+        grouped.setdefault(rel, []).append({
+            "start": max(1, start - context),
+            "end": end + context,
+            "snippet": _snippet_breakdown(text),
+        })
+    hits = [
+        {"path": _hit_path(scope, rel), "ranges": _merge_ranges(ranges)[:MAX_RANGES]}
+        for rel, ranges in grouped.items()
+    ]
+    hits.sort(key=lambda hit: hit["path"])
+    return hits[:limit], len(hits) > limit, output
+
+
+def _execute(plan: _Plan, query: str, scope: Path, *, glob_pattern: str | None,
+             hidden: bool, limit: int, context_lines: int
+             ) -> tuple[list[dict[str, Any]], bool, _Output, list[str]]:
+    if plan.mode == "ast":
+        executable = resolve_ast_grep()
+        if not executable:
+            raise FindBackendUnavailable(
+                "ast-grep is not installed; run `hermes pm install ast-grep` "
+                "or use search_files")
+        hits, truncated, output = _ast_search(
+            executable, scope, pattern=plan.expression or query, lang=None,
+            glob_pattern=glob_pattern, limit=limit, context_lines=context_lines)
+        return hits, truncated, output, ["ast-grep"]
+    executable = resolve_rg()
+    if not executable:
+        raise FindBackendUnavailable(
+            "ripgrep (rg) is not installed; run `hermes pm install ripgrep` "
+            "or use search_files")
+    if plan.mode in ("content", "hybrid"):
+        hits, truncated, output = _content_search(
+            executable, scope, expression=plan.expression or query,
+            glob_pattern=glob_pattern, hidden=hidden, limit=limit,
+            context_lines=context_lines)
+        tools = ["rg"]
+        ast_executable = resolve_ast_grep() if plan.ast_pattern else None
+        if plan.mode == "hybrid" and plan.ast_pattern and ast_executable:
+            ast_hits, ast_truncated, ast_output = _ast_search(
+                ast_executable, scope, pattern=plan.ast_pattern, lang=None,
+                glob_pattern=glob_pattern, limit=limit, context_lines=context_lines)
+            merged = _merge_hit_sets(hits, ast_hits)
+            truncated = truncated or ast_truncated or len(merged) > limit
+            return merged[:limit], truncated, _combine_outputs(output, ast_output), [
+                *tools, "ast-grep"]
+        return hits, truncated, output, tools
+    # Only glob-shaped requests reach this fallback, so the query's own glob is
+    # the include filter; credentials/binaries are dropped from the results.
+    hits, truncated, output = _search_files(
+        executable, scope, glob_pattern=plan.expression,
+        ignore_case=True, hidden=hidden, limit=limit)
+    return hits, truncated, output, ["rg"]
+
+
+def judgrg(
     query: str,
     *,
     judge: Judge,
     path: str | None = None,
     glob_pattern: str | None = None,
-    keywords: Sequence[str] = (),
-    limit: int = 20,
-    context_lines: int = 2,
+    limit: int = 50,
+    context_lines: int = 0,
+    hidden: bool = False,
 ) -> dict[str, Any]:
+    """Judge the query's intent, run the table's strategy, report honest coverage."""
     started = time.monotonic()
-    deadline = started + GREP_TIMEOUT_S
     validate_scope(path, glob_pattern)
-    entries = list_files(_scope(path), deadline=deadline)
-    if glob_pattern:
-        entries = [entry for entry in entries if _match_glob(entry.rel, glob_pattern)]
-    terms = keywords_from_query(query, keywords) or [query.strip().lower()]
-    ranked = _rank_content(entries, terms, deadline)
-
-    cards: list[tuple[FileEntry, Window, str]] = []
-    line_counts: dict[str, int] = {}
-    for entry in ranked:
-        text = _read_text(entry.path)
-        if text is None:
-            continue
-        line_counts[entry.rel] = len(text.splitlines())
-        for window in _select_windows(_windows(text, terms)):
-            cards.append((entry, window, _sketch(window, terms)))
-    stats = _RunStats(files=len(ranked), windows=len(cards))
-
-    scored: list[tuple[FileEntry, Window, float]] = []
-    score_lock = threading.Lock()
-
-    def run_sketch(job: tuple[JudgmentRequest, list[tuple[FileEntry, Window]]]) -> None:
-        request, selected = job
-        result, _api = _ask(judge, request, purpose="judggrep", stats=stats)
-        if result is None:
-            return
-        found: list[tuple[FileEntry, Window, float]] = []
-        for index, (entry, window) in enumerate(selected):
-            probability = _probability(result, f"p{index:02d}")
-            if probability is not None and probability >= GREP_CUTOFF:
-                found.append((entry, window, probability))
-        if found:
-            with score_lock:
-                scored.extend(found)
-
-    stats.timed_out = _dispatch(list(_sketch_requests(query, cards)), run_sketch, deadline=deadline)
-    scored.sort(key=lambda item: (-item[2], item[0].rel, item[1].start))
-    to_verify = scored[:GREP_FULL_LIMIT]
-
-    verified: list[tuple[FileEntry, Window, float]] = []
-    verify_lock = threading.Lock()
-
-    def run_verify(job: tuple[JudgmentRequest, list[tuple[FileEntry, Window]]]) -> None:
-        request, batch = job
-        result, _api = _ask(judge, request, purpose="judggrep", stats=stats)
-        if result is None:
-            return
-        found: list[tuple[FileEntry, Window, float]] = []
-        for index, (entry, window) in enumerate(batch):
-            probability = _probability(result, f"p{index:02d}")
-            if probability is not None:
-                found.append((entry, window, probability))
-        if found:
-            with verify_lock:
-                verified.extend(found)
-
-    if not stats.timed_out:
-        verify_jobs = list(_verify_requests(
-            query, [item[0] for item in to_verify], [item[1] for item in to_verify]))
-        stats.timed_out = _dispatch(verify_jobs, run_verify, deadline=deadline)
-
-    by_file: dict[str, list[dict[str, Any]]] = {}
-    for entry, window, probability in verified:
-        by_file.setdefault(entry.rel, []).append({
-            "start": max(1, window.start - max(0, context_lines)),
-            "end": min(line_counts.get(entry.rel, window.end) or window.end,
-                       window.end + max(0, context_lines)),
-            "p": probability,
-            "snippet": _snippet(window.text),
-        })
-    hits: list[dict[str, Any]] = []
-    for rel, ranges in by_file.items():
-        merged = _merge_ranges(ranges, GREP_THRESHOLD)
-        if not merged:
-            continue
-        hits.append({
-            "path": rel,
-            "score": max(item["p"] for item in merged),
-            "ranges": [dict(item) for item in merged],
-        })
-    hits.sort(key=lambda hit: (-hit["score"], hit["path"]))
+    scope = _scope(path)
+    stats = _RunStats()
+    intent = choose_intent(judge, query, stats)
+    if intent is None:
+        return {
+            "query": query,
+            "intent": None,
+            "mode": "files",
+            "tools": [],
+            "hits": [],
+            "coverage": "unavailable",
+            "stats": stats.snapshot(),
+        }
+    plan = plan_search(intent, query, scope, glob_pattern)
+    hits, truncated, output, tools = _execute(
+        plan, query, scope, glob_pattern=glob_pattern, hidden=hidden,
+        limit=limit, context_lines=context_lines)
+    if output.timed_out:
+        coverage = "partial"
+    elif output.code not in (0, 1) and not hits:
+        detail = output.stderr.strip() or f"exit {output.code}"
+        raise FindBackendUnavailable(f"{plan.mode} search failed: {detail}")
+    else:
+        coverage = "complete" if output.code in (0, 1) else "partial"
     payload: dict[str, Any] = {
         "query": query,
-        "hits": hits[:max(1, limit)],
-        "coverage": _coverage(stats),
-        "stats": stats.snapshot(),
+        "intent": intent,
+        "mode": plan.mode,
+        "tools": tools,
+        "hits": hits,
+        "coverage": coverage,
+        "stats": {
+            **stats.snapshot(),
+            "matches": len(hits),
+            "truncated": truncated,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        },
     }
+    if plan.fallback:
+        payload["fallback"] = plan.fallback
     if stats.uncalibrated:
         payload["uncalibrated"] = True
     return payload

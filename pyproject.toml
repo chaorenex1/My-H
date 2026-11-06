@@ -769,6 +769,13 @@ include = [
 ]
 
 [tool.setuptools.package-data]
+# Judgment contracts and prompt assets are runtime data and must survive wheel installs.
+agent = [
+  "prompts/judge/*.json",
+  "judgment/prompts/*.json",
+  "judgment/prompts/*.md",
+  "judgment/schemas/*.json",
+]
 hermes_cli = [
   "observability/schemas/*.json",
   "data/*.json",
