@@ -24266,9 +24266,9 @@
         "title": "McpServersTestResult",
         "type": "object"
       },
-      "MessageAdviserPayload": {
+      "MessageAdvisorPayload": {
         "additionalProperties": false,
-        "description": "``agent_callbacks.plugin_message_callback``: one injected adviser row.",
+        "description": "``agent_callbacks.plugin_message_callback``: one injected advisor row.",
         "properties": {
           "id": {
             "title": "Id",
@@ -24298,7 +24298,7 @@
           "label",
           "display_kind"
         ],
-        "title": "MessageAdviserPayload",
+        "title": "MessageAdvisorPayload",
         "type": "object"
       },
       "MessageCompletePayload": {
@@ -51203,13 +51203,13 @@
       ]
     },
     {
-      "name": "message.adviser",
-      "summary": "Plugin adviser advice injected into the live transcript; render as an adviser card.",
+      "name": "message.advisor",
+      "summary": "Plugin advisor advice injected into the live transcript; render as an advisor card.",
       "params": [
         {
           "name": "payload",
           "schema": {
-            "$ref": "#/components/schemas/MessageAdviserPayload"
+            "$ref": "#/components/schemas/MessageAdvisorPayload"
           }
         }
       ]
