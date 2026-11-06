@@ -43,6 +43,8 @@ import type {
 	SessionListRow,
 	SessionLiveInfo,
 	SessionStats,
+	SessionTranscriptFile,
+	SessionTranscriptReadResult,
 	SessionUsageResult,
 	TodoState,
 	TranscriptBlockCapability,
@@ -884,6 +886,29 @@ export class GatewayOmpSession {
 	async listSessions(limit = 100): Promise<SessionListRow[]> {
 		const result = (await this.client.request("session.list", { limit })) as { sessions?: SessionListRow[] | null }
 		return result.sessions ?? []
+	}
+
+	/**
+	 * The profile's mirrored bundles (`session.transcript.list`), ADR-16 P4.
+	 *
+	 * File metadata only: the picker merges it with `listSessions` so a row can say whether its
+	 * transcript still exists as a cold copy. It is read without touching the host filesystem —
+	 * a remote gateway's `sessions/` is not this process's.
+	 */
+	async listTranscripts(limit = 200): Promise<SessionTranscriptFile[]> {
+		const result = (await this.client.request("session.transcript.list", { limit })) as {
+			projects?: { sessions?: SessionTranscriptFile[] | null }[] | null
+		}
+		return (result.projects ?? []).flatMap(project => project.sessions ?? [])
+	}
+
+	/** One page of a mirrored bundle (`session.transcript.read`); the id is the only address. */
+	async readTranscript(sessionId: string, offset = 0, limit = 200): Promise<SessionTranscriptReadResult> {
+		return (await this.client.request("session.transcript.read", {
+			session_id: sessionId,
+			offset,
+			limit
+		})) as SessionTranscriptReadResult
 	}
 
 	/** Set the session model (`session.mutate model`), with the CAS fields the authority requires. */

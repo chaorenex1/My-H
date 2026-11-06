@@ -3841,6 +3841,42 @@
       }
     },
     {
+      "name": "session.transcript.list",
+      "summary": "Mirrored session bundles in this profile, most recent first, grouped by project directory.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionTranscriptListParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionTranscriptListResult"
+        }
+      }
+    },
+    {
+      "name": "session.transcript.read",
+      "summary": "Page one mirrored bundle's JSONL by message index (read-only; never takes a client path).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/SessionTranscriptReadParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionTranscriptReadResult"
+        }
+      }
+    },
+    {
       "name": "session.undo",
       "summary": "Drop the last user turn (and everything after it) from an idle session.",
       "params": [
@@ -42523,6 +42559,16 @@
             "title": "Source",
             "type": "string"
           },
+          "archived": {
+            "default": false,
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "restore_required": {
+            "default": false,
+            "title": "Restore Required",
+            "type": "boolean"
+          },
           "_lineage_root_id": {
             "anyOf": [
               {
@@ -43997,6 +44043,240 @@
           "title"
         ],
         "title": "SessionTitleResult",
+        "type": "object"
+      },
+      "SessionTranscriptFile": {
+        "additionalProperties": false,
+        "description": "One bundle's main JSONL (``<project>/<timestamp>_<id>.jsonl``); subagent and advisor files\nare not sessions and never appear here.",
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "started_at": {
+            "default": 0,
+            "title": "Started At",
+            "type": "number"
+          },
+          "cwd": {
+            "default": "",
+            "title": "Cwd",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "title": "Title",
+            "type": "string"
+          },
+          "size_bytes": {
+            "default": 0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "message_count": {
+            "default": 0,
+            "title": "Message Count",
+            "type": "integer"
+          },
+          "modified_at": {
+            "default": 0,
+            "title": "Modified At",
+            "type": "number"
+          },
+          "mirrored_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mirrored At"
+          },
+          "offloaded": {
+            "default": false,
+            "title": "Offloaded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "project",
+          "path"
+        ],
+        "title": "SessionTranscriptFile",
+        "type": "object"
+      },
+      "SessionTranscriptListParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          }
+        },
+        "title": "SessionTranscriptListParams",
+        "type": "object"
+      },
+      "SessionTranscriptListResult": {
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/SessionTranscriptProject"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "title": "SessionTranscriptListResult",
+        "type": "object"
+      },
+      "SessionTranscriptProject": {
+        "additionalProperties": false,
+        "properties": {
+          "project": {
+            "title": "Project",
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionTranscriptFile"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "sessions"
+        ],
+        "title": "SessionTranscriptProject",
+        "type": "object"
+      },
+      "SessionTranscriptReadParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 200,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "SessionTranscriptReadParams",
+        "type": "object"
+      },
+      "SessionTranscriptReadResult": {
+        "additionalProperties": false,
+        "description": "One page of a bundle's message rows; ``session`` is the bundle header.",
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "session": {
+            "additionalProperties": true,
+            "title": "Session",
+            "type": "object"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "path",
+          "session",
+          "messages",
+          "offset",
+          "total",
+          "has_more"
+        ],
+        "title": "SessionTranscriptReadResult",
         "type": "object"
       },
       "SessionUndoParams": {

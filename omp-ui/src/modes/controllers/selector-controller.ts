@@ -32,6 +32,8 @@ import { all, lookup, type AnySetting } from "../../config/registry";
 import type { Settings } from "../../config/settings";
 import type { InteractiveModeContext, SelectOnlyModelSelectorOptions } from "../types";
 import type { Model } from "../../vendor/ai/src/index.ts";
+import type { SessionListRow, SessionTranscriptFile } from "../rpc/gateway-contract.generated";
+import type { GatewayOmpSession } from "../rpc/gateway-session";
 import { createHermesModelHubSource } from "../model-hub-source";
 import { createModelBrowserSource } from "../model-browser-source";
 import type { ModelRoleStore, RolesThinkingLevel } from "../rpc/gateway-roles";
@@ -40,6 +42,10 @@ import { openPath } from "../../utils/open";
 
 /** `defaultThinkingLevel` (the settings-panel row that also switches the live session). */
 const DEFAULT_THINKING_LEVEL_SETTING = "defaultThinkingLevel";
+/** Archived rows whose bundle preview is hydrated per picker open (ADR-16 P4). */
+const MAX_PREVIEW_HYDRATIONS = 20;
+/** Messages read for that preview — the first user turn is enough to identify the row. */
+const PREVIEW_PAGE_MESSAGES = 20;
 
 /**
  * The shell has no plugin backend: the vendored settings panel always shows a Plugins tab,
@@ -143,29 +149,75 @@ function statusLineSettings(host: SettingsHost, overrides?: StatusLinePreviewSet
 	};
 }
 
-/** One `session.list` row as the resume picker's entry (its `path`/`id` is the stored session id). */
-function toResumeEntry(row: {
-	id: string;
-	resolved_id?: string | null;
-	title?: string;
+/** Where a row's transcript actually lives (ADR-16 P4). */
+export interface ResumeStorageState {
+	/** The profile's mirror manifest lists a bundle for this session. */
+	mirrored: boolean;
+	/** The message rows were pruned; resuming restores them from the bundle first. */
+	archived: boolean;
+	/** The bundle's file metadata, when the transcript RPC knew it. */
+	transcript?: SessionTranscriptFile;
+	/** Preview hydrated from the bundle (an archived row has no DB preview). */
 	preview?: string;
-	started_at?: number;
-}): SessionSelectorEntry {
+}
+
+/** Seconds since the epoch, or milliseconds (some stored rows already carry ms). */
+function toDate(value: number | undefined): Date {
+	const started = typeof value === "number" ? value : 0;
+	return new Date(started > 1_000_000_000_000 ? started : started * 1000);
+}
+
+/**
+ * One `session.list` row as the resume picker's entry (its `path`/`id` is the stored session id).
+ *
+ * `state` is absent when the transcript RPC is unavailable: the picker then claims nothing about
+ * mirroring. Otherwise the storage state rides the entry's `note` (the pinned pi-tui patch renders
+ * it beside date/size in both the terminal and native forms), leaving the preview real content.
+ */
+export function toResumeEntry(row: SessionListRow, state?: ResumeStorageState): SessionSelectorEntry {
 	const id = row.resolved_id ?? row.id;
-	const started = typeof row.started_at === "number" ? row.started_at : 0;
-	const date = new Date(started > 1_000_000_000_000 ? started : started * 1000);
-	const preview = row.preview ?? "";
+	const date = toDate(row.started_at);
+	const transcript = state?.transcript;
+	const preview = state?.preview ?? row.preview ?? "";
+	const note = state === undefined ? "" : state.archived ? "archived" : state.mirrored ? "" : "not mirrored";
 	return {
 		path: id,
 		id,
 		cwd: "",
 		title: row.title || undefined,
 		created: date,
-		modified: date,
-		size: 0,
+		modified: transcript?.modified_at ? toDate(transcript.modified_at) : date,
+		size: transcript?.size_bytes ?? 0,
 		firstMessage: preview,
 		allMessagesText: preview,
+		...(note ? { note } : {}),
 	};
+}
+
+/** The picker's preview text from one bundle page: its first user turn, else the first message. */
+export function previewFromTranscript(messages: readonly Record<string, unknown>[]): string {
+	const textOf = (message: Record<string, unknown>): string => {
+		const content = message.content;
+		if (typeof content === "string") return content;
+		if (!Array.isArray(content)) return "";
+		return content
+			.map(part =>
+				part && typeof part === "object" && "text" in part && typeof part.text === "string" ? part.text : ""
+			)
+			.join(" ");
+	};
+	const user = messages.find(message => message.role === "user" && textOf(message).trim().length > 0);
+	const chosen = user ?? messages.find(message => textOf(message).trim().length > 0);
+	return chosen ? textOf(chosen).replace(/\s+/g, " ").trim() : "";
+}
+
+/** Sources the human picker never lists: delegate runs (ADR-16 P4; `sessions.show_subagents` is
+ * a session-browser setting, not a reason to put a child run in the resume picker). */
+const PICKER_HIDDEN_SOURCES = new Set(["subagent"]);
+
+/** The picker's rows: the stored sessions minus non-human sources. */
+export function pickerRows(rows: readonly SessionListRow[]): SessionListRow[] {
+	return rows.filter(row => !PICKER_HIDDEN_SOURCES.has((row.source ?? "").toLowerCase()));
 }
 
 /** omp's configured level as the wire's effort override ("auto"/inherit mean no override). */
@@ -700,8 +752,40 @@ export class SelectorController {
 	}
 
 	/**
-	 * The gateway's resume list (`session.list`). Selecting a row hands its stored session id
-	 * to the shell, which resumes it over a fresh connection; the shell keeps no local table.
+	 * Bundle previews for `archived` rows (ADR-16 P4): their message rows were pruned, so the DB
+	 * preview is empty and the picker would show a bare id. One bounded page from
+	 * `session.transcript.read` gives the row something to identify itself by; an unreadable
+	 * bundle keeps the row (the picker still marks it `archived`) and resume reports the reason.
+	 */
+	async #archivedPreviews(
+		gateway: GatewayOmpSession,
+		states: readonly { row: SessionListRow; transcript?: SessionTranscriptFile }[],
+	): Promise<Map<string, string>> {
+		const previews = new Map<string, string>();
+		const pending = states
+			.filter(({ row, transcript }) => row.restore_required && transcript && !row.preview)
+			.slice(0, MAX_PREVIEW_HYDRATIONS);
+		await Promise.all(
+			pending.map(async ({ row }) => {
+				const id = row.resolved_id ?? row.id;
+				try {
+					const page = await gateway.readTranscript(id, 0, PREVIEW_PAGE_MESSAGES);
+					const preview = previewFromTranscript(page.messages);
+					if (preview) previews.set(id, preview);
+				} catch {
+					// The bundle is missing or unreadable: resume reports it; the row stays listed.
+				}
+			})
+		);
+		return previews;
+	}
+
+	/**
+	 * The gateway's resume list (`session.list`), annotated with the profile's cold mirror
+	 * (`session.transcript.list`, ADR-16 P4). Selecting a row hands its stored session id to the
+	 * shell, which resumes it over a fresh connection; an `archived` row's resume restores its
+	 * message rows from the bundle first and its failure (missing / checksum-mismatched file)
+	 * surfaces here. The shell keeps no local table and reads no host path.
 	 */
 	async showSessionSelector(): Promise<void> {
 		const gateway = this.ctx.session.gateway;
@@ -709,7 +793,7 @@ export class SelectorController {
 			this.ctx.showError("This session is not connected to the Hermes gateway.");
 			return;
 		}
-		let rows;
+		let rows: SessionListRow[];
 		try {
 			rows = await gateway.listSessions();
 		} catch (error) {
@@ -721,7 +805,22 @@ export class SelectorController {
 			return;
 		}
 
-		const sessions = rows.map(toResumeEntry);
+		const transcripts = await gateway.listTranscripts().catch(() => null);
+		const byId = new Map<string, SessionTranscriptFile>();
+		for (const file of transcripts ?? []) byId.set(file.session_id, file);
+		const states = pickerRows(rows).map(row => {
+			const transcript = byId.get(row.resolved_id ?? row.id) ?? byId.get(row.id);
+			return { row, transcript } as const;
+		});
+		const previews = await this.#archivedPreviews(gateway, states);
+		const sessions = states.map(({ row, transcript }) =>
+			toResumeEntry(row, transcripts === null ? undefined : {
+				mirrored: transcript !== undefined,
+				archived: Boolean(row.restore_required),
+				transcript,
+				preview: previews.get(row.resolved_id ?? row.id) ?? previews.get(row.id),
+			})
+		);
 		// Keep the fullscreen picker on the alternate buffer while the selected session is
 		// resumed and its transcript is rebuilt.
 		const done = () => {

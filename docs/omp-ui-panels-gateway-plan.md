@@ -21,8 +21,8 @@
 **范围内**：面板需要的每一个读/写 RPC、实时事件、能力声明、profile/终端作用域、契约生成与测试。
 
 **非目标**：
-- omp 专属后端（cleanse、ratchet、prewalk、in-process extensions；OMFG 走 skill、auto-graph 走客户端，
-  均非网关后端，见 ADR-12）。
+- omp 专属后端的当前批次（cleanse、in-process extensions）；OMFG / ratchet / prewalk / auto-graph
+  已由 ADR-12 立项为选项 C，按其 P1–P4 另批实现，不在本计划的 P0–P5 内。
 - 桌面/网页独有面板（Kanban 看板、Bot Mode、Bot Screen、多窗口、富媒体预览）。
 - 终端渲染能力（mermaid/SVG/内联图等）——那些是客户端 `pi-tui` 的事。
 
@@ -149,7 +149,7 @@ jobs/agents hub/MCP/SSH/STT/TTS/live/extensions hooks/工作树/树-分支-回�
 
 | 面板 | 读 | 写 | 现状 | 改动 | 备注 |
 |---|---|---|---|---|---|
-| Model hub / picker / browser | `model.options`、`model.roles.get`、`config.get` | `session.mutate`、`model.roles.set`、`model.cycle.set`、`model.presets.save/apply/delete`、`model.save_key`、`model.disconnect` | A/L | E | `model.options` metadata (E) 未结；Roles 已由 `model.roles.*` 接通 `auxiliary.<task>` + 导入角色 `task`→`delegation`、`advisor`→`adviser`；presets 落 `model_presets`、cycle 落 `omp.cycle_order`、模型键回退链落 `auxiliary.fallback_chains`；kind roles（image/speech/dictation/web）仍 unsupported——模型不在 chat catalog 里 |
+| Model hub / picker / browser | `model.options`、`model.roles.get`、`config.get` | `session.mutate`、`model.roles.set`、`model.cycle.set`、`model.presets.save/apply/delete`、`model.save_key`、`model.disconnect` | A/L | E | `model.options` metadata (E) 未结；Roles 已由 `model.roles.*` 接通 `auxiliary.<task>` + 导入角色 `task`→`delegation`、`advisor`→`advisor`；presets 落 `model_presets`、cycle 落 `omp.cycle_order`、模型键回退链落 `auxiliary.fallback_chains`；kind roles（image/speech/dictation/web）仍 unsupported——模型不在 chat catalog 里 |
 | Session selector | `session.list`、`session.active_list`、`session.most_recent` | `session.mutate` | A/L | E | session.list query/pin/preview (E) is pending |
 | Tree selector | `session.history`、`session.info` | `session.mutate` | A | E | branch summarize/instructions payload (E) is pending |
 | Rewind selector | `session.history` | `session.mutate` | A | — |  |
@@ -168,14 +168,14 @@ jobs/agents hub/MCP/SSH/STT/TTS/live/extensions hooks/工作树/树-分支-回�
 | Changelog | `runtime.describe` | — | A | E | runtime.describe does not carry a version yet (E); the changelog content is client-side |
 | Debug selector | `runtime.describe`、`session.info` | — | A | — |  |
 | BTW panel / history | `btw.history` | `prompt.btw` | A | — | 答案落 `<profile>/session/btw/<session>.jsonl` |
-| OMFG | — | — | — | — | rule-forging skill on the rules/TTSR stack (ADR-12); no gateway backend, panel stays unsupported |
+| OMFG | —（`omfg.forge/cancel/save` 待建） | —（`omfg.save` 待建） | — | — | ADR-12 C：`omfg.*` host 服务 pending；未实现前不渲染假入口 |
 | Plan review / save / TOC | `session.plan.read` | `session.plan.save`、`session.plan.approve` | A | — | 方法已直服；`session.plan.updated` 属 P4 |
 | Annotation overlay | — | — | — | — | no annotation backend; storage and protocol are undesigned (P6) |
 | Pause screen | `session.control.read` | `session.freeze`（新，ADR-1）、`delegation.pause` | A | — | `delegation.pause` 只挡新 spawn；在跑冻结由 `session.freeze` 承担（ADR-1，已落地）：停在回合顶、每次 API 请求前与工具批开始前的安全边界，Stop 立即解开 |
 | Session info overlay | `session.info`、`session.stats` | — | A | — |  |
 | Transcript browser / outline | `session.history` | — | A | — | data landed (ADR-10 P2: `entries` + `include_outline`/`outline`, `include_tool_content`); the client selector/rewind entry is still unwired |
 | Skill picker | `commands.catalog`、`complete.slash` | `skills.manage` | A/L | — |  |
-| Autoresearch / cleanse / ps-top / live | `process.list`、`voice.record` | `voice.toggle`、`voice.tts` | A/L | E | cleanse/autoresearch have no Hermes backend (P6); ps-top needs process.list stats (E) |
+| Autoresearch / cleanse / ps-top / live | `process.list`、`voice.record` | `voice.toggle`、`voice.tts` | A/L | E | ADR-13 C: autoresearch/cleanse host RPC pending（将拆为 autoresearch / cleanse / ps_top_live 三行）；ps-top needs process.list stats (E) |
 | Billing / subscription | `billing.state`、`billing.auto_reload`、`billing.charge_status`、`usage.bars`、`subscription.state`、`subscription.preview` | `billing.charge`、`billing.keep_going_on_credits`、`billing.step_up`、`subscription.change`、`subscription.upgrade`、`subscription.resume` | L | — |  |
 | Connectors | `connectors.list`、`connectors.catalog`、`connectors.accounts`、`connectors.tools`、`connectors.policy.get`、`connectors.operation.status` | `connectors.connect`、`connectors.accounts.remove`、`connectors.accounts.rename` | A/L | — |  |
 | Vault | `vault.list`、`vault.sources` | `vault.add`、`vault.remove`、`vault.unlock`、`vault.lock`、`vault.source.set` | L | — |  |
@@ -225,7 +225,8 @@ Hermes 网关对 omp-ui 暴露的不是“每个面板各有一个后端”，�
 - 写操作：请求带 `request_id`；会话状态改写带 `expected_revision` / `expected_generation`。
 
 面板与 RPC 的对应关系不再逐后端列表：实时面板消费第 1 类，读/写面板消费第 2 类，多数面板两者都用。
-`runtime.describe.panels` 只声明每个面板的 `supported/status/methods`，不复制后端实现。
+`runtime.describe.panels` 只声明每个面板的 `supported/status/methods/events`，不复制后端实现
+（`events` 由 ADR-13 引入，与 `transcript_blocks` 的能力协商同形）。
 
 #### 2.1.1 两类 RPC 的协议定义现状（实现级，不含业务接入）
 
@@ -306,7 +307,7 @@ Pause 的“冻结在跑执行”不属于 `unsupported`：ADR-1 已实现（§1
 | Session info overlay | `/session` 或 `/session info` |  |
 | Transcript browser / outline | `/hub` / `Alt+A` → 选中 agent | live agent transcript 内的 viewer |
 | Skill picker | 输入 `/skill:`；注册表 `/skills` | `/skills {search\|install\|installed\|update}` |
-| Autoresearch / cleanse / ps-top / live | `/cleanse`、`/live`、`omp ps` | autoresearch 无 omp 入口（扩展工具驱动）；ps-top 走 CLI |
+| Autoresearch / cleanse / ps-top / live | `/autoresearch`（extension command）、`Ctrl+X`/`Ctrl+Shift+X`、`/cleanse`、`/live`、`omp ps` | autoresearch 由 extension command + dashboard 驱动；ps-top 走 CLI |
 | Billing / subscription | 无独立面板 | `/usage` 看额度；`/login`、`/setup` 管账号/订阅 |
 | Connectors | 无 omp TUI 入口 | Hermes sidecar 面板，待移植 |
 | Vault | 无 omp TUI 入口（Hermes sidecar 凭据 Vault） | omp 的 `vault://` 是 Obsidian 文件协议，与此面板无关 |
@@ -408,7 +409,7 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | Reaction | 对前一块的 emoji 徽章（回复以 emoji 开头时提取） | `reaction.ts`、`tui.reactions` |
 | 工具执行 | 通用工具调用卡片（参数/结果/状态） | `tool-execution.ts` |
 | Bash 执行 | 用户 `!` 命令与流式输出 | `bash-execution.ts` |
-| Eval 执行 | 用户 eval，共享 agent 的 kernel session | `eval-execution.ts` |
+| Eval 执行 | omp 原生 eval 卡；本仓库由 `execute_code` 的模型面复用（单 cell，ADR-4 D12），用户 `$` 入口不存在 | `eval-execution.ts` |
 | Read 工具组 | 连续 read 调用合并成组 | `read-tool-group.ts` |
 | 图片/SVG/figure | 内联图片、SVG 代码块、Mermaid/figure 渲染 | `svg-figure.ts`、`fence-figure.ts`、`image.ts` |
 | 表格图表 | 数值表下的 auto-graph（`tui.autoGraph`） | `table-chart.ts` |
@@ -435,7 +436,7 @@ Todo 提醒的旧判断以 ADR-2 为准。
 | 用户消息 | 快照 user 行（`text`；图片被投影成 `@image:`/`[image]` 文本）；本机提交回显 `#emitUserMessage`；自动化轮 `message.start{display_kind, display_text}` | `rowToAgentMessage`（只取 `text`）、`#emitUserMessage`；`message.start` 只开 assistant draft，不画自动化结果卡 | 部分 |
 | 助手消息 | `message.start`/`block_start`/`delta`/`interim`/`block_end`/`complete`、`turn.*`、`prompt.result`；快照 assistant 行 `text` + `reasoning*` 侧车 | `#openDraft`/`#complete`/`#mergeLastAssistant`；`rowToAgentMessage`。`message.block_end.content`、`rendered`、`response_transformed` 未消费（漏 delta 时无兜底）；`message.complete.usage` 是 session 累计（`gateway/session_usage.tui_usage`：input/output/total/context/cache_hit_pct）；ADR-10 P3 后 `message.complete.step_usage` 与 `tool.start.step_usage` 提供每步 usage，`served_model`/`requested_model` 同帧下发。客户端 assistant 段读 `step_usage`（缺失为 0，不回退累计），usage/状态行仍读累计 `usage` | 部分 |
 | Thinking | 实时 `reasoning.delta`（`display.show_reasoning` 或 `/reasoning show` 打开时才有）、`message.complete.reasoning`；快照 `reasoning`/`reasoning_content`/`reasoning_details`；`thinking.delta` 是 kawaii spinner 文本（`gateway/local_viewer_events.wire`），不是模型思考 | `handleNotification` 把 `reasoning.delta` 与 `thinking.delta` 都投成 `thinking_delta`；`#complete` 不读 `payload.reasoning`；`rowToAgentMessage` 不读 reasoning。映射层要过滤 spinner 文本，否则会伪造思考块 | 部分 |
-| Advisor | ADR-10 P1/P5：`custom_messages` 会话写 `role:"custom"` + `custom_type:"advisor"` + `details.notes`（`agent/adviser_delivery.py`）；其余会话保留 `display_kind="adviser"` 原始行（Desktop/Ink 的 hydration 读它），wire 投影统一归一成 custom。canonical `message.adviser` 由 `gateway/run_turn_runner.py` 安装的 callback 发出，payload 只带 `id/text/severity/label/row_id/details` | `addMessageToChat` 只认 `role:"custom"` + `customType:"advisor"`；`rowToAgentMessage` 只读 `custom_type`/`details`，不映射旧 marker；`message.adviser` 按 `row_id` 合并 | 已接 |
+| Advisor | ADR-10 P1/P5：`custom_messages` 会话写 `role:"custom"` + `custom_type:"advisor"` + `details.notes`（`agent/advisor_delivery.py`）；其余会话保留 `display_kind="advisor"` 原始行（Desktop/Ink 的 hydration 读它），wire 投影统一归一成 custom。canonical `message.advisor` 由 `gateway/run_turn_runner.py` 安装的 callback 发出，payload 只带 `id/text/severity/label/row_id/details` | `addMessageToChat` 只认 `role:"custom"` + `customType:"advisor"`；`rowToAgentMessage` 只读 `custom_type`/`details`，不映射旧 marker；`message.advisor` 按 `row_id` 合并 | 已接 |
 | Background TAN | 现状：本机 `/tan` 随 §0.3 删除（`TanCommandController`/`sendCustomMessage` 不在 `omp-ui/src`）；网关的 `background.complete{task_id,text}` 是 `/bg` 的结果文本，语义不同。**决定见 ADR-3**：网关 `/tan` + 父 transcript 快照 clone + `tangent_dispatch`/`async_result` 行，本机实现不恢复；实现前本行保持 `部分` | `BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE` 渲染器仍在 `@oh-my-pi/pi-tui`，但当前无 producer；`background.complete` 未处理，且不能填进派发状态条 | 部分 |
 | Skill 调用 | `command.dispatch` 返回 `{type:"skill", name, message, display}`（`gateway/session_commands._skill_directive`、`tui_gateway/methods_tools._dispatch_skill`）；快照把 `/skill …` 扩展行投影成 `role:"custom"` + `custom_type:"skill-prompt"` + `details{name,path,args,prompt,lineCount}`（ADR-10 P5，wire 文本是调用式，正文在 `details.prompt`） | `#gatewayPrompt` 只提交 `type:"send"`，其余 type 直接返回 false —— `/skill-*` 这一次提交不产生回合；`rowToAgentMessage` 只读 `custom_type`/`details`；本机 `skill-command.ts` 走 `promptCustomMessage`，而 `AgentSession` 只有 `prompt()` 在挂网关时转 `#gatewayPrompt`（`#dispatchCustomPrompt` 仍跑本机 agent loop，会绕过 Hermes） | 待接 |
 | 自定义/hook 消息 | `agent.print`（压缩、子代理完成、错误、预算等 `_print_fn` 行）、`command.output`、`notification.show`；Hermes hooks 是服务端策略，没有 renderer 侧 widget 注册 | `addMessageToChat` 需要 `role:"custom"`/`"hookMessage"`；`rowToAgentMessage` 丢弃；`gateway-session.ts` 显式 `case "agent.print": return`。可展示的文本应先映射成通知行，不要伪造 custom entry | 无 producer |
@@ -448,12 +449,12 @@ Todo 提醒的旧判断以 ADR-2 为准。
 | Served model 标记 | ADR-10 P3：`message.complete.served_model`/`requested_model` 取自 turn result（`agent/served_model.py`）；`session.info.fallback_model` 仍是回退模型，不是 served | 客户端把 `served_model` 写入 `AssistantMessage.upstreamModel`，`ServedModelTracker.check` 触发；缺失保持 undefined | 已接 |
 | 被剥离的工具调用 | 网关 display 投影（`tui_gateway/session_history._history_to_messages`）按批次 uid 配对；闭合批次有缺结果时插入 `role:"custom"` + `custom_type:"stripped-tool-calls"` + `details.count`，落在该批次最后一条 tool 行之后；`running` 会话不结算尾部批次 | `#customBlock` 挂 `StrippedToolCallsPlaceholder`；`rowToAgentMessage` 规整 `details.count` | 已接 |
 | Reaction | 文本派生（回复以 emoji 开头）与网关无关，照旧；显式 `message.reaction{row_id, reactions, role}`（`tools/react_to_message_tool.py`，local-viewer 经 `gateway/local_desktop_ui.py` 发布）与 `reaction{kind}`（白名单）；快照行不带 reactions | `pickReactionTarget`/`splitReaction` 已接文本派生；`message.reaction`/`reaction` 未处理，工具反应不画、resume 不还原 | 部分 |
-| 工具执行 | 实时 `tool.start{args, context, labels}`/`tool.progress`/`tool.complete{result, summary, inline_diff, todos}`；快照 tool 行有 `name`/`args`/`labels`/`content`/`is_error`（ADR-10 P2：`content` 由 `include_tool_content` 三态控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影） | `handleNotification` → `tool_execution_start/update/end`；`projectToolResult`；`rowToAgentMessage` 读 `content`/`args`/`labels`/`is_error`/`row_id`，resume 卡与 live 同形 | 部分 |
+| 工具执行 | 实时 `tool.start{args, context, labels}`/`tool.progress`/`tool.complete{result, summary, inline_diff, todos}`；快照 tool 行有 `name`/`args`/`labels`/`content`/`is_error`（ADR-10 P2：`content` 由 `include_tool_content` 三态控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影） | `handleNotification` → `tool_execution_start/update/end`；`projectToolResult`；`rowToAgentMessage` 读 `content`/`args`/`labels`/`is_error`/`row_id`，resume 卡与 live 同形；`execute_code` 经 `TOOL_RENDER_NAMES` 映射到 `eval` 渲染器（ADR-4 D12），画单 cell 原生卡 | 部分 |
 | Bash 执行 | 本机 `#executeBashCommand` → `AgentSession.executeBash`（`BashController`），不经网关；结果只写本机 `SessionManager` | `BashExecutionComponent` 本机渲染；网关会话看不到该命令与输出，resume 后消失 | 部分 |
-| Eval 执行 | 本机 kernel（`isEvalRunning`/本机 eval），网关没有共享 kernel | `EvalExecutionComponent` 本机渲染；同上，不进入 Hermes transcript | 部分 |
+| Eval 执行 | 无入口：`omp-ui/src` 没有 `$` 解析/本机 eval runner（`EvalRunner`/`evalExec`/`isEvalRunning` 零命中），网关也没有 `eval.*` 方法（ADR-4：不移植用户面 `$`） | `EvalExecutionComponent` 只剩 vendored 的 `pythonExecution` 分支（`ROW_PROJECTORS.python_execution` 为 `undefined`），用户面无 producer；模型面 `execute_code` 复用 eval 渲染器画单 cell 原生卡（ADR-4 D12） | 无 producer |
 | Read 工具组 | `tool.start`/`tool.complete` 带工具名；Hermes 的工具名是 `read_file`（`tools/file_tools.py`），参数是 `path` | `readArgsCollapseIntoGroup`/`toolRenderName` 只认 `read` + `path`。ADR-10 P2 后 `AgentSession.getToolByName` 给 render key（`read_file`→`read`），live 与 resume 都用它选 renderer，卡片标题保留 wire 名 | 部分 |
 | 图片/SVG/figure | 正文 fence（SVG/Mermaid/figure）是客户端渲染，已接；工具结果图片在实时 `tool.complete.result.content`；ADR-10 P2 后快照 tool 行在 `include_tool_content:"full"` 时带 display-safe 文本 + 内联图片块（超大 data URL 回落 `[image]`）；用户图片快照仍是 `@image:`/`[image]` 文本 | `AssistantMessageComponent`、`ToolExecutionComponent`、`image.ts`；resume 的工具图片已还原，内联用户图仍走文本引用 | 部分 |
-| 表格图表 | 客户端对 assistant 表格做 `tui.autoGraph` 渲染，不依赖网关数据 | `table-chart.ts` | 已接 |
+| 表格图表 | 无（纯客户端；不由网关供数） | `table-chart.ts` 已存在，但 `omp-ui/src` 未调用 `setTableCharts`，pi-tui 默认 `chartMode="off"`；ADR-12 P2 接线 | 部分 |
 | Collab prompt | 无（§10 unsupported；`groups.*` 是桌面 hosted room，不是 omp collab） | `COLLAB_PROMPT_MESSAGE_TYPE` 本机产生 | 无 producer |
 | Reply write | 无。Hermes 的 `write_file` 是文件写入，没有 `write` 工具的 reply-scope `out://` | `isReplyWrite`/`ReplyWriteComponent` 只认 `write` + reply scheme | 无 producer |
 | 错误帧 | `message.complete{status:error, stop_reason, error_surface}`、`prompt.result.error{message, retryable, code, http_status}`、`error` 事件、`approval.cancelled` | `#complete` 写 `errorMessage`/`stopReason` → `#handleMessageEnd` 的 `showPinnedError`；`prompt.result.error` → `notice(level:error)` → `showError`。retry 仍读本机 `#recovery`，`error_surface.retryable` 未用；`approval.cancelled` 未提示 | 部分 |
@@ -486,7 +487,7 @@ Todo 提醒的旧判断以 ADR-2 为准。
 **实现校准（2026-11-03）**：`gateway-session.ts::rowToAgentMessage` 读取
 `custom_type`/`details`/`reasoning*`/`args`/`labels`/`content`/`row_id`/`synthetic_kind`/`live_steered`，
 并按 custom block / 角色投影成 `AgentMessage`；
-`message.adviser`、`notification.show`、`agent.print`、`command.output`、`todo.reminder`（P3 producer）
+`message.advisor`、`notification.show`、`agent.print`、`command.output`、`todo.reminder`（P3 producer）
 已进入事件映射。`ui-helpers.ts` 渲染 advisor/skill/todo/notice/generic custom 与 resume 的
 `toolResult` 卡。没有 producer 的区块仍保持空：P4 起由网关的
 `runtime.describe.transcript_blocks` 逐项广告 `supported:false` + `needs`，客户端不再维护手写 seat
@@ -506,7 +507,7 @@ Todo 提醒的旧判断以 ADR-2 为准。
 **P3 校准（2026-11-03，ADR-10 D3 + ADR-2 D1/D2）**：`agent/todo_reminder.py` 在交互 surface、非 subagent/finite/kanban、存在未完成 todo 且上次提醒后有过工具结果时，追加一行 durable reminder （`custom_messages:true` 为 `role:"custom"` + `custom_type:"todo-reminder"`，否则 legacy `display_kind:"todo_reminder"`），flush 后由同一个 `plugin_row_event` helper 发一次 `todo.reminder{todos,attempt,max_attempts,row_id}`；预算 `agent.todo_reminders`/`agent.todo_reminders_max`（默认 true/3），进度闩由每次工具结果清零。`message.complete` 与 `tool.start` 增加每步 `step_usage`（`agent._last_step_usage`/`_last_step_cost_usd`，无 usage 的响应 置 null），`message.complete` 增加 `served_model`/`requested_model`。客户端删除 `todo_reminder`/`cache_miss_marker`/`served_model_marker` 三个 pending seat；assistant 段读 `step_usage`（tool-only 步计入 `TurnUsageTally`）、`served_model` 写 `upstreamModel`，`runtime.describe.transcript_blocks` 三项转 `supported:true`。
 
 **P4 校准（2026-11-03，ADR-10 D6/D8.4）**：`runtime.describe.transcript_blocks` 现在覆盖 plan
-§2.3.2 的区块目录：角色项仍由 `TRANSCRIPT_ROLES` 派生，新增 `adviser`（`message.adviser`）、
+§2.3.2 的区块目录：角色项仍由 `TRANSCRIPT_ROLES` 派生，新增 `advisor`（`message.advisor`）、
 `skill_invocation`（durable 行）、`tool_execution`（`tool.start`/`tool.progress`/`tool.complete`）、
 `notice`（`transcript.notice`）、`ttsr_notification`（`ttsr.triggered`，ADR-6 P1）五个已生产区块，
 外加 ADR-9 P1 的 `late_diagnostics`（`supported:true`，事件 `transcript.custom`）；
@@ -514,7 +515,7 @@ Todo 提醒的旧判断以 ADR-2 为准。
 `compaction_summary` 仍为 `partial`（仅 `include_compaction:true` 时投影，`tokensBefore` 缺省 0）。
 omp-ui 删除手写的 `GATEWAY_PENDING_TRANSCRIPT_BLOCKS`；`connectGatewayOmpSession` 在 create/resume
 后非阻塞读一次 `runtime.describe`，缓存 `transcript_blocks` 并暴露 `transcriptBlock(id)`。
-非角色区块的 live 挂载点（`transcript.notice`/`message.adviser`/`todo.reminder`）只挂载显式
+非角色区块的 live 挂载点（`transcript.notice`/`message.advisor`/`todo.reminder`）只挂载显式
 `supported:true` 的区块；角色行（含 `custom`/`compactionSummary`/`branchSummary`）照常按 D10
 投影，能力表不删除座位分支。表缺失或 gateway 未广告的区块保持角色行原行为，不伪造
 `supported:true`、不画 pending 占位。
@@ -695,7 +696,7 @@ custom。客户端（omp-ui、Ink）只读 `custom_type`/`details`；Desktop rew
 | **E 扩展** | 字段/参数/事件不足 | `model.options`、`session.list`、`session.history`、`process.list`、`session.mutate{branch.summarize}` |
 | **G 能力协商** | `runtime.describe.panels` 广告 A + L | 所有面板 |
 | **C 客户端** | 无网关改动，`src` 内接线 | copy、hotkeys、changelog、context 渲染、theme 预览（omp 主题） |
-| **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | cleanse、in-process extensions、annotation、collab、desktop-only 面板（§10）；pause freeze-all 已决定为 A（ADR-1），转入 P7；OMFG 走 skill、auto-graph 走客户端、ratchet/prewalk 不做，均已由 ADR-12 收口 |
+| **D 待设计** | 无 Hermes 后端或语义不等价；先出决策记录 | cleanse、in-process extensions、annotation、collab、desktop-only 面板（§10）；pause freeze-all 已决定为 A（ADR-1），转入 P7；OMFG / ratchet / prewalk / auto-graph 已由 ADR-12 决定为 C（新后端），按其 P1–P4 分期实现 |
 
 注：本表的 **N** 只覆盖 `docs/omp-ui-panels.json` 里面板实际调用的方法；附录 B 的 36 个 N 档
 命令是 omp 命令表的完整对齐契约（多数由客户端派生或尚无 producer），不参与面板覆盖门。
@@ -958,8 +959,8 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 同构目录 → installation 的 bundled skills/plugins。`session_id` 提供运行目录，显式 `source` /
 `prompt_path` 可直接锁定定义。`subagent.list` 新增 `agents`：每条含静态定义（`model`/`provider`/`thinking`/`prompt_path`，
 `scope` = project/profile/installation/custom）和动态行 `config`（同名覆盖字段），因此 Agent Hub
-（`/agents`）可以直接枚举 scoped 静态 agent 并区分“定义值”与“动态覆盖”，而不是只看实时子代理。WATCHDOG/adviser 名册不在这条路径上。表里只存配置，不复用 `config.yaml`（profile 默认）或
-`WATCHDOG.yml`（adviser 名册）；Agent Hub（`/agents`）因此为 `ready`。`hooks.changed`、`session.plan.updated` 仍属 P4，Extensions/Plan
+（`/agents`）可以直接枚举 scoped 静态 agent 并区分“定义值”与“动态覆盖”，而不是只看实时子代理。WATCHDOG/advisor 名册不在这条路径上。表里只存配置，不复用 `config.yaml`（profile 默认）或
+`WATCHDOG.yml`（advisor 名册）；Agent Hub（`/agents`）因此为 `ready`。`hooks.changed`、`session.plan.updated` 仍属 P4，Extensions/Plan
 面板在事件落地前保持 `pending`（方法已可用）。测试：
 `tests/gateway/test_session_git_panel.py`、`test_session_plan_panel.py`、
 `test_session_hooks_skins_settings.py`、`test_session_btw_history.py`、
@@ -981,8 +982,8 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 | **Bot Mode / group chat / Bot Screen** | 桌面插件；终端无 RFB | ① 终端是否需要 roster/群聊；② Bot Screen 是否只做状态/缩略图；③ `groups.*`/`bot_relay.*` 的角色 | A. roster + 群聊只读；B. 全不接；C. 新终端屏幕协议 | 终端不出现死入口；桌面能力不被降级 |
 | **多窗口 / pane / 浮动** | 桌面 pane shell；终端有 tmux/zellij | ① 用宿主多路复用器还是网关 ② fork 语义（新会话/同会话）③ 焦点/尺寸同步 | A. 客户端集成 tmux/zellij；B. 网关 pane 注册；C. 不做 | `/fork pane` 在支持的宿主可用；无宿主时给出提示 |
 | **富媒体预览** | 终端无通用图片/视频/PDF/HTML | ① 终端能力协商（kitty/sixel/iterm）② 远程媒体获取（`media.fetch`?）③ 降级文本 ④ 尺寸/缓存 | A. 内联图 + 文本降级；B. 仅文本；C. 新 media RPC | 支持的终端渲染图片；不支持的终端有可读降级 |
-| **Autoresearch / cleanse** | omp 专属 agent 后端 | ① 是否移植后端（研究循环、cleanse checkers）② 与 Hermes 工具/权限模型的冲突 ③ 成本/安全 | A. 移植为 Hermes 工具/技能；B. 明确不做；C. 只读报告 | 决策记录 + 若移植则有工具契约与预算控制 |
-| **OMFG / ratchet / prewalk / auto-graph** | **已决定（ADR-12，2026-11-04）**：OMFG → skill + 现有 rules/TTSR；auto-graph → 纯客户端接线；ratchet/prewalk → 不做，保持 `unsupported` | —（见 `docs/adr/ADR-12-omp-agent-workflows.md`） | **A / B / B / A**（顺序同左列） | 见 ADR-12 §验收；OMFG 由 skill 提供，非网关后端 |
+| **Autoresearch / cleanse** | **已决定（ADR-13，2026-11-04，选项 C）**：两项均建立新的 host 后端/网关能力（skill + 斜杠命令 + `autoresearch.*` / `cleanse.*` RPC/事件 + omp-ui dashboard/overlay）；**不新增 CLI 子命令**、core tool 或 daemon | —（见 `docs/adr/ADR-13-omp-autoresearch-cleanse.md`） | **C**（host 后端；cleanse 默认计划，`cleanse.repair` 显式派发） | 见 ADR-13 §验收；RPC/事件落地前面板 `supported:false`，落地后 `pending`，客户端 controller 接线后 `ready`，不伪造 ready |
+| **OMFG / ratchet / prewalk / auto-graph** | **已决定（ADR-12，2026-11-04，选项 C）**：四项均建立新的 host 后端/网关能力；OMFG、auto-graph 先落，prewalk、ratchet 分期 | —（见 `docs/adr/ADR-12-omp-agent-workflows.md`） | **C / C / C / C**（顺序同左列） | 见 ADR-12 §验收；未完成项保持 `pending`/unsupported，不伪造能力 |
 | **Tern 原生 Surface / Warp 桥** | 终端宿主协议，非网关 | ① 宿主检测 ② 降级策略 ③ 是否值得维护 | A. 客户端可选支持；B. 不做 | 非宿主终端无副作用 |
 
 设计轨道的产出物：每项一份 ADR（问题、约束、选项、决定、验收），落在 `docs/adr/` 或本文件追加；
@@ -990,8 +991,11 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 已落盘：ADR-2（Transcript 区块目录）见 `docs/adr/ADR-2-transcript-blocks.md`，取代 §2.3.2.1 中
 Skill 调用、Reaction、Transcript 选择器、`include_tools`、Todo 提醒的旧判断；ADR-3（Background TAN）见
 `docs/adr/ADR-3-background-tan.md`，取代 §2.3.2.1 中 Background TAN / `background.complete` 的旧判断；
-ADR-4（Eval 执行）见 `docs/adr/ADR-4-eval-execution.md`，取代 §2.3.2.1 第 452 行把 Eval 判为“网关没有共享
-kernel”的判断；ADR-5（Recap 与压缩摘要）见 `docs/adr/ADR-5-recap-and-compaction.md`，取代 §2.3.2.1 中
+ADR-4（`execute_code` 的 JS 后端与原生 eval 卡）见 `docs/adr/ADR-4-eval-execution.md`：只移植模型面
+（`execute_code(language)` + Bun JS kernel + 单 cell eval 卡），明确不移植用户面 `$`/`$$` eval（omp-ui 无入口），
+§2.3.2.1 第 454 行按此改为「无 producer」；D12 让 `execute_code` 复用 omp 原生 eval 卡（单 cell），
+用户面入口仍无；ADR-5（Recap 与压缩摘要）见
+`docs/adr/ADR-5-recap-and-compaction.md`，取代 §2.3.2.1 中
 「压缩摘要」「Recap」两行的 `无 producer` 判断（默认快照不变，新投影按 `include_compaction` 显式请求）；
 P1（盖章 / merged 投影 / `compaction.summary` 事件 / 客户端 opt-in）、P2（`collapseCompacted` 渲染期省略）、
 P3（`recap.generate` + 共用 ephemeral side turn）、P4（客户端 idle 定时器 + `RecapNotice`）均已落地；
@@ -1050,7 +1054,7 @@ omp 的 `/pause` 是全屏模态 + 进程级协作式 gate（`packages/tui/src/o
   `assemble_api_request` / `announce_api_call`（否则 Stop 后仍会构建并宣布一次请求）。
   代际结束自动丢弃冻结。
 - **子代理与 advisor**：子代理共享父 gate 对象（`_build_child_agent` 构造后绑定），不复制；
-  advisor（`agent/adviser_runtime.py::_run_batch`）在 batch 边界 park（在跑 batch 跑完）。
+  advisor（`agent/advisor_runtime.py::_run_batch`）在 batch 边界 park（在跑 batch 跑完）。
 - **范围外**：`/btw`、`/bg`、preview 的 detached side agents（`authority._side_agents`，无 session
   维度映射，Stop 也单独扇出）与交付后运行的 `background_review`。暂停屏的“未完成 job”仍可用
   `process.list` 展示，但不冻结它们。
@@ -1094,7 +1098,7 @@ FreezeState = {frozen, frozen_at, execution_generation, parked_agents}
 | 循环 | `agent/conversation_loop.py`（`_run_conversation_turn` 的 while 顶，`begin_iteration` 之后 :1731；`_run_api_retry_loop` 的 `build_api_request` 之前 :1583） | 两处 park |
 | 工具 | `agent/tool_executor.py::execute_tool_calls_concurrent` / `_execute_tool_calls_sequential` | 批开始前 park |
 | 子代理 | `tools/delegate_tool.py::_build_child_agent` | 共享父 gate |
-| advisor | `agent/adviser_runtime.py::_run_batch` 顶（:417，batch 边界） | 起新 batch 前 park；`_call_model`（:718）是工厂，在工厂里 park 只会停在构建期，**不得**写在那里 |
+| advisor | `agent/advisor_runtime.py::_run_batch` 顶（:417，batch 边界） | 起新 batch 前 park；`_call_model`（:718）是工厂，在工厂里 park 只会停在构建期，**不得**写在那里 |
 | authority | `gateway/session_freeze.py`（新）+ `SessionAuthority._freezes` | handler、按代际闩锁、发布 |
 | 读路径 | `gateway/session_ancillary.py::control_snapshot`（:485，`session.control.read` 与 `session.control.update` 共用的唯一 builder）与共享的 `tui_gateway/methods_session_control.py::_snapshot_revision` / `_snapshot_control` | `freeze`/`estop` 进快照；`_snapshot_revision` 加 `freeze=None` 形参（sidecar 传 None）——不进哈希则 `only_if_changed=True` 会把冻结/解冻广播去重掉；`owner_scope(authority)` 绑在 `control_snapshot` 内（同步 `publish` 走 `scoped=False`、`read` 也不带 scope） |
 | in-process 绑定 | `gateway/run_turn_runner.py:564` 旁 | 新增 `bind_freeze(sid, generation, agent)`；**不放进 `adopt_agent`** |

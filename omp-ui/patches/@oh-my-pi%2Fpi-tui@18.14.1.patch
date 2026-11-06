@@ -1,3 +1,82 @@
+diff --git a/dist/types/overlays/session-selector.d.ts b/dist/types/overlays/session-selector.d.ts
+index 09580ac2a54a28181c6120caa2cc186b17111b65..ef5901a27c016831e3b1a2d2a4152cfff30120cf 100644
+--- a/dist/types/overlays/session-selector.d.ts
++++ b/dist/types/overlays/session-selector.d.ts
+@@ -15,6 +15,8 @@ export interface SessionSelectorEntry {
+     firstMessage: string;
+     allMessagesText: string;
+     status?: SessionSelectorStatus;
++    /** Short state note rendered beside date/size (My-H: cold-mirror state, ADR-16 P4). */
++    note?: string;
+     /** Path to the parent session when this one was forked. */
+     parentSessionPath?: string;
+ }
+diff --git a/src/overlays/session-selector.ts b/src/overlays/session-selector.ts
+index deb8036623cb49e141131d1481f71ed97ef3aceb..9928249183082b7087bd5e3131e91e7e5602b2e7 100644
+--- a/src/overlays/session-selector.ts
++++ b/src/overlays/session-selector.ts
+@@ -49,6 +49,8 @@ export interface SessionSelectorEntry {
+ 	firstMessage: string;
+ 	allMessagesText: string;
+ 	status?: SessionSelectorStatus;
++	/** Short state note rendered beside date/size (My-H: cold-mirror state, ADR-16 P4). */
++	note?: string;
+ 	/** Path to the parent session when this one was forked. */
+ 	parentSessionPath?: string;
+ }
+@@ -214,6 +216,7 @@ interface SessionItemMemo {
+ 	pinned: boolean;
+ 	current: boolean;
+ 	showCwd: boolean;
++	note?: string;
+ }
+ 
+ /** Cached native item node on the session entry, rebuilt when its inputs change. */
+@@ -1057,6 +1060,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
+ 			badges.push({ text: "fork", title: `Forked from “${this.parentLabel(session.parentSessionPath)}”` });
+ 		}
+ 		if (session.path === currentPath) badges.push({ text: "current", tone: "accent" });
++		if (session.note) badges.push({ text: session.note, tone: "muted" });
+ 		const when = pickerDate(session.modified);
+ 		const detail = this.#showCwd ? (session.cwd ? cwdSpans(session.cwd) : undefined) : title ? message : undefined;
+ 		const dot = sessionStatusTone(session.status);
+@@ -1161,7 +1165,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
+ 			cached?.date === date &&
+ 			cached.pinned === pinned &&
+ 			cached.current === current &&
+-			cached.showCwd === this.#showCwd
++			cached.showCwd === this.#showCwd &&
++			cached.note === session.note
+ 		) {
+ 			return cached.node;
+ 		}
+@@ -1173,6 +1178,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
+ 		};
+ 		if (session.title && message) push(span(message, "dim"));
+ 		if (current) push(span("current", "accent"));
++		if (session.note) push(span(session.note, "muted"));
+ 		const status = sessionStatusSpan(session.status);
+ 		if (status) push(status);
+ 		if (session.parentSessionPath) push(span("fork", "dim"));
+@@ -1188,7 +1194,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
+ 			undefined,
+ 			session.path,
+ 		);
+-		tagged[kNativeItem] = { node: item, date, pinned, current, showCwd: this.#showCwd };
++		tagged[kNativeItem] = { node: item, date, pinned, current, showCwd: this.#showCwd, note: session.note };
+ 		return item;
+ 	}
+ 
+@@ -1286,6 +1292,9 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
+ 			if (currentPath !== undefined && session.path === currentPath) {
+ 				metadata += ` ${dot} ${theme.fg("accent", "current")}`;
+ 			}
++			if (session.note) {
++				metadata += ` ${dot} ${dim(session.note)}`;
++			}
+ 			const status = formatSessionStatus(session.status);
+ 			if (status) {
+ 				metadata += ` ${dot} ${status}`;
 diff --git a/src/prompt/welcome.ts b/src/prompt/welcome.ts
 index 9df48ae0bbe1c21a262a511f756b04a3da07d832..cdeadcc561803691f379f9197bd70cc29b7e4436 100644
 --- a/src/prompt/welcome.ts

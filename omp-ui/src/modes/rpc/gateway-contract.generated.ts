@@ -3574,7 +3574,51 @@ export interface SessionListRow {
   message_count?: number
   live_message_count?: number | null
   source?: string
+  archived?: boolean
+  restore_required?: boolean
   _lineage_root_id?: string | null
+}
+export interface SessionTranscriptListParams {
+  profile?: string | null
+  limit?: number | null
+}
+export interface SessionTranscriptListResult {
+  projects: SessionTranscriptProject[]
+  total?: number
+}
+export interface SessionTranscriptProject {
+  project: string
+  sessions: SessionTranscriptFile[]
+}
+/** One bundle's main JSONL (``<project>/<timestamp>_<id>.jsonl``); subagent and advisor files are not sessions and never appear here. */
+export interface SessionTranscriptFile {
+  session_id: string
+  project: string
+  path: string
+  started_at?: number
+  cwd?: string
+  title?: string
+  size_bytes?: number
+  message_count?: number
+  modified_at?: number
+  mirrored_at?: number | null
+  offloaded?: boolean
+}
+export interface SessionTranscriptReadParams {
+  profile?: string | null
+  session_id: string
+  offset?: number
+  limit?: number
+}
+/** One page of a bundle's message rows; ``session`` is the bundle header. */
+export interface SessionTranscriptReadResult {
+  session_id: string
+  path: string
+  session: Record<string, unknown>
+  messages: Record<string, unknown>[]
+  offset: number
+  total: number
+  has_more: boolean
 }
 export interface SessionMostRecentParams {
   profile?: string | null
@@ -7434,6 +7478,10 @@ export interface RpcMethods {
   'session.steer': { params: SessionCorrectionParams; result: SessionCorrectionResult }
   /** Read or set a live session's title; a title set before the row exists is queued. */
   'session.title': { params: SessionTitleParams; result: SessionTitleResult }
+  /** Mirrored session bundles in this profile, most recent first, grouped by project directory. */
+  'session.transcript.list': { params: SessionTranscriptListParams; result: SessionTranscriptListResult }
+  /** Page one mirrored bundle's JSONL by message index (read-only; never takes a client path). */
+  'session.transcript.read': { params: SessionTranscriptReadParams; result: SessionTranscriptReadResult }
   /** Drop the last user turn (and everything after it) from an idle session. */
   'session.undo': { params: SessionUndoParams; result: SessionUndoResult }
   /** Token / context / cost counters for the session (+ Nous credit lines when available). */
@@ -7764,6 +7812,8 @@ export const RPC_METHODS = [
   'session.status',
   'session.steer',
   'session.title',
+  'session.transcript.list',
+  'session.transcript.read',
   'session.undo',
   'session.usage',
   'session.workspace.move',

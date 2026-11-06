@@ -712,11 +712,53 @@
     {
       "id": "omfg",
       "title": "OMFG",
-      "status": "unsupported",
+      "status": "pending",
       "supported": false,
-      "note": "no gateway backend: rule forging is provided by the rule-forging skill on the rules/TTSR stack (ADR-12)",
-      "methods": [],
-      "events": []
+      "note": "ADR-12 C: omfg.* host service (forge/validate/save) pending; no fake entry until methods land",
+      "methods": [
+        {
+          "name": "omfg.forge",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "omfg.cancel",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        },
+        {
+          "name": "omfg.save",
+          "access": "write",
+          "status": "M",
+          "change": [
+            "N"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "omfg.delta",
+          "status": "M"
+        },
+        {
+          "name": "omfg.candidate",
+          "status": "M"
+        },
+        {
+          "name": "omfg.saved",
+          "status": "M"
+        },
+        {
+          "name": "omfg.error",
+          "status": "M"
+        }
+      ]
     },
     {
       "id": "plan_review",

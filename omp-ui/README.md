@@ -17,7 +17,7 @@ the decision record.
 |---|---|---|
 | Entry | `src/main.ts`, `src/modes/rpc/hermes-entry.ts` | argv → pair with the gateway → `session.create`/`session.resume` → `InteractiveMode.init()` → render + `getUserInput()` loop |
 | Protocol | `src/modes/rpc/gateway-client.ts`, `gateway-socket.ts`, `gateway-contract.generated.ts`, `gateway-contract.openrpc.json` | JSON-RPC 2.0 envelopes, reconnect/replay (`seq`), server→client requests, the canonical methods/notifications contract generated from `tui_gateway/contracts/*.py` |
-| Data ingress | `src/modes/rpc/gateway-session.ts`, `gateway-models.ts`, `gateway-appearance.ts` | `session.create/resume/history/usage/stats`, prompt submit/steer/cancel, `command.dispatch`, `model.options`, `session.mutate`, `session.list`, `omp.appearance.*`; the event projection onto the shell's `AgentSessionEvent` vocabulary |
+| Data ingress | `src/modes/rpc/gateway-session.ts`, `gateway-models.ts`, `gateway-appearance.ts` | `session.create/resume/history/usage/stats`, prompt submit/steer/cancel, `command.dispatch`, `model.options`, `session.mutate`, `session.list`, `session.transcript.list/read` (ADR-16 cold mirror), `omp.appearance.*`; the event projection onto the shell's `AgentSessionEvent` vocabulary |
 | Session facade | `src/session/agent-session.ts`, `session-manager.ts`, `agent-session-events.ts`, `agent-session-types.ts` | the renderer-facing session: transcript, model/thinking selectors, queue, notices, usage/context; the in-memory accounting projection |
 | UI | `src/modes/interactive-mode.ts`, `controllers/{event,input,command,selector,todo-command}-controller.ts`, `utils/ui-helpers.ts`, `types.ts`, `settings.ts` | transcript/composer/status line/HUD, gateway-fed selectors, local UI commands, notices |
 | Config | `src/config/*`, `src/session/settings.ts`, `src/modes/settings.ts` | the UI settings registry and the display-only model catalog |
@@ -26,7 +26,8 @@ the decision record.
 The main screen is one `AgentSession` attached with `attachGateway()`: turns, streamed text/thinking,
 tool cards, todo HUD, usage/context, queue and title all arrive as gateway events. `EventController`
 projects them onto `pi-tui` components; `CommandController` runs the shell's own commands and sends
-everything else to `command.dispatch`; `SelectorController` reads the gateway catalog/session list.
+everything else to `command.dispatch`; `SelectorController` reads the gateway catalog/session list and annotates each row with its
+cold-mirror state (`archived` / `not mirrored`).
 
 ## Shell commands (local)
 
@@ -43,7 +44,7 @@ the Roles view is backed by **Hermes** config over `model.roles.get` / `model.ro
 - the `default` role is the live session model and assigns through `session.setModel` — `/model`
   stays the session-scoped picker;
 - every other row is either an auxiliary task (`provider: "auto"` = follow the main model) or one of
-  the two imported roles: `task` writes `delegation.*` and `advisor` writes `adviser.*`;
+  the two imported roles: `task` writes `delegation.*` and `advisor` writes `advisor.*`;
 - assigning a row writes that route, the thinking column writes its effort
   (`auxiliary.<task>.reasoning_effort`; imported rows accept only `inherit` for `advisor`), and the
   fallback rows write `auxiliary.<task>.fallback_chain` / `delegation.fallback_providers`;

@@ -43,6 +43,12 @@ applies it. The patch covers:
   gradient ladder, and the narrow-width fallback (wordmark before mark).
 - `src/setup/scenes/splash.ts` — the compact splash's brand name.
 - `src/theme/symbols.ts` — `icon.omp`: `✿` (unicode/nerdfont presets), `myh` (ascii).
+- `src/overlays/session-selector.ts` + `dist/types/overlays/session-selector.d.ts` — the optional
+  `SessionSelectorEntry.note` (ADR-16 P4): one dim state note beside date/size in the terminal row,
+  as a muted badge in the native picker, and in its detail line. It renders product state
+  (`archived` / `not mirrored`) without putting it in the user's title or first message. The type
+  declaration ships separately because the package runs `src/*.ts` but typechecks
+  `dist/types/*.d.ts`, so both files belong in the patch.
 
 Bumping `@oh-my-pi/pi-tui` invalidates the patch (Bun refuses to apply it and the install fails
 loudly): regenerate with `bun patch @oh-my-pi/pi-tui@<version>` → edit → `bun patch --commit
