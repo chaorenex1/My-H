@@ -1,0 +1,29 @@
+{
+  "request": {
+    "items": [
+      {"state": "first", "questions": {"urgent": {"instructions": "Urgent?"}}},
+      {"state": "second", "questions": {"urgent": {"instructions": "Urgent?"}}}
+    ],
+    "min_ok": 1,
+    "max_concurrency": 2
+  },
+  "result": {
+    "results": [
+      {
+        "ok": true,
+        "result": {
+          "kind": "local",
+          "api": "openai-chat-completions",
+          "provider": "local-provider",
+          "model": "local-model",
+          "answers": {"urgent": {"type": "noul", "noul": 0.75}},
+          "usage": {"input_tokens": 12, "output_tokens": 2, "request_count": 1},
+          "cost_usd": null,
+          "cached_questions": 0
+        }
+      },
+      {"ok": false, "error": {"type": "JudgmentUnavailable", "message": "no candidate answered"}}
+    ],
+    "min_ok_met": true
+  }
+}

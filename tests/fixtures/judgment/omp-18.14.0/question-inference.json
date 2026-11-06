@@ -1,0 +1,30 @@
+{
+  "source": {
+    "package": "@oh-my-pi/pi-ai",
+    "version": "18.14.0",
+    "revision": "6a86df8539fccf3ad7818081266e554022fc21bc",
+    "file": "packages/ai/test/judgment-question-file.test.ts",
+    "test": "derives each question's kind from the shape of its criteria"
+  },
+  "input": {
+    "severity": {"instructions": "How bad?", "criteria": ["calm", "angry"]},
+    "urgent": {"instructions": "Urgent?"},
+    "stopped": {
+      "instructions": "Stopped?",
+      "criteria": {"true": "Says it will act, then ends.", "false": null}
+    },
+    "tier": {"instructions": "Which tier?", "criteria": {"low": "trivial", "high": null}},
+    "row": {"instructions": "Which row?", "criteria": {}}
+  },
+  "expected": {
+    "severity": {"type": "score", "instructions": "How bad?", "criteria": ["calm", "angry"]},
+    "urgent": {"type": "noul", "instructions": "Urgent?"},
+    "stopped": {
+      "type": "noul",
+      "instructions": "Stopped?",
+      "criteria": {"true": "Says it will act, then ends."}
+    },
+    "tier": {"type": "choice", "instructions": "Which tier?", "criteria": {"low": "trivial", "high": null}},
+    "row": {"type": "choice", "instructions": "Which row?", "criteria": {}}
+  }
+}

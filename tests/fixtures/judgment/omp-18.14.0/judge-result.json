@@ -1,0 +1,16 @@
+{
+  "kind": "online",
+  "api": "openai-chat-completions",
+  "provider": "openai",
+  "model": "example-model",
+  "answers": {
+    "severity": {"type": "score", "score": 1, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "confidence": 0.8},
+    "urgent": {"type": "noul", "noul": 0.7},
+    "stopped": {"type": "noul", "noul": 0.2},
+    "tier": {"type": "choice", "choice": "low", "probabilities": {"low": 0.9, "high": 0.1}, "confidence": 0.9},
+    "row": {"type": "choice", "choice": "row", "probabilities": {"row": 0.8, "shared": 0.1, "series": 0.1}, "confidence": 0.8}
+  },
+  "usage": {"input_tokens": 400, "output_tokens": 60, "cache_read_tokens": 0, "cache_write_tokens": 0, "reasoning_tokens": 0, "request_count": 1},
+  "cost_usd": 0.001,
+  "cached_questions": 0
+}
