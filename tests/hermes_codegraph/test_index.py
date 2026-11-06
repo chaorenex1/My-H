@@ -207,11 +207,8 @@ def test_deleted_file_soft_deletes_symbols_and_prune_removes_them(
         ci.close()
 
 
-def test_display_mode_off_does_not_disable_the_index_semgrep_layer(
-    code_home, sample_repo, monkeypatch
-):
-    """ADR-9 D12: ``lsp.display.semgrep.mode`` only gates the write path; ``hermes code index``
-    still runs its Semgrep layer whenever ``code_intel.semgrep.enabled`` is on."""
+def test_index_does_not_run_semgrep(code_home, sample_repo, monkeypatch):
+    """ADR-15 D1: Semgrep is live-only; ``hermes code index`` never runs it and stores nothing."""
     import pytest
 
     pytest.importorskip("ladybug", reason="the [graph] extra is not installed")
@@ -219,18 +216,25 @@ def test_display_mode_off_does_not_disable_the_index_semgrep_layer(
     from hermes_codegraph import CodeIntelligence
     from hermes_codegraph.config import CodeGraphLimits
 
-    monkeypatch.setattr(
-        "hermes_cli.config.load_config_readonly",
-        lambda: {"lsp": {"display": {"semgrep": {"mode": "off"}}}},
-    )
     calls = []
     monkeypatch.setattr(
         "hermes_codegraph.analysis.semgrep_scan",
-        lambda *a, **k: calls.append(1) or {"status": "ok", "findings": []},
+        lambda *a, **k: calls.append(1) or {"status": "ok", "findings": [{
+            "path": "pkg/mod.py", "rule_id": "python.lang.security.eval", "severity": "error",
+            "message": "Unsafe use of eval.", "start_line": 1, "start_column": 1,
+            "end_line": 1, "end_column": 4,
+        }]},
     )
     with CodeIntelligence.open(
         root=sample_repo, limits=CodeGraphLimits(semgrep_enabled=True)
     ) as ci:
         result = ci.index()
+        diagnostics = ci.get_diagnostics()
+        runs = ci._client.nodes.search(
+            "CodeAnalysisRun", {"repository_id": ci.repository.repository_id}, limit=100
+        ).items
 
-    assert calls and result["semgrep"]["status"] == "ok"
+    assert calls == []
+    assert "semgrep" not in result
+    assert diagnostics["results"] == []
+    assert all(node.properties.get("kind") != "semgrep" for node in runs)

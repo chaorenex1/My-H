@@ -56,8 +56,7 @@ def test_refresh_file_makes_new_facts_visible(code_home, tmp_path):
 
 
 def test_refresh_file_semgrep_returns_the_current_findings(code_home, tmp_path, monkeypatch):
-    """ADR-9 D8: an explicit refresh with ``semgrep=true`` returns what the scan just observed on
-    the current bytes (previously the return value was dropped)."""
+    """ADR-15 D1: ``semgrep=true`` is a live scan; its findings are returned, never stored."""
     from hermes_codegraph import CodeIntelligence
     from hermes_codegraph.config import CodeGraphLimits
 
@@ -76,10 +75,13 @@ def test_refresh_file_semgrep_returns_the_current_findings(code_home, tmp_path, 
         ci.index()
         (root / "mod.py").write_text("eval('1')\n", encoding="utf-8")
         result = ci.refresh_file("mod.py", semgrep=True)
+        diagnostics = ci.get_diagnostics()
 
     assert result["semgrep"]["status"] == "ok"
-    assert result["semgrep"]["results"][0]["rule_id"] == "python.lang.security.eval"
-    assert result["semgrep"]["results"][0]["start_line"] == 1
+    assert result["semgrep"]["results"][0]["code"] == "python.lang.security.eval"
+    assert result["semgrep"]["results"][0]["file_path"] == "mod.py"
+    assert result["semgrep"]["results"][0]["line_number"] == 1
+    assert diagnostics["results"] == []  # the live scan wrote no CodeDiagnostic rows
 
 
 def test_refresh_file_semgrep_reports_disabled_without_a_scan(code_home, tmp_path, monkeypatch):

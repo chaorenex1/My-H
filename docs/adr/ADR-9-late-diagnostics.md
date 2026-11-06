@@ -76,7 +76,9 @@ Semgrep **是**与 LSP 并列的即时诊断源：`write_file`/`patch` 的编辑
 - ADR-6 **D1** 的 `client:"omp-ui"` 是本 ADR 的 session 级门；本 ADR 不新增第二种 opt-in 机制。
   如果 ADR-6 D1 尚未落地，本 ADR 的 P1 随之等待（或作为 D1 的第一个消费者一并落地）。
 - ADR-8 **D17** 的“Semgrep 只在显式索引/`refresh_file` 跑、写路径不跑”**不采用**；Semgrep 与 LSP
-  同为即时诊断源。ADR-8 的索引诊断只作为查询面的既有实现保留。
+  同为即时诊断源。~~ADR-8 的索引诊断只作为查询面的既有实现保留。~~
+  **ADR-15 D1 修订**：索引期 Semgrep 层与“查询面返回 Semgrep 旧行”一并撤销——`hermes code
+  index` 不跑 Semgrep、图不存 finding、查询面排除 `tool="semgrep"` 的行。
 
 ## 问题
 
@@ -198,7 +200,8 @@ details: {files: [{path, summary, errored, messages}]}
 - 当前只在 `hermes code index` / `refresh_file(semgrep=true)` 里调用；`indexer._run_semgrep`
   把这些 finding 写成 `CodeDiagnostic` 与 `CodeAnalysisRun`。`update.refresh_file` 目前**丢弃**
   `_run_semgrep` 的返回值（`update.py:95-99`），所以工具调用拿不到 findings；这是实现缺口，不是
-  本 ADR 的边界。
+  本 ADR 的边界。（**ADR-15 D1 后本条失效**：索引不再运行 Semgrep，`refresh_file` 直接返回 live
+  findings；保留原文仅作历史。）
 - `code_intel` / `hermes code diagnostics` 能查询已写入的 `CodeDiagnostic`；当前 schema 没有
   Revision 字段，查询结果不保证对应当前字节。因此**展示层不能靠按 path 查询旧图来冒充即时诊断**；
   即时诊断必须来自刚刚对当前字节执行的扫描。
@@ -266,7 +269,7 @@ details: {files: [{path, summary, errored, messages}, ...]}
 - `attribution:"agent"`，`legacy_role:"user"`：与 omp 一致；客户端只读 `custom_type`/`details`，
   不解析 `legacy_role`。
 - 生产者只在 `active_policy().custom_messages` 为 true 的会话写这个形状
-  （`agent/adviser_delivery.py:133-155`、`agent/todo_reminder.py:169-184` 是同一惯例）；其它会话
+  （`agent/advisor_delivery.py:133-155`、`agent/todo_reminder.py:169-184` 是同一惯例）；其它会话
   保持现有 tool-result 文本 / user note，默认 `lsp.display` 下逐字不变（显式配置时按 D12 过滤）。
 
 模型转换：把 `"lsp-late-diagnostic"` 加入
@@ -395,7 +398,7 @@ event transcript.custom {
   `("transcript.custom", {"message": <row>})`；canonical 的 `_canonical_plugin_event`
   （`gateway/run_turn_runner.py:529-537`）用 `_publish_execution` 发；sidecar 的
   `_announce_plugin_row` 改为 `_emit(name, sid, payload)` 或显式 `transcript.custom` 分支，
-  **不得**落进现有的 `else: _emit("message.adviser", …)`。
+  **不得**落进现有的 `else: _emit("message.advisor", …)`。
 - 只对 local viewer 且 session policy 的 `client == "omp-ui"` 发布（ADR-6 D1）；CLI、TUI、Desktop、
   消息平台、ACP、one-shot、compute-host 都不发。`_canonical_plugin_event`/`_announce_plugin_row`
   在 `transcript.custom` 分支再检查一次 `active_policy().client`，非 omp-ui 直接 return；不要依赖
@@ -644,8 +647,8 @@ lsp:
   - LSP：`lsp.enabled=true` 且 `lsp.display.lsp.mode != off`。
   - Semgrep：`code_intel.enabled=true`、`code_intel.semgrep.enabled=true` 且
     `lsp.display.semgrep.mode != off`。
-  - `mode=off` 只关闭诊断面（Semgrep 还跳过即时扫描）；`hermes code index` 的 Semgrep 层仍只看
-    `code_intel.semgrep.enabled`，不新增第二个索引开关。
+  - `mode=off` 只关闭诊断面（Semgrep 还跳过即时扫描）；Semgrep 的开关只作用于 live 路径，
+    `hermes code index` 不因 `code_intel.semgrep.enabled` 运行任何扫描（ADR-15 D1）。
 - **解析/失败**：`agent/lsp/display.py::DisplayPolicy.from_config()` 读
   `load_config_readonly()["lsp"]["display"]`。未知 `mode` → 警告 + `both`；未知 severity 条目
   丢弃；空/非法 `severities` → 该来源默认集合；任何解析失败都不让写入失败。配置在每次写入/检查时
@@ -746,7 +749,7 @@ lsp:
 | 配置默认值 | `hermes_cli/config_defaults.py` | `lsp.display.lsp`/`lsp.display.semgrep` 默认块：`mode: both`，severities `[error]`/`[error, warning]`；按约定更新 `_config_version` 并让 migrate 补齐 |
 | 配置解析 | `agent/lsp/display.py`（新增） | `DisplayPolicy.from_config()`：读 `lsp.display`，校验 `off|inline|late|both` 与 `error|warning`，返回默认/回退；不让写入失败 |
 | LSP gating | `tools/file_operations_lint.py`、`agent/lsp/edit_check.py`、`agent/lsp/reporter.py` | 按 `lsp.display.lsp`：`off` 跳过 edit check；`inline` 超时丢弃；`late` 把预算内 verdict 转 `deferred`；`both` 现状；severity 过滤后算 summary/errored |
-| Semgrep gating | `tools/file_operations_lint.py`、`hermes_codegraph/analysis.py`、`hermes_codegraph/update.py` | 按 `lsp.display.semgrep`：`off` 跳过即时扫描；severity 过滤；`code_intel.semgrep.enabled` 仍是总开关，索引层不受 `mode` 影响 |
+| Semgrep gating | `tools/file_operations_lint.py`、`hermes_codegraph/analysis.py`、`hermes_codegraph/update.py` | 按 `lsp.display.semgrep`：`off` 跳过即时扫描；severity 过滤；`code_intel.semgrep.enabled` 仍是总开关（ADR-15 D1：索引不跑 Semgrep，无索引层） |
 | 状态输出 | `agent/lsp/cli.py` | `hermes lsp status` 显示解析后的 `display.*.mode`/`severities` |
 | 文档 | `website/docs/user-guide/features/lsp.md` | 记录 `lsp.display` 的键、默认值、`mode` 语义与优先级 |
 | 延迟队列 | `agent/lsp/deferred.py` | `_Note` 增加 `files`；`post`/`take`/`restore`/`pop_notes` 透传并按 path/source 合并 |
@@ -841,9 +844,10 @@ lsp:
     变化。
 18. **`lsp.display.semgrep`**：`code_intel.semgrep.enabled=false` 时无论 `mode` 如何都不扫描、
     不显示，显式 `refresh_file(semgrep=true)` 也不扫描（`code_intel(diagnostics)` 只返回已存图并
-    标 freshness）；master switch 开启时，`mode=off` 跳过 write/patch 的即时扫描，但
-    `hermes code index` 的 Semgrep 层不受影响，显式 `code_intel`/`code_graph_update(refresh_file,
-    semgrep=true)` 的 findings 仍在 tool result；`severities` 过滤后 summary/errored 重算。
+    标 freshness，见 ADR-15 D1）；master switch 开启时，`mode=off` 跳过 write/patch 的即时扫描，
+    显式 `code_intel`/`code_graph_update(refresh_file, semgrep=true)` 的 findings 仍在 tool
+    result；`hermes code index` 不运行 Semgrep（ADR-15 D1）；`severities` 过滤后 summary/errored
+    重算。
 19. **无效配置**：未知 `mode` → 警告 + `both`；未知 severity 条目丢弃；空/非法 `severities`
     → 该来源默认集合；写入、工具结果、turn 不因配置错误失败；`hermes lsp status` 显示解析后的
     值。
@@ -880,7 +884,7 @@ lsp:
   会话写。压缩/分支复制必须保留六字段，否则 resume 会退化成 text-only 或用户气泡（如果误写成
   legacy user row）。
 - **sidecar 分支**：`plugin_row_event` 被 sidecar 与 canonical 共用；新增 `transcript.custom`
-  必须同时更新 `_announce_plugin_row`，否则会落进 `message.adviser` 的 else 分支。
+  必须同时更新 `_announce_plugin_row`，否则会落进 `message.advisor` 的 else 分支。
 - **ADR-8 文本与工具面不一致**：ADR-8 D17 说 `code_graph_update` 固定 `semgrep=false`，当前工具
   仍暴露并透传 `semgrep`。本 ADR 以工具面的显式参数为准；ADR-8 文本应在独立变更里更正。若反过来
   移除该参数，模型仍可通过 write/patch 的即时 Semgrep 获得诊断，不依赖它。
@@ -895,8 +899,8 @@ lsp:
 - **展示策略不是 UI-only**：过滤后的集合同时进 `content` 和 `details`；不要实现“客户端隐藏、
   模型仍读”的双轨，否则用户看到的诊断与模型修复的诊断会分叉。
 - **`lsp.display.semgrep` 与 `code_intel.semgrep.enabled` 混淆**：前者是诊断面/即时扫描的策略，
-  后者是 Semgrep 层总开关；`mode=off` 不影响 `hermes code index`。文档和 `hermes lsp status`
-  要同时显示两者，避免用户以为关掉展示就关掉了索引。
+  后者是 scanner 总开关（ADR-15 D1：`hermes code index` 不运行 Semgrep）。文档和
+  `hermes lsp status` 要同时显示两者，避免用户以为关掉展示就关掉了扫描。
 
 ## 不采纳
 
@@ -919,8 +923,8 @@ lsp:
   模型工具。
 - **把 `lsp.display` 做成纯 UI 过滤**：会与 `content` 分叉，用户看到的诊断和模型修复的诊断不同；
   过滤必须同时作用于 `details` 和模型行。
-- **在 `lsp` 下复制 `code_intel.semgrep.enabled`**：那是扫描/索引总开关；`lsp.display.semgrep`
-  只控制诊断面/即时扫描，`mode=off` 不关闭 `hermes code index` 的 Semgrep 层。
+- **在 `lsp` 下复制 `code_intel.semgrep.enabled`**：那是扫描总开关；`lsp.display.semgrep`
+  只控制诊断面/即时扫描，`mode=off` 不关闭 scanner（ADR-15 D1 起索引也不跑 Semgrep）。
 - **把 `mode=off` 当成 `lsp.enabled=false` / `code_intel.enabled=false`**：展示策略不关闭子系统；
   关闭服务仍用原有开关。
 - **沿用 ADR-8 D17 的“仅显式索引、写路径不跑”**：这会让 Semgrep 在编辑后不可见，与“Semgrep 和
@@ -943,9 +947,9 @@ lsp:
 - `lsp.display.*.severities` 只接受 `error`/`warning`；Semgrep 的 `info`/`hint` 与 LSP 的
   `info`/`hint` 仍不在展示面（组件没有独立色调）。要统一完整 severity 策略，需要另立配置/展示
   决策。
-- `code_intel`/`hermes code diagnostics` 对已存 `CodeDiagnostic` 的查询仍可能返回旧 Revision 的
-  行；它只是查询面，不是写入后即时诊断的来源。若未来要让查询面也证明新鲜度，再给 schema 加
-  Revision/内容身份；本 ADR 的即时路径不依赖它。
+- `code_intel`/`hermes code diagnostics` 对已存 `CodeDiagnostic` 的查询可能返回旧 Revision 的
+  解析/分析行；它只是查询面，不是写入后即时诊断的来源。ADR-15 D1 已把 Semgrep 行排除出该查询，
+  因此 Semgrep 不再有“旧行”问题；解析诊断的新鲜度若需要证明，再给 schema 加 Revision/内容身份。
 - `transcript.custom` 是通用 custom 行事件；本 ADR 只定义 `lsp-late-diagnostic` 的消费者。其它
   custom 类型若需要 live 事件，可直接复用该事件，但必须自己的 `custom_type` 在
   `MESSAGE_CUSTOM_TYPES` 中有明确模型语义。

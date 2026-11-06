@@ -152,6 +152,7 @@ def test_code_intel_diagnostics_without_a_path_reports_stored_graph(code_home, t
         {"action": "diagnostics", "root": str(root)}))
 
     assert payload["source"] == "stored_graph"
+    assert payload["semgrep"] == "live_only"
 
 
 def test_code_graph_update_refresh_file(code_home, tmp_path):
@@ -175,8 +176,8 @@ def test_code_graph_update_refresh_file(code_home, tmp_path):
 
 
 def test_code_graph_update_refresh_file_returns_semgrep_findings(code_home, tmp_path, monkeypatch):
-    """ADR-9 D8: ``refresh_file`` with ``semgrep: true`` hands the model the scan's findings (the
-    indexer used to discard them)."""
+    """ADR-15 D1: ``refresh_file`` with ``semgrep: true`` returns a live scan in the
+    ``CodeDiagnostic`` shape; the index never writes Semgrep rows."""
     import tools.code_graph_update_tool as update_tool
     from hermes_codegraph import CodeIntelligence
     from hermes_codegraph.config import CodeGraphLimits
@@ -203,4 +204,5 @@ def test_code_graph_update_refresh_file_returns_semgrep_findings(code_home, tmp_
 
     assert payload["status"] == "patched"
     assert payload["semgrep"]["findings"] == 1
-    assert payload["semgrep"]["results"][0]["rule_id"] == "python.lang.security.eval"
+    assert payload["semgrep"]["results"][0]["code"] == "python.lang.security.eval"
+    assert payload["semgrep"]["results"][0]["line_number"] == 1

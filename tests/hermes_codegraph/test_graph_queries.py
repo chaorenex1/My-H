@@ -198,3 +198,79 @@ def test_repositories_do_not_mix(code_home, tmp_path):
         two_symbols = two.find_symbols(name="shared", limit=20)["results"]
         assert {item["qualified_name"] for item in one_symbols} == {"a.shared"}
         assert {item["qualified_name"] for item in two_symbols} == {"b.shared"}
+
+
+def test_diagnostics_query_excludes_stored_semgrep_rows(code_home, tmp_path):
+    """ADR-15 D1: the query surface never returns stored Semgrep findings, and a page short after
+    filtering re-fetches a larger one until it fills or the graph runs out."""
+    from hermes_graph.serialization import new_node_id
+
+    root = make_repo(tmp_path / "diag")
+    (root / "mod.py").write_text("def helper(x):\n    return x\n", encoding="utf-8")
+    commit(root)
+    with _open(root) as ci:
+        ci.index()
+        repo_id = ci.repository.repository_id
+
+        def _diag(tool: str, line: int, code: str) -> None:
+            ci._client.nodes.upsert(
+                "CodeDiagnostic",
+                f"diag_{new_node_id()}",
+                {
+                    "repository_id": repo_id,
+                    "file_path": "mod.py",
+                    "line_number": line,
+                    "column_number": 1,
+                    "code": code,
+                    "tool": tool,
+                    "severity": "warning",
+                    "message": f"{code} finding",
+                },
+            )
+
+        for index in range(25):
+            _diag("semgrep", index + 1, f"semgrep.rule.{index}")
+        _diag("tree_sitter", 1, "parse-ambiguous")
+        _diag("tree_sitter", 2, "parse-timeout")
+
+        payload = ci.get_diagnostics(limit=2)
+
+    assert [item["code"] for item in payload["results"]] == ["parse-ambiguous", "parse-timeout"]
+    assert {item["tool"] for item in payload["results"]} == {"tree_sitter"}
+
+
+def test_search_without_tool_refetches_and_flags_truncation():
+    """ADR-15 D1: a page dominated by excluded rows re-fetches; a cut page is truncated even when
+    the graph itself reported no more rows."""
+    from types import SimpleNamespace
+
+    from hermes_codegraph.query import _search_without_tool
+
+    class _Nodes:
+        def __init__(self, tools: list[str]) -> None:
+            self.tools = tools
+            self.calls: list[int] = []
+
+        def search(self, node_type, filters, *, limit):
+            self.calls.append(limit)
+            items = [
+                SimpleNamespace(properties={"tool": tool}) for tool in self.tools[:limit]
+            ]
+            return SimpleNamespace(items=items, has_more=len(self.tools) > limit)
+
+    dominated = _Nodes(["semgrep"] * 30 + ["tree_sitter"] * 3)
+    items, truncated = _search_without_tool(
+        SimpleNamespace(nodes=dominated), "CodeDiagnostic", {},
+        field="tool", value="semgrep", limit=2,
+    )
+    assert dominated.calls == [20, 40]  # the short first page triggered a refetch
+    assert [item.properties["tool"] for item in items] == ["tree_sitter"] * 2
+    assert truncated is True  # the [:limit] cut dropped the third kept row
+
+    starved = _Nodes(["semgrep"] * 3000 + ["tree_sitter"])
+    items, truncated = _search_without_tool(
+        SimpleNamespace(nodes=starved), "CodeDiagnostic", {},
+        field="tool", value="semgrep", limit=2,
+    )
+    assert starved.calls[-1] == 1000  # stops at the graph's max page
+    assert items == [] and truncated is True

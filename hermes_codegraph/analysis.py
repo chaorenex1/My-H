@@ -1,7 +1,8 @@
 """Optional analysis adapters: ast-grep structural search and Semgrep diagnostics.
 
 Neither adapter creates graph facts. ast-grep returns reference expressions for
-``code_graph_update``; Semgrep findings become ``CodeDiagnostic`` nodes only.
+``code_graph_update``; Semgrep is a live-only source (ADR-15 D1) whose findings are
+returned to the caller and never written to the graph.
 Both resolve their binaries through PM, never from the application venv.
 """
 
@@ -201,3 +202,32 @@ def semgrep_scan(
         "findings": findings,
         "exit_code": completed.returncode,
     }
+
+
+def live_finding(item: dict[str, Any], rel_path: str) -> dict[str, Any]:
+    """One live Semgrep finding in the stored ``CodeDiagnostic`` shape (paths repo-relative).
+
+    ADR-15 D1: the live scan is the only Semgrep source; ``refresh_file`` and
+    ``code_intel(diagnostics)`` both answer in this shape.
+    """
+    start_line = _positive_int(item.get("start_line"), 1)
+    start_column = _positive_int(item.get("start_column"), 1)
+    return {
+        "file_path": rel_path,
+        "line_number": start_line,
+        "column_number": start_column,
+        "end_line": _positive_int(item.get("end_line"), start_line),
+        "end_column": _positive_int(item.get("end_column"), start_column),
+        "code": str(item.get("rule_id") or ""),
+        "tool": "semgrep",
+        "severity": str(item.get("severity") or "").lower(),
+        "message": str(item.get("message") or ""),
+    }
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default

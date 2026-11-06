@@ -94,13 +94,30 @@ def refresh_file(
     semgrep_result = None
     if semgrep:
         if limits.semgrep_enabled and limits.enabled:
-            from .scanner import ScanResult
+            from .analysis import live_finding, semgrep_scan
 
-            scan_result = ScanResult(files=[scanned])
-            # ADR-9 D8: the explicit ``semgrep=true`` query returns what the scan just observed on
-            # the current bytes, not a graph lookup that may describe an older revision.
-            semgrep_result = indexer._run_semgrep(
-                scan_result, _snapshot_hash(client, repository), include_findings=True)
+            # ADR-15 D1: ``semgrep=true`` is a live scan of the current bytes; the findings are
+            # returned to the caller and never written as CodeDiagnostic/CodeAnalysisRun.
+            home = absolute.parent
+            try:
+                from hermes_constants import get_hermes_home
+
+                home = Path(get_hermes_home())
+            except Exception:  # health: allow BLE001 -- profile path probe is optional
+                logger.debug("hermes home unavailable for semgrep", exc_info=True)
+            result = semgrep_scan(
+                absolute.parent, [absolute.name], mode=limits.semgrep_mode, home=home
+            )
+            findings = [
+                item for item in result.get("findings") or [] if isinstance(item, dict)
+            ]
+            semgrep_result = {
+                "status": result.get("status"),
+                "findings": len(findings),
+                "mode": result.get("mode"),
+                "install_hint": result.get("install_hint"),
+                "results": [live_finding(item, rel_path) for item in findings],
+            }
         else:
             semgrep_result = {"status": "disabled", "findings": 0}
     snapshot = _mark_patched(client, repository)

@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .analysis import IMMEDIATE_TIMEOUT_S
+from .analysis import IMMEDIATE_TIMEOUT_S, live_finding
 from .config import CodeGraphLimits
 from .exceptions import CodeGraphError, CodeGraphUnavailableError, LanguageUnsupportedError
 from .languages import (
@@ -302,7 +302,7 @@ class CodeIntelligence:
         if result.get("status") != "ok":
             return None
         findings = [
-            _live_finding(item, rel_path.as_posix())
+            live_finding(item, rel_path.as_posix())
             for item in result.get("findings") or []
             if isinstance(item, dict)
             and (not severity or str(item.get("severity") or "").lower() == severity.lower())
@@ -502,27 +502,3 @@ def _extras_state() -> tuple[bool, bool, str | None]:
         target = None
     return graph_available, codegraph_available, target
 
-
-def _live_finding(item: dict[str, Any], rel_path: str) -> dict[str, Any]:
-    """One live Semgrep finding in the stored ``CodeDiagnostic`` shape (paths repo-relative)."""
-    start_line = _positive_int(item.get("start_line"), 1)
-    start_column = _positive_int(item.get("start_column"), 1)
-    return {
-        "file_path": rel_path,
-        "line_number": start_line,
-        "column_number": start_column,
-        "end_line": _positive_int(item.get("end_line"), start_line),
-        "end_column": _positive_int(item.get("end_column"), start_column),
-        "code": str(item.get("rule_id") or ""),
-        "tool": "semgrep",
-        "severity": str(item.get("severity") or "").lower(),
-        "message": str(item.get("message") or ""),
-    }
-
-
-def _positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default

@@ -402,6 +402,7 @@ def _status(args) -> int:
             "semgrep": {
                 "enabled": limits.semgrep_enabled,
                 "mode": limits.semgrep_mode,
+                "source": "live_only",
             },
         },
         "config_error": config_error,

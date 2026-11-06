@@ -19,6 +19,12 @@ skill；**P5** 分析事实回写工具 `code_graph_update`（按文件
 `semgrep.enabled`/`semgrep.mode` 子开关）；新增 D17 定义语法/语义/危险模式诊断的分层与 Semgrep
 契约。
 
+**修订（2026-11-05，ADR-15 D1）**：Semgrep 改为**只走 live 路径**。`hermes code index` 不再运行
+Semgrep，图不再写 `CodeDiagnostic(tool="semgrep")`/`CodeAnalysisRun(kind="semgrep")`；
+`refresh_file(semgrep=true)` 与 `code_intel(diagnostics, path=...)` 仍现场扫描并返回
+`CodeDiagnostic` 形状的 findings；查询面排除历史 Semgrep 行。D17、P4、P6 中“索引期 Semgrep 层”
+的表述按此失效，Semgrep 作为即时诊断源的结论不变。
+
 **校准（2026-11-03，对照当前工作树）**：`hermes_graph/` 的现状与本文的增量假设已逐项核对：
 
 - `edges` 只有 `create()`（每次 `new_node_id()` 生成 UUIDv7），没有 `upsert`；关系表**没有主键**
@@ -184,7 +190,7 @@ ACIE 草案给出的方向是对的：把节点、关系、证据、分析结果
 v1 的消费者：`hermes code` CLI、core 测试、P4 的只读模型工具 `code_intel`、P5 的
 `code_graph_update`，以及未来的 Advisor/Reviewer/Coding Agent（不在本 ADR 实现，只冻结 Python
 API）。明确不接入：
-`agent/memory_*`、`agent/learning_graph.py`、`agent/adviser*`、任何 gateway hook。P1–P3 不注册
+`agent/memory_*`、`agent/learning_graph.py`、`agent/advisor*`、任何 gateway hook。P1–P3 不注册
 模型工具；P4 把 `code_intel` 加入默认工具面（D10），P5 加入 `code_graph_update`（D15）。
 
 **与 ACIE 架构图的对应**：
@@ -1097,7 +1103,7 @@ code_intel:
 - `code_intel.semgrep.mode` 只接受 `auto`（默认）与 `custom_dir`；其他值在配置加载时拒绝。
   `auto` 用 Semgrep registry 推荐规则（首次/缓存失效时可能联网，始终 `--metrics=off`）；
   `custom_dir` 只读 `get_hermes_home()/code-intelligence/semgrep/`，离线可用；目录缺失/为空时
-  诊断跳过并写 `CodeAnalysisRun`，不影响索引；
+  该次 live 诊断跳过（不写状态行，ADR-15 D1），不影响索引；
 
 不提供索引路径配置：图数据库路径由 `GraphClient.open()` 固定为
 `get_hermes_home()/graph/graph.lbdb`，代码图不能把数据指到 profile 之外。
@@ -1129,7 +1135,8 @@ code_intel:
 **动作**：
 
 1. `refresh_file(path, semantic=false, semgrep=false)`：单文件权威重建——重算 hash、重新解析
-   （`semantic=true` 时复用 D6 的 LSP；`semgrep=true` 时运行 D17 的 Semgrep），按 D7 的 per-file
+   （`semantic=true` 时复用 D6 的 LSP；`semgrep=true` 时对当前字节做 D17 的 live 扫描，不写图），
+   按 D7 的 per-file
    事务删除该文件及其符号作为 source 的边/证据，重建 File/Symbol/Module/TestCase/Diagnostic/
    Evidence；更新 `content_hash`/`indexed_hash`/`indexed_revision` 与 `snapshot_hash`。这是默认
    修复路径；`code_graph_update` 与 post-turn 固定 `semgrep=false`，不触发规则网络；
@@ -1229,7 +1236,7 @@ background review / side-question fork；curator 直接构造 `AIAgent`，只设
 
 **动作**：按 P5 的 `refresh_file` 单文件事务逐个更新；删除文件走 D7 删除语义；批提交递增 `code`
 scope 版本。默认 `semantic=false`，只有 `code_intel.semantic: true` 才调用 LSP；post-turn 固定
-`semgrep=false`，不运行 Semgrep，诊断由显式 `hermes code index` 刷新。单回合预算（内部
+`semgrep=false`，不运行 Semgrep；Semgrep 只在写路径与显式查询的 live 面出现（ADR-15 D1）。单回合预算（内部
 常量：文件数/时间）内完成；超限的文件保持 `stale`，仓库 metadata 标 `partial`，下一回合按 hash
 继续，全量 `hermes code index` 仍可兜底。脏工作树只更新当前图，不写 `PARENT_OF`/`CHANGED_IN`/
 `DELETED_IN`（D7）。
@@ -1256,7 +1263,7 @@ profile scope，不读 launch profile。异常只写 `CodeAnalysisRun(kind="post
 | Syntax | Tree-sitter | grammar 安装后始终启用 | Symbol/Module/Import/Call/Type/Test（`inferred`） | 不启动 LSP、不联网；未知语言不猜 |
 | Syntax（结构搜索） | ast-grep | 可选 | `reference_expression`/诊断证据 | 不单独建 `resolved` 边；未安装时 `hermes code find --pattern` 报 unavailable |
 | Semantic | `agent/lsp` 窄查询 API | `code_intel.semantic=false` | definition/reference/implementation（`resolved`）与 LSP 证据 | 仅 host filesystem、trust 允许的仓库；不扩大 trust、不新增 LSP 安装器；缺席时语法索引继续 |
-| Risk | Semgrep | `code_intel.semgrep.enabled=false`；`mode=auto` | `CodeDiagnostic`（rule_id/severity/span/excerpt_hash） | 只写诊断，不生成/替换 Symbol/Call/Type 边；不执行仓库代码；`auto` 仅拉取规则，`custom_dir` 离线 |
+| Risk | Semgrep（live-only，ADR-15 D1） | `code_intel.semgrep.enabled=false`；`mode=auto` | 调用方收到的 live finding（`CodeDiagnostic` 形状；ADR-15 起不写入图） | 不生成/替换 Symbol/Call/Type 边；不执行仓库代码；`auto` 仅拉取规则，`custom_dir` 离线 |
 
 **LSP 语义与语法**：LSP 不替代 Tree-sitter。索引先用语法层建立完整基线；`semantic=true` 时再按
 D6 的 occurrence 规则升级边。LSP 请求超时/失败返回空并保留语法事实，不把整个文件标失败。
@@ -1273,20 +1280,22 @@ D6 的 occurrence 规则升级边。LSP 请求超时/失败返回空并保留语
 - 调用：`semgrep scan --config <auto|dir> --json --metrics=off --disable-version-check`
   （单文件/批次、带超时与排除）；禁止 `semgrep ci`、`--autofix` 及任何写回；退出码只用于判断
   扫描是否完成，不把非零当索引失败；
-- 触发：`code_intel.enabled=true` 且 `code_intel.semgrep.enabled=true` 时，在 `hermes code index`
-  的语法解析之后按文件运行；显式 `refresh_file(semgrep=true)` 也可运行；post-turn reconciler 与
-  `code_graph_update` 固定 `semgrep=false`，不在后台触发规则网络；单文件超时/非零退出只写
-  `CodeAnalysisRun(status="skipped"|"failed")` 与该文件的 Diagnostic，不阻塞其余文件；
-- 产物：每条 finding 是 `CodeDiagnostic`，带 `source_tool="semgrep"`、
-  `source_tool_version`、`rule_id`、`severity`、`path`、`span`、`excerpt_hash`、`revision_id`、
-  `snapshot_hash`；不保存源码正文；
-- 查询：`CodeIntelligence.get_diagnostics(path=None, rule=None, severity=None, limit=...)` 返回
-  统一信封；`code_intel` 工具可返回诊断；没有 semgrep 时返回空并带
-  `diagnostics_available=false`，**不新增独立工具**，避免工具面/提示缓存抖动；
+- 触发（**ADR-15 D1 修订**）：Semgrep 只走 live 路径——`write_file`/`patch` 的即时检查、
+  显式 `refresh_file(semgrep=true)`、`code_intel(diagnostics, path=...)`；
+  `hermes code index` 不运行 Semgrep，post-turn reconciler 与 `code_graph_update` 固定
+  `semgrep=false`；单次扫描超时/非零退出只影响该次返回（`status="failed"`/`"unavailable"`），
+  不阻塞索引、不写状态行；
+- 产物（**ADR-15 D1 修订**）：findings 以 `CodeDiagnostic` 形状返回给调用方
+  （`file_path`/`line_number`/`column_number`/`end_line`/`end_column`/`code`(rule id)/
+  `tool`/`severity`/`message`），不写入图、不保存源码正文；
+- 查询：`CodeIntelligence.get_diagnostics(path=None, rule=None, severity=None, limit=...)` 只返回
+  存图的解析/分析诊断并排除 `tool="semgrep"`；带 `path` 的显式查询先 live 扫描
+  （`source="live_scan"`），失败才回退存图（`source="stored_graph"` + `semgrep="live_only"`）；
+  没有 semgrep 时同样回退存图并给安装提示，**不新增独立工具**，避免工具面/提示缓存抖动；
 - 安全：只在 host filesystem 后端运行；不执行仓库代码；`mode=auto` 只拉取 registry 规则，
   `mode=custom_dir` 不联网；始终 `--metrics=off`，不上报 project URL；不写文件（无
-  `--autofix`）；`excerpt_hash` 必须匹配当前文件，诊断绑定 Revision，快照不一致时拒绝写入
-  （D15）。
+  `--autofix`）；findings 描述的是本次扫描的当前字节，不写入图，因此不需要 Revision/`excerpt_hash`
+  绑定（ADR-15 D1）。
 
 **开关矩阵**：
 
@@ -1298,7 +1307,7 @@ D6 的 occurrence 规则升级边。LSP 请求超时/失败返回空并保留语
 | `code_intel.semgrep.mode=auto`（默认） | `--config auto` 使用 registry 推荐规则；首次/缓存失效可能联网拉规则；`--metrics=off` |
 | `code_intel.semgrep.mode=custom_dir` | `--config <HERMES_HOME>/code-intelligence/semgrep/`；离线；目录缺失/为空时跳过诊断 |
 | `code_intel.semgrep.mode=<其他>` | 配置校验失败，不启动诊断 |
-| `code_intel.semgrep.enabled=true` + semgrep 缺失 | 诊断跳过，`diagnostics_available=false`，给 `hermes pm install semgrep` hint；索引成功 |
+| `code_intel.semgrep.enabled=true` + semgrep 缺失 | live 诊断跳过并回退存图（`semgrep="live_only"`），给 `hermes pm install semgrep` hint；索引成功 |
 
 ## 后果
 
@@ -1393,7 +1402,7 @@ D6 的 occurrence 规则升级边。LSP 请求超时/失败返回空并保留语
 | LSP 启动慢或挂起 | `--semantic` opt-in；每请求超时；失败不重试到死；语法索引先生效 |
 | 语义增强触发网络下载或项目代码执行 | `--semantic` 默认关闭；沿用 `lsp.install_strategy` 与 trust；离线设 `off`；`_lsp_local_only` 为假时不启动 LSP |
 | LSP 在未信任仓库执行项目代码 | 沿用 `UNTRUSTED_SAFE_SERVERS` 与 trust；代码图不提供绕过开关 |
-| Semgrep 联网/执行仓库代码或拖慢索引 | `code_intel.semgrep.enabled` 默认关闭；`mode=auto` 只拉取 registry 规则且 `--metrics=off`；离线用 `mode=custom_dir`；不执行仓库代码、不 `--autofix`；单文件超时/失败跳过并写 `CodeAnalysisRun`，不阻塞索引 |
+| Semgrep 联网/执行仓库代码 | `code_intel.semgrep.enabled` 默认关闭；`mode=auto` 只拉取 registry 规则且 `--metrics=off`；离线用 `mode=custom_dir`；不执行仓库代码、不 `--autofix`；索引不运行 Semgrep（ADR-15 D1），单次 live 扫描超时/失败只影响该次返回 |
 | profile registry 重复加载内置语言 | 内置 registry 先加载；profile 中同 `language` 条目跳过，不覆盖、不重复注册；`status`/`doctor` 报告 skipped 数 |
 | profile `tree-sitter/languages.yaml` 损坏或冲突 | 单文件整文件校验；重复 `language` id/alias/extension、缺字段、未知字段、类型错误、越界路径结构化失败；profile 冲突条目跳过并报告，不覆盖内置事实 |
 | remote URL 携带 token 写入图 | 入库前剥离 userinfo/query/fragment；`remote_url` 只存脱敏值；日志同样脱敏 |
@@ -1523,8 +1532,8 @@ core 测试必须用 `scripts/run_tests.sh` 与临时 `HERMES_HOME`，不得写 
 26. **配置域与危险模式诊断**：`config.yaml` 只有 `code_intel` 域，不新增 `codegraph` 配置键；
     `code_intel.enabled=false` 时模型工具不注册、post-turn 不调度、LSP/Semgrep 不运行，CLI 仍可用
     并在 `status`/`doctor` 报告 `enabled=false`；`code_intel.semgrep.enabled=false` 时 Semgrep
-    不运行且语法/语义索引不受影响；开启但 semgrep 缺失/平台不支持时索引成功、
-    `diagnostics_available=false` 并给 `hermes pm install semgrep` hint；Semgrep 只调用
+    不运行且语法/语义索引不受影响；开启但 semgrep 缺失/平台不支持时索引成功，live 查询回退
+    存图（`semgrep="live_only"`）并给 `hermes pm install semgrep` hint；Semgrep 只调用
     `pm.env_for("semgrep")` 提供的 CLI；`mode=auto`（默认）使用 `--config auto` 的 registry
     推荐规则，`mode=custom_dir` 使用 `--config <HERMES_HOME>/code-intelligence/semgrep/`；
     两种模式都带 `--metrics=off`，禁止 `semgrep ci`/`--autofix`；`custom_dir` 离线，目录缺失/为空

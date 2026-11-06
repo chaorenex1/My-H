@@ -117,8 +117,11 @@ Set it to `false` to get the install hint without touching the environment.
 
 `semantic: true` reuses `agent/lsp` and can execute project build scripts
 through language servers; keep it off for untrusted or offline repositories.
-`semgrep.enabled` adds dangerous-pattern diagnostics only; it never creates
-symbol or call facts.
+`semgrep.enabled` only enables the live scanner: `write_file`/`patch`, an
+explicit `code_graph_update` with `semgrep: true`, and
+`code_intel(diagnostics, path=...)` scan the current bytes. `hermes code index`
+never runs Semgrep and the graph stores no Semgrep findings, so the query
+surface has no stale Semgrep rows to serve.
 
 ## Safety
 

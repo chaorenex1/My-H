@@ -244,6 +244,7 @@ def _diagnostics(ci: Any, args: dict[str, Any], limit: int) -> dict[str, Any]:
         severity=args.get("severity"), limit=limit,
     )
     payload["source"] = "stored_graph"
+    payload["semgrep"] = "live_only"
     return payload
 
 

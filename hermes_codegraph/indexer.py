@@ -143,11 +143,6 @@ class Indexer:
                 else {"status": "disabled"}
             )
             snapshot_hash = self._finalize(scan_result)
-            semgrep_result = (
-                self._run_semgrep(scan_result, snapshot_hash)
-                if self.limits.semgrep_enabled and self.limits.enabled
-                else {"status": "disabled", "findings": 0}
-            )
             elapsed = round(time.monotonic() - started, 3)
             return {
                 "status": "complete",
@@ -158,7 +153,6 @@ class Indexer:
                 "elapsed_seconds": elapsed,
                 "resolver": resolver_result,
                 "semantic": semantic_result,
-                "semgrep": semgrep_result,
                 **_stats_payload(self._stats),
             }
         except IndexLimitError as exc:
@@ -259,83 +253,6 @@ class Indexer:
             key: value for key, value in self._new_symbols.items()
             if key not in {str(new.get("symbol_id")) for _old, new in moves}
         }
-
-    def _run_semgrep(
-        self, scan_result: ScanResult, snapshot_hash: str, *, include_findings: bool = False
-    ) -> dict[str, Any]:
-        from .analysis import semgrep_scan
-
-        home = self.repo.root.parent
-        try:
-            from hermes_constants import get_hermes_home
-
-            home = get_hermes_home()
-        except Exception:
-            logger.debug("hermes home unavailable for semgrep", exc_info=True)
-        files = [item.rel_path for item in scan_result.files]
-        result = semgrep_scan(
-            self.repo.root,
-            files,
-            mode=self.limits.semgrep_mode,
-            home=home,
-        )
-        run_key = f"run_{new_node_id()}"
-        observed = _now_iso()
-        findings = result.get("findings") or []
-        with self.client.transaction.begin() as tx:
-            for finding in findings:
-                key = (
-                    f"{self.repo.key}@{finding['path']}#"
-                    f"{finding['start_line']}:{finding['start_column']}:"
-                    f"{finding['rule_id']}:semgrep"
-                )
-                tx.nodes.upsert(
-                    "CodeDiagnostic",
-                    key,
-                    {
-                        "repository_id": self.repo.repository_id,
-                        "file_path": finding["path"],
-                        "line_number": finding["start_line"],
-                        "column_number": finding["start_column"],
-                        "code": finding["rule_id"],
-                        "tool": "semgrep",
-                        "severity": finding["severity"],
-                        "message": finding["message"],
-                        "end_line": finding["end_line"],
-                        "end_column": finding["end_column"],
-                        "revision_id": self.revision_id,
-                        "snapshot_hash": snapshot_hash,
-                    },
-                )
-            tx.nodes.upsert(
-                "CodeAnalysisRun",
-                run_key,
-                {
-                    "repository_id": self.repo.repository_id,
-                    "kind": "semgrep",
-                    "status": result.get("status", "failed"),
-                    "started_at": observed,
-                    "finished_at": _now_iso(),
-                    "target_revision": self.revision_key,
-                    "snapshot_hash": snapshot_hash,
-                    "files_total": len(files),
-                    "files_indexed": len(files),
-                    "files_skipped": 0,
-                    "files_failed": 0,
-                    "error": str(result.get("error") or result.get("reason") or "")[:2000],
-                },
-            )
-        payload = {
-            "status": result.get("status"),
-            "findings": len(findings),
-            "mode": result.get("mode"),
-            "install_hint": result.get("install_hint"),
-        }
-        if include_findings:
-            # ``refresh_file`` hands the model the findings it just observed on the current bytes
-            # (ADR-9 D8); the indexed run keeps the compact count.
-            payload["results"] = findings
-        return payload
 
     def _enhance_semantic(self) -> dict[str, Any]:
         from .semantic import enhance

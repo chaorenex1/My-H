@@ -627,6 +627,40 @@ def get_coverage(
     )
 
 
+#: ``nodes.search`` clamps a page to the graph's ``max_search_limit`` (1000 by default); this is
+#: the largest page ``get_diagnostics`` will ask for while dropping stored Semgrep rows.
+_DIAGNOSTICS_MAX_BATCH = 1000
+
+
+def _search_without_tool(
+    client: Any,
+    node_type: str,
+    filters: dict[str, Any],
+    *,
+    field: str,
+    value: str,
+    limit: int,
+) -> tuple[list[Any], bool]:
+    """Equality-only ``nodes.search`` cannot exclude a value, so drop those rows in memory.
+
+    ADR-15 D1: stored ``CodeDiagnostic(tool="semgrep")`` rows must never reach the query surface.
+    A page that is short after filtering re-fetches a larger one while the graph has more rows.
+    """
+    batch = max(limit * 2, 20)
+    while True:
+        batch = min(batch, _DIAGNOSTICS_MAX_BATCH)
+        result = client.nodes.search(node_type, filters, limit=batch)
+        items = [
+            node
+            for node in result.items
+            if str(getattr(node, "properties", {}).get(field) or "") != value
+        ]
+        if len(items) >= limit or not result.has_more or batch >= _DIAGNOSTICS_MAX_BATCH:
+            # Rows dropped by the ``[:limit]`` cut are truncation even when the graph had no more.
+            return items[:limit], bool(result.has_more) or len(items) > limit
+        batch *= 2
+
+
 def get_diagnostics(
     client: Any,
     repository: RepositoryInfo,
@@ -645,12 +679,14 @@ def get_diagnostics(
         filters["code"] = rule
     if severity is not None:
         filters["severity"] = severity
-    result = client.nodes.search("CodeDiagnostic", filters, limit=limit)
-    items = [_node_payload(node) for node in result.items]
+    nodes, has_more = _search_without_tool(
+        client, "CodeDiagnostic", filters, field="tool", value="semgrep", limit=limit
+    )
+    items = [_node_payload(node) for node in nodes]
     items.sort(key=lambda item: (item.get("file_path") or "", item.get("line_number") or 0))
     return _envelope(
         client, repository, registry, results=items, total=len(items),
-        truncated=bool(result.has_more), policy="balanced",
+        truncated=has_more, policy="balanced",
         limits={"limit": limit, "max_results": 200},
     )
 
