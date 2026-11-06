@@ -5,8 +5,10 @@ helpers (``_sessions``, ``_ok``, ``_err``, ...) bare; module-level helpers are p
 server.py the same way (tests monkeypatching ``server.X`` still intercept)."""
 
 import contextlib
+from pathlib import Path
 
 from .method_ctx import HandlerRegistry, bind_module
+from .methods_session_resume import _resume_follow_tip, _resume_restore_offloaded
 
 _registry = HandlerRegistry()
 method = _registry.method
@@ -115,6 +117,10 @@ def _session_row_summary(row: dict, *, tip_row: dict | None = None, resolved_id=
             "title": row.get("title") or "", "preview": tip_row.get("preview") or "",
             "started_at": row.get("started_at") or 0, "message_count": tip_row.get("message_count") or 0,
             "source": row.get("source") or "",
+            # ADR-16 D8: the row survives a --prune-source offload; the UI must offer restore
+            # instead of resuming an empty conversation.
+            "archived": bool(row.get("archived")),
+            "restore_required": bool(row.get("offloaded")),
             # Durable lineage root for compressed conversations — the same field REST
             # projects (api_server._session_response); RPC consumers (desktop pinning /
             # lineage dedup) group on it. #66663.
@@ -568,7 +574,7 @@ def _(rid, params: dict) -> dict:
         try:
             # Generous over-fetch: many denied rows must not yield a false "none".
             rows = ([row for row in _listing_rows(db, 200)
-                     if not _auto_resume_denied_source(row)]
+                     if not _auto_resume_denied_source(row) and not row.get("offloaded")]
                     if db is not None else [])
             for row in rows[:1]:
                 return _ok(rid, {"session_id": row.get("id"), "title": row.get("title") or "",
@@ -815,26 +821,8 @@ def _resume_locate(ctx: _Resume) -> dict | None:
     return None if ctx.found else _err(ctx.rid, 4007, "session not found")
 
 
-def _resume_follow_tip(ctx: _Resume) -> None:
-    """Rebind a rotated-out parent id to its compression tip (resuming the original reloads the parent
-    transcript and loses the post-compression reply). Skipped for lazy watch windows (exact child); Bot Chat
-    follows proven compression edges only."""
-    if not ctx.found or ctx.lazy:
-        return
-    tip = ctx.target
-    with contextlib.suppress(Exception):
-        from tools.bot_mode_probe import BOT_CHAT_TITLE
-        if (ctx.found.get("title") or "").strip() == BOT_CHAT_TITLE:
-            tip = ctx.db.get_compression_tip(ctx.target) or ctx.target
-        else:
-            tip = ctx.db.resolve_resume_session_id(ctx.target)
-    if tip and tip != ctx.target:
-        ctx.target = tip
-        ctx.found = ctx.db.get_session(tip) or ctx.found
-
-
 def _resume_guard(ctx: _Resume) -> dict | None:
-    """Refuse a runaway transcript before any history read (sessions.max_resume_messages). Deferred /
+    """Refuse a runaway transcript before any history read (sessions.max_resume_messages). Deferred
     omit_messages / lazy paths load the TIP segment only and are guarded tip-only (a lineage count rejected
     exactly the well-compressed chats). Metadata fallback for lightweight adaptor DBs; fails OPEN on errors.
 
@@ -1054,6 +1042,8 @@ def _(rid, params: dict) -> dict:
         if (resp := _resume_locate(ctx)) is not None:
             return resp
         _resume_follow_tip(ctx)
+        if (restore_error := _resume_restore_offloaded(ctx)) is not None:
+            return _err(ctx.rid, 4133, restore_error)
         if (resp := _resume_guard(ctx)) is not None:
             return resp
         ctx.profile_resume_cwd = (_resumable_stored_cwd(_str_param(ctx.found, "cwd"), ctx.profile_home)
@@ -2319,3 +2309,5 @@ def register(server) -> None:
     methods_session_interrupt.register(server)
     from . import methods_session_history
     methods_session_history.register(server)
+    from . import methods_session_resume
+    methods_session_resume.register(server)

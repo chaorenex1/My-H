@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import sys
+from pathlib import Path
 
 from rich.markup import escape as _escape
 
@@ -174,6 +175,30 @@ def _gateway_open(session_db, session_id):
         return session_id, (str(exc) if str(exc) in RESUME_GONE else None)
     except Exception:  # health: allow BLE001 -- no answer: the turn reports the lost connection itself
         return session_id, None
+
+
+def _restore_resume_target(session_db, session_id: str, session_meta: dict):
+    """``(session_id, session_meta, refusal)`` — restore an offloaded row before a resume.
+
+    ADR-16 D8: the message rows live only in the cold mirror, so both the CLI startup
+    resume and ``/resume`` must verify and restore first. A failure is returned as text so
+    the caller keeps the current session instead of loading an empty one.
+    """
+    if not session_meta.get("offloaded") or not hasattr(session_db, "restore_session_messages"):
+        return session_id, session_meta, None
+    from hermes_session_mirror import MirrorError, ensure_session_restored
+
+    home = Path(session_db.db_path).parent if getattr(session_db, "db_path", None) else None
+    try:
+        refreshed = ensure_session_restored(session_db, session_id, home=home)
+    except MirrorError as exc:
+        return session_id, session_meta, str(exc)
+    return session_id, refreshed or session_meta, None
+
+
+def _without_session_meta(messages) -> list:
+    """Drop the synthetic ``session_meta`` row the resume projections can carry."""
+    return [m for m in (messages or []) if m.get("role") != "session_meta"]
 
 
 def _user_display_text(content) -> str:
@@ -887,6 +912,11 @@ class CLIAgentSetupMixin:
             session_meta,
             lambda rid: self._console_print(
                 f"[dim]{_escape(t('cli.resume.compressed_into', session_id=self.session_id, descendant=rid))}[/]"))
+        self.session_id, session_meta, refusal = _restore_resume_target(
+            self._session_db, self.session_id, session_meta)
+        if refusal:
+            self._console_print(f"[bold red]{_escape(refusal)}[/]")
+            return False
         # A Kanban worker transcript resumes only through a dispatcher-owned run (#68779) —
         # an ordinary CLI resume would be a live writer the board cannot observe. Refuse AND
         # fall back to a fresh session id, so this process never appends to the worker row.

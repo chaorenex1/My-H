@@ -61,6 +61,9 @@ DATA_USE = "data_use"
 # ADR-10 D5: the executor's verdict rides the durable display metadata (one copy); the wire
 # projection reads it into ``TranscriptMessage.is_error``.
 TOOL_RESULT_METADATA = "tool_result_metadata"
+# ADR-16 D3: the host-side archive files for one tool call (step, artifact paths, truncated).
+# Display/audit metadata only — never the model's recovery path (that stays ``cache/spillover``).
+TOOL_OUTPUT_ARTIFACTS = "tool_output_artifacts"
 
 
 def stamp_tool_result_metadata(message: MutableMapping[str, Any], metadata: Any, *, is_error: bool) -> None:
@@ -96,6 +99,16 @@ def _display_metadata_str(message: Any, key: str) -> Optional[str]:
 def data_use_requirement(messages: Any) -> frozenset[str]:
     """The union of ``data_use`` over *messages*: what the model receiving them must guarantee."""
     return frozenset(r for m in messages or () if isinstance(m, Mapping) for r in m.get(DATA_USE) or ())
+
+
+def stamp_tool_output_artifacts(message: MutableMapping[str, Any], artifacts: dict[str, Any]) -> None:
+    """Attach the tool-call archive descriptor (ADR-16 D3) to a tool message's durable
+    ``display_metadata``; merged, so a result-metadata callback's payload survives."""
+    metadata = message.get("display_metadata")
+    message["display_metadata"] = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        TOOL_OUTPUT_ARTIFACTS: dict(artifacts),
+    }
 
 
 def stamp_data_use(message: MutableMapping[str, Any], requires: list[str]) -> None:

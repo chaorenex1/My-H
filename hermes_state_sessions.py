@@ -1960,9 +1960,9 @@ class SessionSessionsMixin:
     # The ``NOT EXISTS`` probe is the authority; : ``message_count = 0`` stays as a cheap prefilter. Same
     # shape as every : other emptiness guard in this module. (#95868)
     _EMPTY_SESSION_WHERE = (
-        "message_count = 0 AND ended_at IS NOT NULL AND archived = 0 AND NOT EXISTS ("
-        "SELECT 1 FROM messages WHERE messages.session_id = sessions.id)"
-    )
+        "message_count = 0 AND ended_at IS NOT NULL AND archived = 0 "
+        "AND COALESCE(offloaded, 0) = 0 AND NOT EXISTS ("
+        "SELECT 1 FROM messages WHERE messages.session_id = sessions.id)")
 
     def count_empty_sessions(self) -> int:
         """Count of empty, ended, non-archived sessions; ended_at guards a fresh session's first message."""

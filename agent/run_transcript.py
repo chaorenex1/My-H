@@ -63,9 +63,63 @@ def _stem(value: Any, fallback: str) -> str:
 
 
 def path_for(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> Path:
-    """The file one agent session's history lands on (no file is created)."""
+    """The pre-ADR-16 file one agent session's history landed on (no file is created)."""
     return (sessions_dir(home) / _stem(agent, "agent")
             / f"{_stem(agent_session_id, 'agent-session')}.jsonl")
+
+
+def summary_dir(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> Path:
+    """The legacy ``.summaries/`` directory (ADR-16 P2): one-time migration source only."""
+    return (sessions_dir(home) / _stem(agent, "agent")
+            / f"{_stem(agent_session_id, 'agent-session')}.summaries")
+
+
+def stored_path(agent_session_id: str, *, home: Optional[Path] = None) -> Optional[Path]:
+    """``agent_session.transcript_path`` for this id, when the row exists.
+
+    The row is the authoritative mapping ADR-16 D2 requires: a session bundle is created
+    once, and every later run appends to the path recorded there. An explicit *home*
+    opts out of the lookup (tests pin a temporary root with no state.db).
+    """
+    if home is not None or not agent_session_id:
+        return None
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- a run must not depend on the store
+        logger.debug("run transcript: no store for path lookup", exc_info=True)
+        return None
+    try:
+        row = db.get_agent_session(str(agent_session_id))
+    except Exception:  # health: allow BLE001 -- an unreadable row falls back to the old layout
+        logger.debug("run transcript: path lookup failed", exc_info=True)
+        return None
+    finally:
+        release_or_close(db)
+    if not row:
+        return None
+    raw = str(row.get("transcript_path") or "").strip()
+    return Path(raw) if raw else None
+
+
+def resolve_path(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> Path:
+    """Where this session's transcript lives: the row's recorded path, else the legacy file.
+
+    ADR-16 D4: rows created before the bundle layout keep their old path untouched, so the
+    fallback is not dead code — it is how a pre-P2 session stays readable.
+    """
+    recorded = stored_path(agent_session_id, home=home)
+    if recorded is not None and recorded.is_file():
+        return recorded
+    return path_for(agent, agent_session_id, home=home)
+
+
+def resolve_write_path(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> Path:
+    """The file a run appends to. Unlike :func:`resolve_path`, a recorded path wins even
+    before the first write creates it — the row is the mapping, not a hint."""
+    recorded = stored_path(agent_session_id, home=home)
+    return recorded if recorded is not None else path_for(agent, agent_session_id, home=home)
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -238,15 +292,19 @@ def _append(path: Path, rows: Iterable[Mapping[str, Any]]) -> int:
 def record(agent: str, agent_session_id: str, messages: Iterable[Mapping[str, Any]], *,
            model: str = "", provider: str = "",
            system_message: str = "", usage: Optional[Mapping[str, Any]] = None,
-           home: Optional[Path] = None) -> dict[str, Any]:
+           home: Optional[Path] = None, path: Optional[Path] = None) -> dict[str, Any]:
     """Append one run to its agent session's stream, dropping a history prefix it already holds.
 
     A run continuing from another session is handed that history as ``messages``; matching
     fingerprints are removed once (multiset), so the file grows by what happened this run, not by
     the length of the prompt. Returns ``{"path", "written", "appended"}``. Raises ``OSError`` when
     the write itself fails: the caller decides whether that is fatal.
+
+    *path* is the session bundle file the row recorded; without it the row's path wins, then
+    the legacy per-agent file (ADR-16 D4).
     """
-    path = path_for(agent, agent_session_id, home=home)
+    path = Path(path) if path is not None else resolve_write_path(agent, agent_session_id,
+                                                                  home=home)
     incoming: list[dict[str, Any]] = []
     for message in messages or ():
         if isinstance(message, Mapping):
@@ -281,15 +339,18 @@ def record(agent: str, agent_session_id: str, messages: Iterable[Mapping[str, An
     return {"path": str(path), "written": True, "appended": appended - 1 - int(new_system)}
 
 
-def read_events(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
+def read_events(agent: str, agent_session_id: str, *, home: Optional[Path] = None,
+                path: Optional[Path] = None) -> list[dict[str, Any]]:
     """Every parsed row of one agent session; an unreadable or missing file is an empty list."""
-    return _read_rows(path_for(agent, agent_session_id, home=home))
+    target = Path(path) if path is not None else resolve_path(agent, agent_session_id, home=home)
+    return _read_rows(target)
 
 
-def read_history(agent: str, agent_session_id: str, *, home: Optional[Path] = None) -> list[dict[str, Any]]:
+def read_history(agent: str, agent_session_id: str, *, home: Optional[Path] = None,
+                 path: Optional[Path] = None) -> list[dict[str, Any]]:
     """One agent session as host ``conversation_history`` messages (system prompt excluded)."""
     messages: list[dict[str, Any]] = []
-    for row in read_events(agent, agent_session_id, home=home):
+    for row in read_events(agent, agent_session_id, home=home, path=path):
         if str(row.get("kind") or "") != "msg":
             continue
         role = str(row.get("role") or "")
@@ -314,4 +375,5 @@ def read_history(agent: str, agent_session_id: str, *, home: Optional[Path] = No
     return messages
 
 
-__all__ = ["fingerprint", "path_for", "read_events", "read_history", "record", "sessions_dir"]
+__all__ = ["fingerprint", "path_for", "read_events", "read_history", "record", "resolve_path",
+           "resolve_write_path", "sessions_dir", "stored_path", "summary_dir"]

@@ -118,6 +118,7 @@ class SessionMaintenanceMixin:
                 SELECT id FROM sessions
                 WHERE source = 'tui'
                   AND title IS NULL
+                  AND COALESCE(offloaded, 0) = 0
                   AND ended_at IS NOT NULL
                   AND started_at < ?
                   AND NOT EXISTS (
@@ -199,6 +200,7 @@ class SessionMaintenanceMixin:
                                  " h.last_heartbeat >= ? AND h.started_at <= sessions.started_at + ?)")
             heartbeat_params = (now - hb_staleness, hb_grace)
         scope_sql = f" AND source IN ({_placeholders(srcs)}){pin_scope} AND {orphan_predicate}"
+        scope_sql += " AND COALESCE(offloaded, 0) = 0"
         scope_params = (*srcs, cutoff, cutoff, *heartbeat_params)
         def _do(conn):
             rows = conn.execute(f"SELECT id FROM sessions WHERE ended_at IS NULL{scope_sql}",
@@ -234,6 +236,9 @@ class SessionMaintenanceMixin:
             raise TypeError("SessionMaintenanceMixin._prune_filter_where() got an unexpected "
                             f"keyword argument {min(unknown)!r}")
         clauses = [] if include_open else ["s.ended_at IS NOT NULL"]
+        # ADR-16 D8: an offloaded row's only message copy is its mirror. Automatic or bulk
+        # prune/delete must never interpret its empty transcript as disposable.
+        clauses.append("COALESCE(s.offloaded, 0) = 0")
         if lineage_tips_only:
             clauses.append("COALESCE(s.end_reason, '') <> 'compression'")
             # Bulk archive is housekeeping, like the idle sweep: it never retires the canonical

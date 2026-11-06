@@ -244,6 +244,10 @@ class SessionListRow(Result):
     message_count: int = 0
     live_message_count: int | None = None
     source: str = ""
+    # ADR-16 D8: a cold-mirrored row survives ``--prune-source``; ``restore_required`` means
+    # its messages live only in the bundle and resume will restore them first.
+    archived: bool = False
+    restore_required: bool = False
     # Durable lineage root of a compressed conversation (REST parity, #66663); None on
     # rows that are not projected compression tips.
     lineage_root_id: str | None = Field(default=None, alias="_lineage_root_id")
@@ -255,6 +259,71 @@ class SessionListResult(Result):
 
 method("session.list", params=SessionListParams, result=SessionListResult,
        doc="Human-facing stored sessions, most recent first (sub-agent / kanban sources denied).")
+
+
+# ── mirrored transcript files (ADR-16 P4 / D7) ───────────────────────────────────────────────
+#
+# The cold mirror is the only place a pruned session's messages still exist, and the picker must
+# be able to tell "mirrored" from "not mirrored" without reading the host filesystem. The RPC is
+# read-only and addresses bundles by session id only — a client-supplied path is never opened.
+
+
+class SessionTranscriptListParams(ProfileParams):
+    limit: int | None = None
+
+
+class SessionTranscriptFile(Result):
+    """One bundle's main JSONL (``<project>/<timestamp>_<id>.jsonl``); subagent and advisor files
+    are not sessions and never appear here."""
+
+    session_id: str
+    project: str  # the encoded project directory name
+    path: str
+    started_at: float = 0
+    cwd: str = ""
+    title: str = ""
+    size_bytes: int = 0
+    message_count: int = 0
+    modified_at: float = 0
+    # Manifest bookkeeping (absent for a file copied in without a manifest entry).
+    mirrored_at: float | None = None
+    offloaded: bool = False
+
+
+class SessionTranscriptProject(Result):
+    project: str
+    sessions: list[SessionTranscriptFile]
+
+
+class SessionTranscriptListResult(Result):
+    projects: list[SessionTranscriptProject]
+    total: int = 0
+
+
+method("session.transcript.list", params=SessionTranscriptListParams, result=SessionTranscriptListResult,
+       doc="Mirrored session bundles in this profile, most recent first, grouped by project directory.")
+
+
+class SessionTranscriptReadParams(ProfileParams):
+    session_id: str = Field(min_length=1)
+    offset: int = 0
+    limit: int = 200
+
+
+class SessionTranscriptReadResult(Result):
+    """One page of a bundle's message rows; ``session`` is the bundle header."""
+
+    session_id: str
+    path: str
+    session: dict[str, JsonValue]
+    messages: list[dict[str, JsonValue]]
+    offset: int
+    total: int
+    has_more: bool
+
+
+method("session.transcript.read", params=SessionTranscriptReadParams, result=SessionTranscriptReadResult,
+       doc="Page one mirrored bundle's JSONL by message index (read-only; never takes a client path).")
 
 
 class SessionMostRecentParams(ProfileParams):

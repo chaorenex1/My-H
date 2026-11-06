@@ -44,9 +44,10 @@ from agent.inline_tool_executors import (
     emit_terminal_post_tool_call,
     tool_hook_ids,
 )
-from agent.message_metadata import stamp_data_use, stamp_tool_result_metadata
+from agent.message_metadata import stamp_data_use, stamp_tool_output_artifacts, stamp_tool_result_metadata
+from tools.tool_output_archive import archive_tool_result
 from agent.pause_gate import park as park_frozen
-from agent.session_persistence import sync_rewritten_tool_rows
+from agent.session_persistence import record_persisted_path_for_stub, sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
     _is_destructive_command,
@@ -59,11 +60,7 @@ from agent.tool_dispatch_helpers import (
 )
 from tools.terminal_tool_lifecycle import get_active_env
 from tools.thread_context import propagate_context_to_thread
-from tools.tool_result_storage import (
-    maybe_persist_tool_result,
-    enforce_turn_budget,
-    extract_persisted_path,
-)
+from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_budget
 from tools.budget_config import BudgetConfig, DEFAULT_BUDGET, budget_for_context_window
 from hermes_cli.observability.shared_metrics_efficiency import note_tool_result, record_tool_batch
 
@@ -80,20 +77,6 @@ _pairing_tool_call_id = coalesce_tool_call_id  # canonical id used by the persis
 
 def _tc_name(tool_call: Any) -> str:
     return getattr(getattr(tool_call, "function", None), "name", "") or "tool"
-
-
-def _record_persisted_path_for_stub(agent, tool_call_id: str, function_result) -> None:
-    """Record the spillover file path so a later result-reference stub can't dangle (best-effort)."""
-    try:
-        candidates = [function_result] if isinstance(function_result, str) else [
-            function_result.get("text_summary"),
-            *(p.get("text") for p in function_result.get("content") or [] if isinstance(p, dict)),
-        ] if _is_multimodal_tool_result(function_result) else []
-        path = next((p for p in map(extract_persisted_path, candidates) if p), None)
-        if path:
-            agent._tool_guardrails.record_persisted_result(tool_call_id, path)
-    except Exception as exc:
-        logger.debug("persisted-path record for result stub failed: %s", exc)
 
 
 def _ensure_file_checkpoint(agent, function_name: str, function_args: dict, effective_task_id: str) -> None:
@@ -1134,8 +1117,12 @@ def _commit_tool_result(
             env=get_active_env(effective_task_id),
             config=budget,
         )
-    _record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
+    record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
     note_tool_result(agent, function_name, tool_call_id, function_result, persisted_result)
+    # ADR-16 D3: host-side archive of what the model saw (and the pre-truncation text when
+    # there is one). Best-effort and outside the model's recovery path.
+    archive_metadata = None if blocked else archive_tool_result(
+        agent, function_name, function_result, persisted_result)
 
     subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
     if subdir_hints:
@@ -1168,6 +1155,8 @@ def _commit_tool_result(
         # Merge, never replace: display_metadata is durable and other keys may already ride it.
         stamp_tool_result_metadata(tool_message, metadata, is_error=is_error)
     stamp_data_use(tool_message, sorted(data_use))
+    if archive_metadata:
+        stamp_tool_output_artifacts(tool_message, archive_metadata)
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None

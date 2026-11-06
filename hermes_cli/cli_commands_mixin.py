@@ -31,7 +31,8 @@ from hermes_state_ids import new_session_id as mint_session_id
 from agent.i18n import t
 from agent.message_metadata import message_identity
 from agent.turn_context import extract_api_content_sidecar
-from hermes_cli.cli_agent_setup_mixin import _gateway_open, _retire_agent
+from hermes_cli.cli_agent_setup_mixin import (
+    _gateway_open, _restore_resume_target, _retire_agent, _without_session_meta)
 from hermes_cli.cli_commands_session_tools import (
     CLICommandsSessionToolsMixin, _TTYBuf, _accent, _accent_line, _command_arg, _cp, _dim,
     _dim_line, _gt, _lines, _pr, _probe, _rollback_kept, _save, _say_block, _shlex_args, _t, _tn)
@@ -178,10 +179,6 @@ def _cron_api(**kwargs) -> dict:
 
 
 # Session-switch plumbing (end, repoint) lives in ``hermes_cli/cli_session_switch.py``.
-
-
-def _without_session_meta(messages) -> list:
-    return [m for m in (messages or []) if m.get("role") != "session_meta"]
 
 
 def _db_unavailable_line() -> str:
@@ -824,7 +821,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         resolved = self._resolve_resume_target(target)
         if resolved is None:
             return
-        target_id, session_meta = resolved
+        target_id, session_meta, refusal = _restore_resume_target(self._session_db, *resolved)
+        if refusal:
+            return _cp(f"  {refusal}")
         # A Kanban worker transcript must not become this chat's write-capable continuation
         # (#68779): the resumed conversation would be a writer the Kanban board cannot
         # observe, and unblocking the card could dispatch a competing worker. Keep the

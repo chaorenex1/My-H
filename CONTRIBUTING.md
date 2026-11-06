@@ -350,7 +350,7 @@ hermes-agent/
 | `~/.hermes/skills/` | All active skills (bundled + hub-installed + agent-created) |
 | `~/.hermes/memories/` | Persistent memory (MEMORY.md, USER.md) |
 | `~/.hermes/state.db` | SQLite session database |
-| `~/.hermes/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and explicit `/save` exports. Automatic per-session JSON snapshots are no longer written; state.db is canonical. |
+| `~/.hermes/sessions/` | Session bundles. `state.db` remains canonical; `hermes sessions mirror` writes optional cold JSONL copies (`<project>/<timestamp>_<id>.jsonl` plus an artifact directory), and `sessions.json` / `request_dump_*` keep their gateway/debug roles. Automatic per-session JSON snapshots are still not written. |
 | `~/.hermes/cron/` | Scheduled job data |
 | `~/.hermes/whatsapp/session/` | WhatsApp bridge credentials |
 

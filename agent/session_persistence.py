@@ -268,6 +268,22 @@ def _db_flush_row(agent, msg: dict, is_current_turn_user: bool) -> dict[str, Any
     return row
 
 
+def record_persisted_path_for_stub(agent, tool_call_id: str, function_result) -> None:
+    """Record the spillover file path so a later result-reference stub can't dangle (best-effort)."""
+    try:
+        from tools.tool_result_storage import extract_persisted_path
+
+        candidates = [function_result] if isinstance(function_result, str) else [
+            function_result.get("text_summary"),
+            *(p.get("text") for p in function_result.get("content") or [] if isinstance(p, dict)),
+        ] if _is_multimodal_tool_result(function_result) else []
+        path = next((p for p in map(extract_persisted_path, candidates) if p), None)
+        if path:
+            agent._tool_guardrails.record_persisted_result(tool_call_id, path)
+    except Exception as exc:  # health: allow BLE001 -- result stubbing is best-effort
+        logging.getLogger("run_agent").debug("persisted-path record for result stub failed: %s", exc)
+
+
 def sync_rewritten_tool_rows(agent, batch: list[dict], contents_before: list[Any]) -> int:
     """Carry an end-of-batch rewrite of already-flushed tool results (the turn budget's spill
     stubs) onto their durable rows; returns the rows rewritten.

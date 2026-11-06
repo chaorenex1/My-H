@@ -17,6 +17,7 @@ import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Optional
 
 from agent.file_safety import get_nt_namespace_error, get_read_block_error
 from agent.tool_result_classification import GUARDRAIL_REFUSAL_KEY
@@ -24,7 +25,11 @@ from tools.binary_extensions import has_binary_extension
 from tools.skill_provenance import is_background_review
 from tools.file_operations import (
     ShellFileOperations, normalize_read_pagination, normalize_search_pagination)
-from tools.file_operations_common import DEFAULT_READ_LIMIT, count_conflict_blocks
+from tools.file_operations_common import (
+    DEFAULT_READ_LIMIT, count_conflict_blocks, count_raw_conflict_blocks)
+from tools.read_summary import (
+    MAX_SUMMARY_BYTES, MAX_SUMMARY_LINES, persist_summary, read_summarize_enabled,
+    summarize_read)
 from tools import file_state
 from hermes_platform.host import facts
 from agent.redact import _is_secret_file_arg, redact_sensitive_text
@@ -602,7 +607,63 @@ def _record_successful_read(task_data: dict, task_id: str, path: str, resolved_s
     return count
 
 
-def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, task_id: str = "default") -> str:
+def _summarize_read_result(path: str, resolved_str: str, task_id: str) -> Optional[str]:
+    """A whole-file structural summary, or ``None`` to fall through to the verbatim read."""
+    if not read_summarize_enabled(task_id):
+        return None
+    ops = _get_file_ops(task_id)
+    target = resolved_str if _file_ops_uses_host_paths(ops) else path
+    try:
+        probe = ops.read_file(target, 1, 1)
+        if probe.error or probe.is_binary or not probe.total_lines:
+            return None
+        if int(probe.file_size or 0) > MAX_SUMMARY_BYTES \
+                or int(probe.total_lines or 0) > MAX_SUMMARY_LINES:
+            return None
+        raw = ops.read_file_raw(target)
+    except Exception:  # health: allow BLE001 -- a failed probe/summary falls back to the read
+        logger.debug("read summary: probe failed for %s", path, exc_info=True)
+        return None
+    if raw.error or not raw.content:
+        return None
+    if count_raw_conflict_blocks(raw.content):
+        # A summary can elide the conflict region; force the verbatim path so the normal
+        # guard reports ``conflict_blocks`` and the model sees the markers.
+        return None
+    summary = summarize_read(raw.content, path, int(probe.total_lines or 0))
+    if summary is None or len(summary.content) > _get_max_read_chars():
+        return None
+    content = redact_sensitive_text(summary.content, file_read=True,
+                                    secret_file=_is_secret_file_arg(resolved_str))
+    # ADR-16 D4: the summary is run state; settle writes it into <topic>_ast.json.
+    persist_summary(task_id, resolved_str, summary, content=content)
+    payload = {
+        "content": content,
+        "total_lines": summary.total_lines,
+        "file_size": probe.file_size,
+        "summary": True,
+        "kept_lines": summary.kept_lines,
+        "elided_ranges": [f"{start}-{end}" for start, end in summary.elided],
+        "_hint": ("Structural summary: only declarations and selected lines are shown. "
+                  "Re-read an elided span with offset/limit when exact bytes are needed."),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _read_early_result(path: str, resolved: Path, task_id: str,
+                       no_selector: bool) -> Optional[str]:
+    """Binary refusal or whole-file summary, before pagination/dedup work."""
+    if has_binary_extension(str(resolved)):
+        return tool_error(
+            f"Cannot read binary file '{path}' ({resolved.suffix.lower()}). "
+            "Use vision_analyze for images, or terminal to inspect binary files.")
+    if no_selector and not is_background_review():
+        return _summarize_read_result(path, str(resolved), task_id)
+    return None
+
+
+def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT,
+                   task_id: str = "default", *, no_selector: bool = False) -> str:
     """Read a file with pagination and line numbers.
 
     Guard order: NT/device-namespace prefix (raw string, no resolution) →
@@ -655,10 +716,9 @@ def read_file_tool(path: str, offset: int = 1, limit: int = DEFAULT_READ_LIMIT, 
 
         # The extension is a claim, so this message names only the extension;
         # the content-sniffing path names the actual magic-byte type.
-        if has_binary_extension(str(_resolved)):
-            return tool_error(
-                f"Cannot read binary file '{path}' ({_resolved.suffix.lower()}). "
-                "Use vision_analyze for images, or terminal to inspect binary files.")
+        early = _read_early_result(path, _resolved, task_id, no_selector)
+        if early is not None:
+            return early
 
         resolved_str = str(_resolved)
         cached_not_found = _check_not_found_cache("read", resolved_str, task_id)
@@ -1315,7 +1375,10 @@ SEARCH_FILES_SCHEMA = {
 
 def _handle_read_file(args, **kw):
     tid = kw.get("task_id") or "default"
-    return read_file_tool(path=args.get("path", ""), offset=args.get("offset", 1), limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid)
+    return read_file_tool(
+        path=args.get("path", ""), offset=args.get("offset", 1),
+        limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid,
+        no_selector=("offset" not in args and "limit" not in args))
 
 
 def _handle_write_file(args, **kw):

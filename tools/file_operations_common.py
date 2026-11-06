@@ -213,6 +213,20 @@ _FENCE_MARKER_RE = re.compile(r"'?\x07?__HERMES_FENCE_[A-Za-z0-9]+__\x07?'?")
 
 _CONFLICT_OPEN = re.compile(r"^\s*\d+\|<<<<<<< ", re.MULTILINE)
 _CONFLICT_CLOSE = re.compile(r"^\s*\d+\|>>>>>>> ", re.MULTILINE)
+_RAW_CONFLICT_OPEN = re.compile(r"^<<<<<<< ", re.MULTILINE)
+_RAW_CONFLICT_CLOSE = re.compile(r"^>>>>>>> ", re.MULTILINE)
+
+
+def count_raw_conflict_blocks(content: str) -> int:
+    """Unresolved conflict pairs in RAW file text (no ``LINE|`` prefix).
+
+    Used before a structural summary can elide the conflict region; the formatted-page
+    variant is :func:`count_conflict_blocks`.
+    """
+    if not content:
+        return 0
+    opens = len(_RAW_CONFLICT_OPEN.findall(content))
+    return min(opens, len(_RAW_CONFLICT_CLOSE.findall(content))) if opens else 0
 
 
 def count_conflict_blocks(formatted_content: str) -> int:

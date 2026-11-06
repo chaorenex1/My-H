@@ -1267,13 +1267,19 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
         source = sorted(CLI_FAMILY_SOURCES)
     with _session_db() as db:
         ws_key = _resolve_workspace_key()
+        # ADR-16 D8: ``-c`` is read-only at startup, so an offloaded (cold-mirror-only)
+        # session must never be picked: it would either need an implicit restore or open empty.
+        def _first_live(rows):
+            return next((row for row in rows if not row.get("offloaded")), None)
+
         if ws_key:
-            sessions = db.search_sessions(source=source, limit=1, workspace_key=ws_key, skip_launch_stubs=True)
-            if sessions:
-                return sessions[0]["id"]
+            sessions = db.search_sessions(source=source, limit=200, workspace_key=ws_key, skip_launch_stubs=True)
+            if (row := _first_live(sessions)) is not None:
+                return row["id"]
         # Fallback: global MRU for this source.
-        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True)
-        return sessions[0]["id"] if sessions else None
+        sessions = db.search_sessions(source=source, limit=200, skip_launch_stubs=True)
+        row = _first_live(sessions)
+        return row["id"] if row else None
     return None
 
 
