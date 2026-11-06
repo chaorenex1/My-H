@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 import run_agent
+from tests.tools._omp_agent_definitions import REVIEWER_FRONTMATTER
 from tests.waiting import wait_until
 
+import hermes_session_paths as session_paths
 from agent import agent_loop_service, run_transcript
 from hermes_constants import get_hermes_home
 from tools import agent_tool
@@ -55,7 +57,7 @@ def _fake_route_and_agent(monkeypatch):
 
     _FakeAgent.instances.clear()
     monkeypatch.setattr(agent_run, "_resolve_route",
-                        lambda model, provider: ("fake-model", {"provider": "fake",
+                        lambda model, provider, base_url="", api_key="": ("fake-model", {"provider": "fake",
                                                                 "api_key": "k"}))
     monkeypatch.setattr(run_agent, "AIAgent", _FakeAgent)
     agent_loop_service.reset_service()
@@ -88,8 +90,9 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
     assert data["subject"] == "Find the cause."
 
     path = Path(data["transcript_path"])
-    assert path == (get_hermes_home() / "sessions" / "researcher"
-                    / f"{data['agent_session_id']}.jsonl")
+    assert path.parent.parent.parent == get_hermes_home() / "sessions"
+    assert path.parent.name.endswith("_" + data["agent_session_id"])
+    assert path.name == session_paths.topic_component(data["subject"]) + ".jsonl"
     assert path.is_file()
     rows = run_transcript.read_events("researcher", data["agent_session_id"])
     assert [row["role"] for row in rows if row.get("kind") == "msg"] == ["system", "user",
@@ -114,7 +117,8 @@ def test_each_call_gets_its_own_agent_session_and_history_file():
 
     assert len({first["transcript_path"], second["transcript_path"],
                 third["transcript_path"]}) == 3
-    assert Path(second["transcript_path"]).parent.name == "writer"
+    assert len({Path(run["transcript_path"]).parent
+                for run in (first, second, third)}) == 3
 
 
 def test_a_second_run_does_not_inherit_the_first_without_continue_from():
@@ -307,6 +311,9 @@ def test_a_stalled_background_run_still_delivers_one_notification(monkeypatch):
 
     from agent import agent_run
 
+    # Stall handling belongs to agent_loop; resident sessions have their own wall clock
+    # (agent_sessions.max_runtime_seconds), so pin this call to the one-shot pool.
+    monkeypatch.setattr(agent_tool, "_resident_enabled", lambda: False)
     service = agent_loop_service.AgentLoopService(max_workers=1, max_run_seconds=0.05,
                                                   stall_check_seconds=1.0)
     monkeypatch.setattr(agent_loop_service, "service", lambda: service)
@@ -349,8 +356,6 @@ def _write_definition(directory: Path, name: str, block: str,
 
 
 def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypatch):
-    from agent import agent_run
-
     project = tmp_path / "project"
     _write_definition(project / ".agents", "scout",
                       "toolsets: [file, web]\n"
@@ -362,10 +367,7 @@ def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypat
                       "load_soul_identity: false\n"
                       "reasoning_effort: high\n"
                       "model: provider:model\n")
-    seen: dict = {}
-    monkeypatch.setattr(agent_run, "_resolve_route",
-                        lambda model, provider: (seen.update(model=model, provider=provider)
-                                                 or ("fake-model", {"provider": "fake"})))
+    seen = _record_route(monkeypatch)
 
     data = json.loads(agent_tool.agent_tool(
         {"agent_name": "scout", "user_prompts": "go", "background": False,
@@ -374,7 +376,7 @@ def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypat
 
     assert "error" not in data
     assert data["toolsets"] == ["file", "web"] and data["all_tools"] is False
-    assert seen == {"model": "model", "provider": "provider"}
+    assert (seen["model"], seen["provider"]) == ("model", "provider")
     agent = _FakeAgent.instances[-1]
     assert agent.system_message == "You are the agent.", "the definition body beats the argument"
     assert agent.kwargs["enabled_toolsets"] == ["file", "web"]
@@ -387,15 +389,10 @@ def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypat
 
 
 def test_caller_arguments_beat_definition_metadata(tmp_path, monkeypatch):
-    from agent import agent_run
-
     project = tmp_path / "project"
     _write_definition(project / ".agents", "scout",
                       "toolsets: [file]\nmodel: definition:model\nbackground: true\n")
-    seen: dict = {}
-    monkeypatch.setattr(agent_run, "_resolve_route",
-                        lambda model, provider: (seen.update(model=model, provider=provider)
-                                                 or ("fake-model", {"provider": "fake"})))
+    seen = _record_route(monkeypatch)
 
     data = json.loads(agent_tool.agent_tool(
         {"agent_name": "scout", "user_prompts": "go", "background": False,
@@ -403,8 +400,134 @@ def test_caller_arguments_beat_definition_metadata(tmp_path, monkeypatch):
          "model": "caller:other"}, session_id="s1"))
 
     assert "error" not in data
-    assert seen == {"model": "other", "provider": "caller"}
+    assert (seen["model"], seen["provider"]) == ("other", "caller")
     assert _FakeAgent.instances[-1].kwargs["enabled_toolsets"] == ["terminal"]
+
+
+def _patch_config(monkeypatch, **sections):
+    """The live profile config ``@role`` resolution reads (``auxiliary``/``delegation``/``advisor``)."""
+    from hermes_cli import config as hermes_config
+
+    monkeypatch.setattr(hermes_config, "load_config_readonly", lambda: dict(sections))
+
+
+def _record_route(monkeypatch) -> dict:
+    """Record what the run hands ``_resolve_route`` (model/provider/base_url/api_key)."""
+    from agent import agent_run
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        agent_run, "_resolve_route",
+        lambda model, provider, base_url="", api_key="": (
+            seen.update(model=model, provider=provider, base_url=base_url, api_key=api_key)
+            or ("fake-model", {"provider": "fake"})))
+    return seen
+
+
+def test_a_model_role_resolves_against_its_auxiliary_slot(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, auxiliary={"smol": {
+        "provider": "openai", "model": "gpt-5-mini", "base_url": "https://relay.example/v1",
+        "api_key": "slot-key", "reasoning_effort": "low",
+        "fallback_chain": [{"provider": "backup", "model": "backup-model"}]}})
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "scout", 'model: "@smol"\nbackground: false\n')
+    seen = _record_route(monkeypatch)
+
+    data = json.loads(agent_tool.agent_tool(
+        {"agent_name": "scout", "user_prompts": "go", "project_dir": str(project)},
+        session_id="s1"))
+
+    assert "error" not in data
+    assert seen == {"model": "gpt-5-mini", "provider": "openai",
+                    "base_url": "https://relay.example/v1", "api_key": "slot-key"}
+    assert data["model_role"] == "smol"
+    agent = _FakeAgent.instances[-1]
+    assert agent.system_message == "You are the agent.", "front matter never reaches the prompt"
+    assert "api_key" not in agent.kwargs, "credentials come from the resolved runtime, not the tool"
+    assert agent.kwargs["reasoning_config"] == {"enabled": True, "effort": "low"}
+    assert agent.kwargs["fallback_model"] == [{"provider": "backup", "model": "backup-model"}]
+
+
+def test_the_task_role_reads_the_delegation_route(monkeypatch):
+    _patch_config(monkeypatch, delegation={
+        "provider": "anthropic", "model": "claude-sonnet", "api_key": "delegation-key",
+        "fallback_providers": [{"provider": "openai", "model": "gpt-5"}]})
+    seen = _record_route(monkeypatch)
+
+    data = _call(agent_name="worker", user_prompts="go", background=False, model="@task")
+
+    assert data["model_role"] == "task"
+    assert seen == {"model": "claude-sonnet", "provider": "anthropic", "base_url": "",
+                    "api_key": "delegation-key"}
+    assert _FakeAgent.instances[-1].kwargs["fallback_model"] == [
+        {"provider": "openai", "model": "gpt-5"}]
+
+
+def test_the_task_role_treats_an_auto_provider_as_inherit(monkeypatch):
+    _patch_config(monkeypatch, delegation={"provider": "auto", "model": ""})
+    seen = _record_route(monkeypatch)
+
+    _call(agent_name="worker", user_prompts="go", background=False, model="@task")
+
+    assert (seen["model"], seen["provider"]) == ("", ""), \
+        "omp's auto is an empty provider, not the literal 'auto'"
+
+
+def test_the_advisor_role_reads_the_advisor_route(monkeypatch):
+    _patch_config(monkeypatch, advisor={"provider": "anthropic", "model": "claude-review"})
+    seen = _record_route(monkeypatch)
+
+    data = _call(agent_name="reviewer", user_prompts="go", background=False, model="@advisor")
+
+    assert data["model_role"] == "advisor"
+    assert (seen["model"], seen["provider"]) == ("claude-review", "anthropic")
+
+
+def test_the_default_role_inherits_the_host_route(monkeypatch):
+    _patch_config(monkeypatch)
+    seen = _record_route(monkeypatch)
+
+    data = _call(agent_name="worker", user_prompts="go", background=False, model="@default")
+
+    assert data["model_role"] == "default"
+    assert seen == {"model": "", "provider": "", "base_url": "", "api_key": ""}
+    assert "fallback_model" not in _FakeAgent.instances[-1].kwargs
+
+
+def test_a_caller_model_beats_a_definition_role(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, auxiliary={"smol": {"provider": "openai", "model": "cheap"}})
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "scout", 'model: "@smol"\nbackground: false\n')
+    seen = _record_route(monkeypatch)
+
+    data = json.loads(agent_tool.agent_tool(
+        {"agent_name": "scout", "user_prompts": "go", "project_dir": str(project),
+         "model": "caller:other"}, session_id="s1"))
+
+    assert "error" not in data
+    assert seen == {"model": "other", "provider": "caller", "base_url": "", "api_key": ""}
+    assert "model_role" not in data, "a literal route carries no role"
+
+
+def test_an_unknown_role_fails_before_any_run(monkeypatch):
+    _patch_config(monkeypatch)
+
+    data = _call(agent_name="worker", user_prompts="go", background=False, model="@nope")
+
+    assert "unknown model role '@nope'" in data["error"]
+    assert "@smol" in data["error"], "the error lists the roles that do exist"
+    assert _FakeAgent.instances == []
+
+
+def test_a_definition_model_list_is_refused(tmp_path):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "scout", "model: [a:one, b:two]\n")
+
+    data = _call(agent_name="scout", user_prompts="go", background=False,
+                 project_dir=str(project))
+
+    assert "one selector per definition" in data["error"]
+    assert _FakeAgent.instances == []
 
 
 def test_an_invalid_definition_is_a_tool_error_and_runs_nothing(tmp_path):
@@ -618,3 +741,395 @@ def test_a_read_only_definition_strips_mutating_tools(tmp_path, monkeypatch):
         "read_only is definition-owned; the model must not be able to change it")
 
 
+
+
+# -- omp parity: output / spawns / blocking -----------------------------------
+
+
+def test_a_blocking_definition_waits_even_when_the_caller_asks_for_background(tmp_path):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "waiter", "blocking: true\n")
+
+    data = _call(agent_name="waiter", user_prompts="go", background=True,
+                 project_dir=str(project))
+
+    assert "error" not in data, data
+    assert data["answer"] == "the answer"
+    assert "job_id" not in data, "blocking: true outranks async execution and the caller's flag"
+    assert _FakeAgent.instances[-1].closed is True
+
+
+def test_a_definition_output_schema_validates_and_retries_exactly_once(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "judge",
+                      "output:\n"
+                      "  properties:\n"
+                      "    verdict:\n"
+                      "      type: string\n")
+    replies = iter(["not json", '{"verdict": "ok"}'])
+    calls: list[str] = []
+    systems: list[str] = []
+
+    def reply(self, message, **kwargs):
+        calls.append(message)
+        systems.append(str(kwargs.get("system_message") or ""))
+        text = next(replies)
+        # The host's token keys are cumulative session counters: the retry result carries both turns.
+        first = len(calls) == 1
+        return {"final_response": text, "api_calls": 1,
+                "input_tokens": 10 if first else 25,
+                "output_tokens": 3 if first else 7,
+                "messages": [{"role": "assistant", "content": text}]}
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", reply)
+
+    data = _call(agent_name="judge", user_prompts="go", background=False,
+                 project_dir=str(project))
+
+    assert "error" not in data, data
+    assert data["answer"] == '{"verdict": "ok"}'
+    assert data["output_schema_valid"] is True
+    assert "output_schema_errors" not in data
+    assert data["api_calls"] == 2, "the retry turn is accounted for"
+    assert data["usage"]["input_tokens"] == 25, "the retry result's cumulative counters win"
+    assert data["usage"]["output_tokens"] == 7, "usage is replaced, never summed twice"
+    assert len(calls) == 2
+    assert "OUTPUT CONTRACT" in calls[0], "the contract rides the run context, not the prompt"
+    assert "Validation errors" in calls[1]
+    assert all("OUTPUT CONTRACT" not in system for system in systems), (
+        "the contract never enters the system prompt")
+
+
+def test_an_output_schema_that_stays_invalid_returns_the_raw_answer(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "judge",
+                      "output:\n  properties:\n    verdict:\n      type: string\n")
+    replies = iter(["still bad", "also bad"])
+
+    def reply(self, message, **kwargs):
+        return {"final_response": next(replies), "api_calls": 1, "messages": []}
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", reply)
+
+    data = _call(agent_name="judge", user_prompts="go", background=False,
+                 project_dir=str(project))
+
+    assert data["answer"] == "also bad"
+    assert data["output_schema_valid"] is False
+    assert data["output_schema_errors"], "the caller sees why the contract failed"
+
+
+def test_a_missing_jsonschema_marks_the_output_unvalidated(monkeypatch):
+    from agent import agent_run
+    from tools import delegation_output_schema
+
+    monkeypatch.setattr(delegation_output_schema, "validation_available", lambda: False)
+    result = agent_run.AgentRunResult(
+        answer="{}", api_calls=1, model="m", provider="p", toolsets=(),
+        output_schema_valid=True)
+
+    payload = result.as_dict()
+
+    assert payload["output_schema_valid"] is True
+    assert payload["validated"] is False, "an unenforced schema must not read as validated"
+
+
+def test_spawns_is_carried_into_the_run_and_checked_for_nested_calls(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "reviewer", "spawns: scout\n")
+    _write_definition(project / ".agents", "writer", "")
+    seen: dict = {}
+
+    def nested(self, message, **kwargs):
+        seen["spawns"] = agent_tool._SPAWNS.get()
+        seen["nested"] = json.loads(registry.dispatch(
+            "agent", {"agent_name": "writer", "user_prompts": "go", "background": False,
+                      "project_dir": str(project)}, session_id="s1"))
+        return {"final_response": "the answer", "api_calls": 1, "messages": []}
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", nested)
+
+    data = _call(agent_name="reviewer", user_prompts="go", background=False,
+                 project_dir=str(project))
+
+    assert data["answer"] == "the answer"
+    assert seen["spawns"] == frozenset({"scout"})
+    assert "not allowed by the parent definition's spawns (scout)" in seen["nested"]["error"]
+
+
+def test_spawns_defaults_to_star_only_when_the_definition_owns_the_agent_toolset(tmp_path,
+                                                                              monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "fanout", "toolsets: [agents]\n")
+    _write_definition(project / ".agents", "leaf", "toolsets: [file]\n")
+    observed: list = []
+
+    def record(self, message, **kwargs):
+        observed.append(agent_tool._SPAWNS.get())
+        return {"final_response": "the answer", "api_calls": 1, "messages": []}
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", record)
+
+    _call(agent_name="fanout", user_prompts="go", background=False, project_dir=str(project))
+    _call(agent_name="leaf", user_prompts="go", background=False, project_dir=str(project))
+
+    assert observed == [frozenset({"*"}), frozenset()], (
+        "no agent toolset and no spawns: cannot derive")
+
+
+def test_a_definition_without_spawns_can_be_overridden_by_star(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "fanout", "toolsets: [agents]\nspawns: '*'\n")
+    observed: dict = {}
+
+    def record(self, message, **kwargs):
+        observed["spawns"] = agent_tool._SPAWNS.get()
+        return {"final_response": "the answer", "api_calls": 1, "messages": []}
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", record)
+
+    _call(agent_name="fanout", user_prompts="go", background=False, project_dir=str(project))
+
+    assert observed["spawns"] == frozenset({"*"})
+
+
+def test_the_spawns_policy_is_cleared_after_the_run(tmp_path):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "reviewer", "spawns: scout\n")
+
+    _call(agent_name="reviewer", user_prompts="go", background=False, project_dir=str(project))
+
+    assert agent_tool._SPAWNS.get() is None, "a finished run must not constrain later calls"
+
+
+def test_a_spawns_entry_admits_the_named_agent(tmp_path):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "scout", "")
+    token = agent_tool._SPAWNS.set(frozenset({"scout"}))
+    try:
+        call = agent_tool._validate(
+            {"agent_name": "scout", "user_prompts": "go", "project_dir": str(project)})
+    finally:
+        agent_tool._SPAWNS.reset(token)
+
+    assert call.agent == "scout"
+
+
+def test_ported_agent_fields_reach_the_spawn(tmp_path, monkeypatch):
+    from tools import read_summary
+
+    project = tmp_path / "project"
+    _write_definition(
+        project / ".agents", "ported",
+        "autoloadSkills: [ported-skill]\n"
+        "structured: false\n"
+        "advisor: true\n"
+        "read-summarize: true\n"
+        "output:\n"
+        "  properties:\n"
+        "    summary:\n"
+        "      type: string\n")
+
+    skill_dir = get_hermes_home() / "skills" / "ported-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: ported-skill\ndescription: Ported skill.\n---\n\n"
+        "PORTED SKILL BODY\n", encoding="utf-8")
+
+    observed: dict = {}
+    original = _FakeAgent.run_conversation
+
+    def record(self, message, **kwargs):
+        observed["read_summarize"] = read_summary.read_summarize_enabled(kwargs.get("task_id"))
+        return original(self, message, **kwargs)
+
+    monkeypatch.setattr(_FakeAgent, "run_conversation", record)
+
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+    assert call.output_schema is None, "structured: false must suppress the output contract"
+    assert call.autoload_skills == ("ported-skill",)
+    assert call.advisor is True
+    assert call.read_summarize is True
+
+    _call(agent_name="ported", user_prompts="go", background=False, project_dir=str(project))
+
+    agent = _FakeAgent.instances[-1]
+    assert "PORTED SKILL BODY" in agent.message
+    assert agent._advisor_override is True
+    assert observed["read_summarize"] is True
+
+
+def test_the_stored_hub_advisor_toggle_overrides_the_definition(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "ported", "advisor: false\n")
+    monkeypatch.setattr(agent_tool, "_stored_agent_advisor", lambda _name, _source: True)
+
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+
+    assert call.advisor is True
+
+    _write_definition(project / ".agents", "ported", "advisor: true\n")
+    monkeypatch.setattr(agent_tool, "_stored_agent_advisor", lambda _name, _source: False)
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+
+    assert call.advisor is None
+
+
+def test_a_model_role_level_selects_reasoning_effort(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, auxiliary={"smol": {"provider": "openai", "model": "gpt-5-mini"}})
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "ported", "model: '@smol:high'\n")
+
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+
+    assert (call.provider_name, call.model_name) == ("openai", "gpt-5-mini")
+    assert call.model_role == "smol"
+    assert call.reasoning_effort == "high"
+
+
+def test_an_advisor_role_level_suffix_resolves_the_role(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, auxiliary={"smol": {"provider": "openai", "model": "gpt-5-mini"}})
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "ported", "advisor: '@smol:high'\n")
+
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+
+    assert call.advisor == {"model": "gpt-5-mini", "provider": "openai",
+                            "selector": "@smol", "reasoning_effort": "high"}
+
+
+def test_an_advisor_provider_model_level_suffix_is_accepted(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_definition(project / ".agents", "ported", "advisor: 'openai:gpt-5.2:high'\n")
+
+    call = agent_tool._validate(
+        {"agent_name": "ported", "user_prompts": "go", "project_dir": str(project)})
+
+    assert call.advisor == {"model": "gpt-5.2", "provider": "openai",
+                            "selector": "openai:gpt-5.2", "reasoning_effort": "high"}
+
+
+def test_the_omp_reviewer_definition_resolves_all_three_contract_fields(tmp_path, monkeypatch):
+    _patch_config(monkeypatch, auxiliary={"slow": {"provider": "openai", "model": "gpt-5.2"}})
+    project = tmp_path / "project"
+    agents = project / ".agents"
+    agents.mkdir(parents=True)
+    (agents / "reviewer.md").write_text(REVIEWER_FRONTMATTER + "\nReview.\n", encoding="utf-8")
+
+    call = agent_tool._validate(
+        {"agent_name": "reviewer", "user_prompts": "go", "project_dir": str(project)})
+
+    assert call.model_role == "slow"
+    assert (call.provider_name, call.model_name) == ("openai", "gpt-5.2")
+    assert call.spawns == frozenset({"scout"})
+    assert call.output_schema["required"] == [
+        "overall_correctness", "explanation", "confidence"]
+    assert "findings" in call.output_schema["properties"]
+
+
+def test_a_parented_run_lands_in_the_calling_sessions_bundle():
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        db.create_session(session_id="parent-1", source="cli", cwd=str(Path.cwd()))
+    finally:
+        release_or_close(db)
+
+    first = _call(agent_name="researcher", user_prompts="a", background=False,
+                  session_id="parent-1")
+    second = _call(agent_name="writer", user_prompts="b", background=False,
+                   session_id="parent-1")
+
+    parent_bundle = Path(first["transcript_path"]).parent
+    assert parent_bundle == Path(second["transcript_path"]).parent
+    assert parent_bundle.name.endswith("_parent-1")
+    assert {Path(first["transcript_path"]).name, Path(second["transcript_path"]).name} \
+        == {"a.jsonl", "b.jsonl"}
+
+
+def test_settle_writes_the_report_and_manifest():
+    from hermes_state_registry import acquire, release_or_close
+
+    run = _call(agent_name="researcher", user_prompts="go", background=False,
+                subject="settled topic")
+
+    db = acquire()
+    try:
+        row = db.get_agent_session(run["agent_session_id"])
+    finally:
+        release_or_close(db)
+    manifest = row["artifact_manifest"]
+    assert Path(manifest["report_path"]).read_text(encoding="utf-8") == "the answer"
+    assert run["transcript_path"] == manifest["transcript_path"]
+    tool_dir = Path(manifest["tool_artifacts_dir"])
+    assert tool_dir.name == "settled_topic"
+    assert json.loads(Path(manifest["ast_summary_path"]).read_text(encoding="utf-8"))["sources"] \
+        == []
+    assert _FakeAgent.instances[-1]._tool_output_archive_dir == tool_dir, (
+        "the live agent's tool archive points at its own bundle namespace")
+
+
+def test_sanitized_topic_collisions_get_distinct_files():
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        db.create_session(session_id="parent-2", source="cli", cwd=str(Path.cwd()))
+    finally:
+        release_or_close(db)
+
+    first = _call(agent_name="researcher", user_prompts="a", background=False,
+                  subject="same topic", session_id="parent-2")
+    second = _call(agent_name="researcher", user_prompts="b", background=False,
+                   subject="same?topic", session_id="parent-2")
+
+    assert Path(first["transcript_path"]).parent == Path(second["transcript_path"]).parent
+    assert Path(first["transcript_path"]).name == "same_topic.jsonl"
+    assert Path(second["transcript_path"]).name.startswith("same_topic-")
+    assert Path(second["transcript_path"]).is_file()
+
+    db = acquire()
+    try:
+        manifest = db.get_agent_session(second["agent_session_id"])["artifact_manifest"]
+    finally:
+        release_or_close(db)
+    assert Path(manifest["report_path"]).name.startswith("same_topic-")
+    assert Path(manifest["report_path"]).is_file()
+
+
+def test_a_run_summary_reaches_the_ast_artifact_even_after_the_buffer_is_cleared(monkeypatch):
+    from tools import read_summary
+
+    class _SummarizingAgent(_FakeAgent):
+        def run_conversation(self, message, system_message=None, conversation_history=None,
+                             task_id=None):
+            result = super().run_conversation(message, system_message, conversation_history,
+                                              task_id)
+            summary = read_summary.ReadSummary(content="OUTLINE", total_lines=9,
+                                               elided=((2, 9),), kept_lines=1)
+            read_summary.persist_summary(task_id, "src/x.py", summary)
+            return result
+
+    monkeypatch.setattr(run_agent, "AIAgent", _SummarizingAgent)
+
+    run = _call(agent_name="researcher", user_prompts="go", background=False)
+
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        manifest = db.get_agent_session(run["agent_session_id"])["artifact_manifest"]
+    finally:
+        release_or_close(db)
+    ast = json.loads(Path(manifest["ast_summary_path"]).read_text(encoding="utf-8"))
+    assert ast["sources"] == [{"source": "src/x.py", "summary": "OUTLINE",
+                               "kept_lines": 1, "total_lines": 9,
+                               "elided_ranges": ["2-9"]}]
+    # The run-scoped buffer is gone by settle time; the value rode on the run result.
+    assert read_summary.collect_summaries(run["agent_session_id"]) == []

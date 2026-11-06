@@ -30,27 +30,32 @@ def clean_subject(value: Any) -> str:
 
 def _decode(row: Any) -> dict[str, Any]:
     data = dict(row)
-    raw = data.get("artifact_manifest")
-    if isinstance(raw, str) and raw:
-        try:
-            data["artifact_manifest"] = json.loads(raw)
-        except ValueError:
-            pass
+    for key in ("artifact_manifest", "metadata_json"):
+        raw = data.get(key)
+        if isinstance(raw, str) and raw:
+            try:
+                data[key] = json.loads(raw)
+            except ValueError:
+                pass
     return data
 
 
 class SessionAgentSessionsMixin:
     def begin_agent_session(
         self, *, agent_session_id: str, agent_name: str, subject: str,
-        transcript_path: str, parent_session_id: str = "",
+        transcript_path: str, parent_session_id: str = "", model_role: str = "",
+        metadata: Any = None,
     ) -> str:
         """Insert the row before dispatch; returns the subject actually stored.
 
         ``subject`` is unique across agent sessions, so a collision is disambiguated here (the
         caller gets the stored value back and reports it) rather than failing the insert.
+        ``metadata`` is the rebuild spec a wake/revive needs (definition source, toolsets, flags,
+        model selector); it never carries credentials.
         """
         candidate = clean_subject(subject) or str(agent_session_id)
         now = time.time()
+        spec = json.dumps(metadata, ensure_ascii=False, default=str) if metadata else None
 
         def _write(conn) -> str:
             stored = candidate
@@ -65,25 +70,40 @@ class SessionAgentSessionsMixin:
             conn.execute(
                 "INSERT INTO agent_session (agent_session_id, agent_name, parent_session_id, "
                 "subject, transcript_path, artifact_manifest, final_response, status, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL, NULL, 'running', ?, ?) "
+                "last_activity_at, parked_at, model_role, metadata_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL, NULL, 'running', ?, NULL, ?, ?, ?, ?) "
                 "ON CONFLICT(agent_session_id) DO UPDATE SET agent_name=excluded.agent_name, "
                 "parent_session_id=excluded.parent_session_id, subject=excluded.subject, "
-                "transcript_path=excluded.transcript_path, status='running', updated_at=excluded.updated_at",
+                "transcript_path=excluded.transcript_path, status='running', "
+                "last_activity_at=excluded.last_activity_at, parked_at=NULL, "
+                "model_role=excluded.model_role, metadata_json=excluded.metadata_json, "
+                "updated_at=excluded.updated_at",
                 (str(agent_session_id), str(agent_name or ""), str(parent_session_id or ""),
-                 stored, str(transcript_path or ""), now, now),
+                 stored, str(transcript_path or ""), now, str(model_role or ""), spec, now, now),
             )
             return stored
 
         return self._execute_write(_write)
+
+    def set_agent_session_transcript_path(self, agent_session_id: str, path: str) -> None:
+        """Record the bundle transcript the session actually writes (ADR-16 D4).
+
+        Called once, right after the row is inserted and the unique (possibly suffixed)
+        subject is known — the topic in the file name derives from that stored subject.
+        """
+        self._execute_write(lambda conn: conn.execute(
+            "UPDATE agent_session SET transcript_path=?, updated_at=? WHERE agent_session_id=?",
+            (str(path or ""), time.time(), str(agent_session_id)),
+        ))
 
     def finish_agent_session(
         self, agent_session_id: str, *, status: str, final_response: Optional[str] = None,
         transcript_path: Optional[str] = None, artifact_manifest: Any = None,
     ) -> None:
         """Record the settled state; called from the settling thread, never mid-run."""
-        assigns = ["status=?", "updated_at=?"]
-        params: list[Any] = [str(status or "unknown"), time.time()]
+        now = time.time()
+        assigns = ["status=?", "updated_at=?", "last_activity_at=?", "parked_at=NULL"]
+        params: list[Any] = [str(status or "unknown"), now, now]
         if final_response is not None:
             assigns.append("final_response=?")
             params.append(str(final_response))
@@ -102,6 +122,94 @@ class SessionAgentSessionsMixin:
             )
 
         self._execute_write(_write)
+
+    def park_agent_session(self, agent_session_id: str, *, parked_at: Optional[float] = None
+                           ) -> None:
+        """Mark a session parked: the live agent was closed, the row/inbox/transcript stay."""
+        now = time.time()
+
+        def _write(conn) -> None:
+            conn.execute(
+                "UPDATE agent_session SET status='parked', parked_at=?, last_activity_at=?, "
+                "updated_at=? WHERE agent_session_id=?",
+                (float(parked_at or now), now, now, str(agent_session_id)),
+            )
+
+        self._execute_write(_write)
+
+    def revive_agent_session(self, agent_session_id: str) -> None:
+        """Clear the parked marker when a message/resume starts a fresh run for the session."""
+        now = time.time()
+
+        def _write(conn) -> None:
+            conn.execute(
+                "UPDATE agent_session SET status='running', parked_at=NULL, "
+                "last_activity_at=?, updated_at=? WHERE agent_session_id=?",
+                (now, now, str(agent_session_id)),
+            )
+
+        self._execute_write(_write)
+
+    def touch_agent_session(self, agent_session_id: str, *, status: Optional[str] = None) -> None:
+        """Refresh the idle clock (and optionally the status) without touching the answer."""
+        now = time.time()
+        assigns = ["last_activity_at=?", "updated_at=?"]
+        params: list[Any] = [now, now]
+        if status:
+            assigns.append("status=?")
+            params.append(str(status))
+        params.append(str(agent_session_id))
+
+        def _write(conn) -> None:
+            conn.execute(
+                f"UPDATE agent_session SET {', '.join(assigns)} WHERE agent_session_id=?",
+                tuple(params),
+            )
+
+        self._execute_write(_write)
+
+    def cancel_agent_session(self, agent_session_id: str, *, reason: str = "") -> None:
+        """Terminal stop: a live or parked session the operator ended."""
+        now = time.time()
+        note = f"cancelled: {reason}" if reason else "cancelled"
+
+        def _write(conn) -> None:
+            conn.execute(
+                "UPDATE agent_session SET status='cancelled', final_response=COALESCE("
+                "final_response, ?), last_activity_at=?, updated_at=? WHERE agent_session_id=?",
+                (note, now, now, str(agent_session_id)),
+            )
+
+        self._execute_write(_write)
+
+    def list_agent_sessions(self, *, status: Optional[str] = None,
+                            parent_session_id: Optional[str] = None,
+                            limit: int = 50) -> list[dict[str, Any]]:
+        """Newest-first sessions, optionally one status and/or one dispatching conversation."""
+        sql = "SELECT * FROM agent_session WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status=?"
+            params.append(str(status))
+        if parent_session_id is not None:
+            sql += " AND parent_session_id=?"
+            params.append(str(parent_session_id))
+        sql += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+        return [_decode(row) for row in self._read_all(sql, tuple(params))]
+
+    def count_agent_sessions(self, *, status: Optional[str] = None,
+                             parent_session_id: Optional[str] = None) -> int:
+        sql = "SELECT COUNT(*) AS n FROM agent_session WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status=?"
+            params.append(str(status))
+        if parent_session_id is not None:
+            sql += " AND parent_session_id=?"
+            params.append(str(parent_session_id))
+        row = self._read_one(sql, tuple(params))
+        return int(row["n"]) if row else 0
 
     def get_agent_session(self, agent_session_id: str) -> Optional[dict[str, Any]]:
         row = self._read_one(

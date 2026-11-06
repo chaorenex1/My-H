@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.tools._omp_agent_definitions import REVIEWER_FRONTMATTER, SCOUT_FRONTMATTER
 from tools import agent_definitions
 from tools.agent_definitions import DefinitionError
 from toolsets import validate_toolset
@@ -54,6 +55,10 @@ def test_unknown_fields_are_ignored_with_one_warning(caplog):
     ("toolsets: [nope]\n", "unknown toolset"),
     ("toolsets: []\n", "non-empty list"),
     ("model: provider:\n", "provider:model"),
+    ("model: \"@\"\n", "needs a role name"),
+    ("model: \"@smol extra\"\n", "needs a role name"),
+    ('model: "@smol:hgih"\n', "unknown level"),
+    ("model: [a, b]\n", "one selector per definition"),
     ("max_iterations: 0\n", "positive integer"),
     ("max_iterations: true\n", "positive integer"),
     ("reasoning_effort: hgih\n", "unknown reasoning_effort"),
@@ -62,6 +67,12 @@ def test_unknown_fields_are_ignored_with_one_warning(caplog):
 def test_invalid_fields_fail_closed(block, needle):
     with pytest.raises(DefinitionError, match=needle):
         _parse(block)
+
+
+def test_a_role_selector_is_valid_syntax_and_checked_at_call_time():
+    meta, _ = _parse('model: "@smol"\n')
+
+    assert meta == {"model": "@smol"}, "the role need not exist yet; resolution is per call"
 
 
 def test_caller_beats_definition_beats_default():
@@ -122,3 +133,182 @@ def test_init_generates_agents_md_in_the_project():
     assert "AGENTS.md" in body
     assert "delegate_task" in body and "write_file" in body
     assert "approval" in body, "the protected-write refusal must have a documented fallback"
+
+
+# -- omp parity: output / spawns / blocking -----------------------------------
+
+
+def test_an_omp_output_schema_normalizes_to_json_schema():
+    meta, _ = _parse(
+        "output:\n"
+        "  properties:\n"
+        "    summary:\n"
+        "      metadata:\n"
+        "        description: What was found\n"
+        "      type: string\n"
+        "    files:\n"
+        "      elements:\n"
+        "        properties:\n"
+        "          path:\n"
+        "            type: string\n"
+        "        optionalProperties:\n"
+        "          note:\n"
+        "            type: string\n"
+        "  optionalProperties:\n"
+        "    report:\n"
+        "      type: string\n")
+
+    schema = meta["output"]
+    assert schema["type"] == "object"
+    assert schema["required"] == ["summary", "files"], "optionalProperties stays optional"
+    assert schema["properties"]["summary"] == {
+        "type": "string", "description": "What was found"}
+    files = schema["properties"]["files"]
+    assert files["type"] == "array"
+    assert files["items"]["required"] == ["path"]
+    assert set(files["items"]["properties"]) == {"path", "note"}
+    assert "report" not in schema.get("required", [])
+
+
+def test_a_json_schema_output_passes_through_unchanged():
+    meta, _ = _parse(
+        "output:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    verdict:\n"
+        "      type: string\n"
+        "  required: [verdict]\n")
+
+    assert meta["output"] == {"type": "object", "properties": {"verdict": {"type": "string"}},
+                              "required": ["verdict"]}
+
+
+@pytest.mark.parametrize("block, needle", [
+    ("output: []\n", "output must be a non-empty mapping"),
+    ("output:\n  properties: nope\n", "properties/optionalProperties must be mappings"),
+    ("output:\n  type: not-a-type\n", "not a valid JSON Schema"),
+    ("spawns: {a: b}\n", "spawns must be"),
+    ('blocking: "yes"\n', "blocking must be a boolean"),
+])
+def test_invalid_output_spawns_and_blocking_fail_closed(block, needle):
+    with pytest.raises(DefinitionError, match=needle):
+        _parse(block)
+
+
+@pytest.mark.parametrize("block, expected", [
+    ('spawns: "scout"\n', ["scout"]),
+    ('spawns: "scout, reviewer"\n', ["scout", "reviewer"]),
+    ("spawns: [scout, reviewer]\n", ["scout", "reviewer"]),
+    ('spawns: "*"\n', ["*"]),
+    ("spawns: [scout, '*']\n", ["*"]),
+    ("spawns: []\n", []),
+])
+def test_spawns_accepts_star_csv_and_arrays(block, expected):
+    meta, _ = _parse(block)
+
+    assert meta["spawns"] == expected
+
+
+def test_spawns_and_blocking_are_optional():
+    meta, _ = _parse("model: '@smol'\n")
+
+    assert "spawns" not in meta and "blocking" not in meta and "output" not in meta
+
+
+# -- omp parity fixtures (the real bundled front matter) ----------------------
+
+
+def test_the_omp_scout_frontmatter_parses_to_its_role_and_output_schema():
+    meta, body = agent_definitions.parse_definition(
+        SCOUT_FRONTMATTER + "\nInvestigate.\n", source="scout.md")
+
+    assert meta["model"] == "@smol"
+    assert "spawns" not in meta, "a leaf scout derives nothing"
+    assert body == "Investigate."
+
+    schema = meta["output"]
+    assert schema["required"] == ["summary", "files", "architecture"]
+    assert set(schema["properties"]) == {"summary", "files", "architecture", "report"}
+    assert schema["properties"]["summary"]["description"].startswith("Brief summary")
+    files = schema["properties"]["files"]
+    assert files["type"] == "array"
+    assert files["items"]["required"] == ["path", "description"]
+
+
+def test_the_omp_reviewer_frontmatter_parses_to_its_role_spawns_and_schema():
+    meta, _ = agent_definitions.parse_definition(
+        REVIEWER_FRONTMATTER + "\nReview.\n", source="reviewer.md")
+
+    assert meta["model"] == "@slow"
+    assert meta["spawns"] == ["scout"]
+
+    schema = meta["output"]
+    assert schema["required"] == ["overall_correctness", "explanation", "confidence"]
+    assert set(schema["properties"]) == {
+        "overall_correctness", "explanation", "confidence", "findings"}
+    assert schema["properties"]["overall_correctness"]["enum"] == ["correct", "incorrect"]
+    findings = schema["properties"]["findings"]
+    assert findings["type"] == "array"
+    assert set(findings["items"]["properties"]) == {
+        "title", "body", "priority", "confidence", "file_path", "line_start", "line_end"}
+    assert len(findings["items"]["required"]) == 7
+
+
+def test_the_omp_scout_read_summarize_is_now_a_known_field():
+    meta, _ = agent_definitions.parse_definition(
+        SCOUT_FRONTMATTER + "\nInvestigate.\n", source="scout.md")
+
+    assert meta["read-summarize"] is False
+
+
+def test_ported_omp_agent_fields_parse():
+    meta, _ = _parse(
+        "structured: true\n"
+        "autoloadSkills: [team-rubric, 'category/review']\n"
+        "advisor: true\n"
+        "read-summarize: false\n")
+
+    assert meta["structured"] is True
+    assert meta["autoloadSkills"] == ["team-rubric", "category/review"]
+    assert meta["advisor"] is True
+    assert meta["read-summarize"] is False
+
+
+def test_autoload_skills_accepts_csv_and_deduplicates():
+    meta, _ = _parse("autoloadSkills: a, b, a\n")
+
+    assert meta["autoloadSkills"] == ["a", "b"]
+
+
+def test_advisor_accepts_a_model_selector():
+    meta, _ = _parse('advisor: "@smol:high"\n')
+
+    assert meta["advisor"] == "@smol:high"
+
+
+def test_read_summarize_camel_case_is_normalized():
+    meta, _ = _parse("readSummarize: false\n")
+
+    assert meta == {"read-summarize": False}
+
+
+@pytest.mark.parametrize("block, needle", [
+    ('structured: "yes"\n', "must be a boolean"),
+    ("autoloadSkills: 3\n", "CSV string or an array"),
+    ("advisor: 3\n", "boolean or a model selector"),
+    ('read-summarize: "no"\n', "must be a boolean"),
+])
+def test_ported_fields_fail_closed(block, needle):
+    with pytest.raises(DefinitionError, match=needle):
+        _parse(block)
+
+
+def test_the_omp_definitions_unknown_keys_only_warn(caplog):
+    with caplog.at_level(logging.WARNING, logger="tools.agent_definitions"):
+        agent_definitions.parse_definition(SCOUT_FRONTMATTER + "\nbody\n", source="scout.md")
+        agent_definitions.parse_definition(REVIEWER_FRONTMATTER + "\nbody\n", source="reviewer.md")
+
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert "unknown field" in messages
+    assert "tools" in messages and "thinking-level" in messages
+    assert "read-summarize" not in messages

@@ -1,14 +1,16 @@
-"""``agent_out``: read a named agent session back by ``agent_session_id`` or subject."""
+"""``agent_out``: transcript, bundle artifacts, ast summary and inbox (ADR-16 P2/D5)."""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import run_agent
 
-from agent import agent_loop_service
-from tools import agent_out_tool, agent_tool
+from agent import agent_loop_service, run_artifacts, run_transcript
+from tools import agent_out_tool, agent_tool, read_summary
 from tools.registry import registry
 
 
@@ -44,8 +46,8 @@ def _fake_route_and_agent(monkeypatch):
 
     _FakeAgent.instances.clear()
     monkeypatch.setattr(agent_run, "_resolve_route",
-                        lambda model, provider: ("fake-model", {"provider": "fake",
-                                                                "api_key": "k"}))
+                        lambda model, provider, base_url="", api_key="": (
+                            "fake-model", {"provider": "fake", "api_key": "k"}))
     monkeypatch.setattr(run_agent, "AIAgent", _FakeAgent)
     agent_loop_service.reset_service()
     yield
@@ -62,54 +64,152 @@ def _read(**args) -> dict:
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
-def test_the_answer_is_readable_by_id_and_by_subject():
-    run = _run(agent_name="researcher", user_prompts="Find the cause.", background=False,
-               subject="cause analysis")
+def _row(agent_session_id: str) -> dict:
+    from hermes_state_registry import acquire, release_or_close
 
-    by_id = _read(mode="final_response", agent_session_id=run["agent_session_id"])
-    by_subject = _read(mode="final_response", subject="cause analysis")
-
-    assert by_id["final_response"] == "answered: Find the cause."
-    assert by_id["status"] == "completed"
-    assert by_subject["agent_session_id"] == run["agent_session_id"]
-    assert by_subject["subject"] == "cause analysis"
-
-
-def test_artifact_mode_reports_no_manifest_without_losing_the_transcript():
-    run = _run(agent_name="researcher", user_prompts="go", background=False)
-
-    data = _read(mode="artifact", agent_session_id=run["agent_session_id"])
-
-    assert data["artifact"] is None
-    assert data["transcript_path"] == run["transcript_path"]
-    assert "no artifact manifest" in data["note"]
+    db = acquire()
+    try:
+        row = db.get_agent_session(agent_session_id)
+    finally:
+        release_or_close(db)
+    assert row is not None
+    return row
 
 
-def test_history_is_that_agent_session_only():
+def _python_source(body_lines: int = 140) -> str:
+    body = "\n".join(f"    value_{i} = {i}" for i in range(body_lines))
+    return ('"""Module docstring."""\nimport os\n\ndef compute(value):\n'
+            f"{body}\n    return value_0\n")
+
+
+def test_history_is_the_default_mode_and_reads_that_session_only():
     first = _run(agent_name="researcher", user_prompts="first", background=False)
     second = _run(agent_name="researcher", user_prompts="second", background=False)
 
-    first_events = _read(mode="history", agent_session_id=first["agent_session_id"])
+    first_events = _read(agent_session_id=first["agent_session_id"])
     second_events = _read(mode="history", agent_session_id=second["agent_session_id"])
 
     first_text = [event.get("text") for event in first_events["events"]]
     second_text = [event.get("text") for event in second_events["events"]]
+    assert first_events["mode"] == "history"
     assert "first" in first_text and "second" not in first_text
     assert "second" in second_text and "first" not in second_text
     assert first_events["event_count"] == len(first_events["events"])
     assert first_events["truncated"] is False
 
 
+def test_settle_writes_the_report_verbatim_and_an_ast_summary():
+    run = _run(agent_name="researcher", user_prompts="Find the cause.", background=False,
+               subject="cause analysis")
+
+    row = _row(run["agent_session_id"])
+    manifest = row["artifact_manifest"]
+    report = Path(manifest["report_path"]).read_text(encoding="utf-8")
+    assert report == row["final_response"] == "answered: Find the cause."
+
+    ast = json.loads(Path(manifest["ast_summary_path"]).read_text(encoding="utf-8"))
+    assert ast["agent_session_id"] == run["agent_session_id"]
+    assert ast["subject"] == "cause analysis"
+    assert ast["sources"] == [] and ast["reason"] == "no_structural_sources"
+    assert Path(manifest["bundle_dir"]) == Path(run["transcript_path"]).parent
+    assert Path(manifest["tool_artifacts_dir"]).name == "cause_analysis"
+
+
+def test_ast_summary_is_written_even_when_read_summarize_is_disabled():
+    run = _run(agent_name="researcher", user_prompts="go", background=False)
+
+    data = _read(mode="ast_summary", agent_session_id=run["agent_session_id"])
+
+    assert data["ast_summary"]["version"] == 1
+    assert data["ast_summary"]["sources"] == []
+    assert data["ast_summary"]["reason"] == "no_structural_sources"
+    assert data["path"] == data["ast_summary_path"]
+
+
+def test_artifact_reports_the_bundle_files():
+    run = _run(agent_name="researcher", user_prompts="go", background=False)
+
+    identity = _read(mode="history", agent_session_id=run["agent_session_id"])
+    tool_dir = Path(identity["tool_artifacts_dir"])
+    (tool_dir / "1.terminal.log").write_text("FULL\n", encoding="utf-8")
+    (tool_dir / "1.terminal-original.log").write_text("FULL\nMORE\n", encoding="utf-8")
+
+    report = _read(mode="artifact", agent_session_id=run["agent_session_id"])
+    assert report["kind"] == "report" and report["content"] == "answered: go"
+
+    tool = _read(mode="artifact", agent_session_id=run["agent_session_id"], kind="tool",
+                 step=1, tool_name="terminal")
+    assert tool["content"] == "FULL\n"
+    assert tool["original_content"] == "FULL\nMORE\n" and tool["truncated"] is True
+    assert tool["path"] == str(tool_dir / "1.terminal.log")
+
+    missing = _read(mode="artifact", agent_session_id=run["agent_session_id"], kind="tool",
+                    step=99, tool_name="terminal")
+    assert missing["content"] is None and "no archived output" in missing["note"]
+
+    listed = _read(mode="artifact", agent_session_id=run["agent_session_id"], kind="all")
+    kinds = {entry["kind"] for entry in listed["files"]}
+    assert {"report", "ast_summary", "transcript", "tool"} <= kinds
+
+
+def test_artifact_tool_requires_step_and_tool_name():
+    run = _run(agent_name="researcher", user_prompts="go", background=False)
+
+    no_name = _read(mode="artifact", agent_session_id=run["agent_session_id"], kind="tool",
+                    step=1)
+    no_step = _read(mode="artifact", agent_session_id=run["agent_session_id"], kind="tool",
+                    tool_name="terminal")
+
+    assert "tool_name" in no_name["error"]
+    assert "step" in no_step["error"]
+
+
+def test_a_conversation_session_is_refused_by_artifact_mode():
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        db.create_session(session_id="main-conversation", source="cli")
+    finally:
+        release_or_close(db)
+
+    data = _read(mode="artifact", agent_session_id="main-conversation")
+
+    assert "conversation" in data["error"] and "named agent sessions" in data["error"]
+
+
+def test_a_legacy_transcript_path_is_still_readable():
+    from hermes_state_registry import acquire, release_or_close
+
+    legacy = run_transcript.path_for("researcher", "legacy-run")
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    run_transcript.record("researcher", "legacy-run",
+                          [{"role": "user", "content": "old question"}], path=legacy)
+    db = acquire()
+    try:
+        db.begin_agent_session(agent_session_id="legacy-run", agent_name="researcher",
+                               subject="old run", transcript_path=str(legacy))
+    finally:
+        release_or_close(db)
+
+    history = _read(mode="history", agent_session_id="legacy-run")
+    artifact = _read(mode="artifact", agent_session_id="legacy-run")
+
+    assert [event["text"] for event in history["events"] if event.get("kind") == "msg"] \
+        == ["old question"]
+    assert artifact["content"] is None and "no report" in artifact["note"]
+
+
 def test_identity_must_be_exactly_one_of_id_and_subject():
-    both = _read(mode="final_response", agent_session_id="a", subject="b")
-    neither = _read(mode="final_response")
+    both = _read(mode="history", agent_session_id="a", subject="b")
+    neither = _read(mode="history")
 
     assert "exactly one" in both["error"]
     assert "exactly one" in neither["error"]
 
 
 def test_an_unknown_identity_is_an_error():
-    data = _read(mode="final_response", agent_session_id="researcher-missing")
+    data = _read(mode="history", agent_session_id="researcher-missing")
 
     assert "no agent session" in data["error"]
 
@@ -121,13 +221,15 @@ def test_a_repeated_subject_is_disambiguated_and_each_row_stays_addressable():
                   subject="same topic")
 
     assert second["subject"] == "same topic (2)"
-    assert _read(mode="final_response", subject="same topic")["agent_session_id"] \
+    assert _read(mode="history", subject="same topic")["agent_session_id"] \
         == first["agent_session_id"]
-    assert _read(mode="final_response", subject="same topic (2)")["agent_session_id"] \
+    assert _read(mode="history", subject="same topic (2)")["agent_session_id"] \
         == second["agent_session_id"]
+    # Each stored subject names its own artifacts: no file is shared.
+    assert Path(second["transcript_path"]).name == "same_topic__2_.jsonl"
 
 
-def test_a_running_row_reports_status_instead_of_an_answer():
+def test_a_running_row_has_no_report_or_ast_yet():
     from hermes_state_registry import acquire, release_or_close
 
     db = acquire()
@@ -137,16 +239,84 @@ def test_a_running_row_reports_status_instead_of_an_answer():
     finally:
         release_or_close(db)
 
-    running = _read(mode="final_response", agent_session_id="researcher-running")
-    assert running["final_response"] is None
-    assert running["status"] == "running" and "not settled" in running["note"]
+    report = _read(mode="artifact", agent_session_id="researcher-running")
+    ast = _read(mode="ast_summary", agent_session_id="researcher-running")
 
-    db = acquire()
+    assert report["content"] is None and "no report" in report["note"]
+    assert ast["ast_summary"] is None and "no ast summary" in ast["note"]
+
+
+def test_settle_aggregates_collected_summaries_and_legacy_summaries(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    transcript = bundle / "topic.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    run = SimpleNamespace(agent_name="researcher", agent_session_id="settle-run",
+                          subject="topic", bundle=bundle, path=transcript,
+                          project_dir=str(tmp_path), output_schema=None)
+
+    legacy_dir = run_transcript.summary_dir("researcher", "settle-run")
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "old.md").write_text("OLD SUMMARY", encoding="utf-8")
+    (legacy_dir / "index.json").write_text(json.dumps({"summaries": [{
+        "source": "src/old.py", "file": "old.md", "kept_lines": 2,
+        "total_lines": 10, "elided_ranges": ["3-10"]}]}), encoding="utf-8")
+
+    read_summary.set_read_summarize("settle-run", True, agent_name="researcher",
+                                    agent_session_id="settle-run")
     try:
-        db.finish_agent_session("researcher-running", status="completed",
-                                final_response="done later", transcript_path="nowhere.jsonl")
+        summary = read_summary.ReadSummary(content="NEW SUMMARY", total_lines=8,
+                                           elided=((2, 8),), kept_lines=1)
+        read_summary.persist_summary("settle-run", "src/new.py", summary)
+        manifest = run_artifacts.settle_bundle(run, "completed", "the report")
     finally:
-        release_or_close(db)
+        read_summary.clear_read_summarize("settle-run")
 
-    settled = _read(mode="final_response", agent_session_id="researcher-running")
-    assert settled["final_response"] == "done later" and settled["status"] == "completed"
+    assert manifest is not None and manifest["ast_summary_written"] is True
+    ast = json.loads(Path(manifest["ast_summary_path"]).read_text(encoding="utf-8"))
+    by_source = {entry["source"]: entry for entry in ast["sources"]}
+    assert by_source["src/new.py"]["summary"] == "NEW SUMMARY"
+    assert by_source["src/old.py"]["summary"] == "OLD SUMMARY"
+    assert "reason" not in ast
+    assert not legacy_dir.exists(), "the legacy directory is removed after a verified write"
+
+
+def test_settle_derives_sources_from_the_transcript_when_none_were_collected(tmp_path):
+    source = tmp_path / "sample.py"
+    source.write_text(_python_source(), encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    transcript = bundle / "topic.jsonl"
+    run_transcript.record("researcher", "derived-run", [{
+        "role": "assistant", "content": "",
+        "tool_calls": [{"id": "t1", "name": "read_file",
+                        "args": json.dumps({"path": str(source)})}],
+    }], path=transcript)
+    run = SimpleNamespace(agent_name="researcher", agent_session_id="derived-run",
+                          subject="topic", bundle=bundle, path=transcript,
+                          project_dir=str(tmp_path), output_schema=None)
+
+    manifest = run_artifacts.settle_bundle(run, "completed", "report")
+
+    assert manifest is not None
+    ast = json.loads(Path(manifest["ast_summary_path"]).read_text(encoding="utf-8"))
+    assert [entry["source"] for entry in ast["sources"]] == [str(source)]
+    assert "def compute(value):" in ast["sources"][0]["summary"]
+
+
+def test_settle_writes_the_structured_output_sidecar(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    transcript = bundle / "topic.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    run = SimpleNamespace(agent_name="researcher", agent_session_id="structured-run",
+                          subject="topic", bundle=bundle, path=transcript,
+                          project_dir=str(tmp_path),
+                          output_schema={"type": "object", "required": ["x"],
+                                         "properties": {"x": {"type": "integer"}}})
+
+    manifest = run_artifacts.settle_bundle(run, "completed", 'here: {"x": 3}')
+
+    assert manifest is not None and manifest["structured_output_written"] is True
+    assert json.loads(Path(manifest["structured_output_path"]).read_text(encoding="utf-8")) \
+        == {"x": 3}

@@ -5,6 +5,7 @@ docs of config.yaml.
 """
 
 from hermes_cli.config_defaults_agent_loop import _agent_loop
+from hermes_cli.config_defaults_agent_sessions import _agent_sessions
 from hermes_cli.config_defaults_auxiliary import auxiliary_defaults
 from hermes_cli.config_defaults_code_execution import _code_execution
 from hermes_cli.config_defaults_judgment import judgment_defaults
@@ -546,7 +547,23 @@ DEFAULT_CONFIG = {
     # Tool-output truncation. max_bytes: terminal_tool output cap in chars (head+tail kept; 50_000 ≈
     # 12-15K tokens). max_lines: max `limit` one read_file call may request before clamping.
     # max_line_length: per-line cap in read_file's line-numbered view (chars).
-    "tool_output": {"max_bytes": 50000, "max_lines": 2000, "max_line_length": 2000},
+    "tool_output": {
+        "max_bytes": 50000, "max_lines": 2000, "max_line_length": 2000,
+        # ADR-16 D3: per-session tool-output archive. ``exclude_tools`` are contract-shaped
+        # results that must not be truncated twice; redaction is mandatory before disk.
+        "artifacts": {
+            "enabled": True,
+            "redact": True,
+            "exclude_tools": ["read_file", "todo", "agent_out"],
+        },
+    },
+    # Whole-file read summaries (omp's read.summarize / read-summarize). Off by default in
+    # Hermes: summarization changes what the model sees, so it is opt-in. A named agent's
+    # ``read-summarize`` field overrides this per run. prose: also summarize .md/.txt;
+    # min_total_lines: shorter files always stay verbatim.
+    "read": {
+        "summarize": {"enabled": False, "prose": False, "min_total_lines": 100},
+    },
     # Tool loop guardrails nudge models that repeat failed/non-progressing tool calls. Soft warnings
     # are always on; hard stops are opt-in so interactive sessions keep flowing.
     "tool_loop_guardrails": {
@@ -718,6 +735,9 @@ DEFAULT_CONFIG = {
         },
     },
     "agent_loop": _agent_loop(),
+    # Resident named-agent sessions (ADR-15 D7): a settled background `agent` run keeps its live
+    # slot until the idle TTL parks it; wake/revive runs use this pool, never agent_loop.
+    "agent_sessions": _agent_sessions(),
     "auxiliary": auxiliary_defaults(),
     "judgment": judgment_defaults(),
     "ttsr": ttsr_defaults(),

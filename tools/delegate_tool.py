@@ -863,7 +863,13 @@ DELEGATE_TASK_SCHEMA = {
                 "Control actions return immediately; goal/tasks are ignored unless spawning.",
                 enum=["spawn", "list", "steer", "stop"],
             ),
-            "subagent_id": _p("string", "Target for action='steer'/'stop' (ids from the spawn response or action='list')."),
+            "subagent_id": _p(
+                "string",
+                "Target for action='steer'/'stop': a live child id (from the spawn response or "
+                "action='list'), or a named agent session's agent_session_id (the id the agent "
+                "tool returned). Steering a named session with no live run queues the message "
+                "in its inbox instead of failing.",
+            ),
             "message": _p(
                 "string",
                 "For action='steer': the course correction, appended to "

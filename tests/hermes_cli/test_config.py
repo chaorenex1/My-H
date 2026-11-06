@@ -16,7 +16,6 @@ from hermes_cli.config import (
     get_hermes_home,
     ensure_hermes_home,
     get_compatible_custom_providers,
-    _normalize_max_turns_config,
     is_provider_enabled,
     load_config,
     load_env,
@@ -31,6 +30,8 @@ from hermes_cli.config import (
     unset_config_value,
     _sanitize_env_lines,
 )
+
+from hermes_cli.config_canon import normalize_max_turns_config
 
 
 class TestGetHermesHome:
@@ -1750,7 +1751,7 @@ class TestConfigNormalizationDoesNotOverwriteUserValues:
 
 
     def test_normalize_max_turns_does_not_inject_default(self):
-        result = _normalize_max_turns_config(
+        result = normalize_max_turns_config(
             {"_config_version": DEFAULT_CONFIG["_config_version"]}
         )
         assert "max_turns" not in result.get("agent", {})

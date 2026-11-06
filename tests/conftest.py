@@ -456,6 +456,22 @@ def _isolate_hermes_home(_hermetic_environment):
 
 
 @pytest.fixture(autouse=True)
+def _reset_agent_session_runtime():
+    """Resident named-agent sessions are process-wide: never leak one test's agent into another.
+
+    A background ``agent`` run now stays resident by default (ADR-15 D7), so without this every
+    later test would compete for the same ``agent_sessions.max_live`` slots and inherit open
+    agents. Closing the shared pool between tests also stops its idle-TTL watchdog.
+    """
+    yield
+    try:
+        from agent import agent_session_runtime
+    except Exception:  # a test that stubs the module away has nothing to reset
+        return
+    agent_session_runtime.reset_runtime()
+
+
+@pytest.fixture(autouse=True)
 def _reset_foreground_exit_fence():
     """A test that drives a hard-exit path raises the one-way foreground-spawn fence; lower it after."""
     yield

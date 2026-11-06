@@ -35,8 +35,12 @@ order (each ``<name>.md`` or ``<name>``):
    ``skills/*/agents/`` (bundled skills), ``plugins/*/agents/`` (bundled plugins).
 
 A leading YAML front-matter block is an enforced contract (``tools/agent_definitions.py``): it may
-pin ``model`` (``provider:model`` or a bare name), ``toolsets``, ``read_only``,
-``max_iterations``, ``reasoning_effort``, ``worktree`` and the skip flags. Precedence per call is
+pin ``model`` (``provider:model``, a bare name or ``@role``), ``toolsets``, ``read_only``,
+``max_iterations``, ``reasoning_effort``, ``worktree`` and the skip flags. It may also declare
+``output`` (an omp JTD-shaped or JSON Schema output contract, normalized to JSON Schema and
+validated with one bounded retry), ``spawns`` (the named agents this definition may derive, ``*``
+or a list) and ``blocking`` (the parent waits for this agent even when async execution is
+available). Precedence per call is
 caller argument, then definition, then host default; the block itself is never sent to the model.
 The body is scanned with the same context-scope threat patterns a context file gets: a project
 definition that matches is blocked (an operator-owned profile or installation definition only
@@ -56,7 +60,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
-from agent import agent_loop_service, agent_run, run_transcript
+import hermes_session_paths as session_paths
+from agent import agent_loop_service, agent_run, run_artifacts, run_transcript
 from agent.skill_utils import find_project_root
 from hermes_constants import get_hermes_home
 from tools import agent_definitions
@@ -78,6 +83,11 @@ MAX_GOAL_CHARS = 120
 #: An agent may itself call ``agent`` when it holds the tool. The depth is a ContextVar, and
 #: the pool copies the submitter's context, so a nested run sees the parent's depth.
 _DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar("agent_tool_depth", default=0)
+
+#: The running definition's ``spawns`` allow-list (``None`` = no definition, so no policy).
+#: Set around the run, so a nested ``agent`` call inside it is checked at *its* validation time.
+_SPAWNS: contextvars.ContextVar[Optional[frozenset[str]]] = contextvars.ContextVar(
+    "agent_tool_spawns", default=None)
 
 _TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
 _FALSE_FLAGS = frozenset({"0", "false", "no", "off"})
@@ -130,18 +140,11 @@ def _skill_name(args: dict[str, Any]) -> str:
     return _segment(args.get("skill_name"), "skill_name")
 
 
-def _split_model(raw: Any, label: str = "model") -> tuple[str, str]:
-    """``(provider, model)`` from ``"provider:model"``; a bare value pins only the model."""
-    text = _text(raw)
-    if not text:
-        return "", ""
-    provider, sep, model = text.partition(":")
-    if not sep:
-        return "", text
-    provider, model = provider.strip(), model.strip()
-    if not provider or not model:
-        raise ValueError(f"{label} must be 'provider:model' or a bare model name, got {text!r}")
-    return provider, model
+def _model_route(raw: Any) -> Any:
+    """Resolve one ``model`` selector (``provider:model``, bare name or ``@role``)."""
+    from hermes_cli.model_roles import resolve_model_selector
+
+    return resolve_model_selector(raw)
 
 
 def _tool_sets(args: dict[str, Any]) -> tuple[Optional[list[str]], bool]:
@@ -486,10 +489,29 @@ class _Run:
     depth: int
     read_only: bool
     max_iterations: int
-    reasoning_effort: str
+    reasoning_effort: Any
     worktree: bool
     shadowed: bool
     flags: dict[str, bool] = field(default_factory=dict)
+    model_role: str = ""
+    model_selector: str = ""
+    base_url: str = ""
+    api_key: str = field(default="", repr=False)
+    fallback_chain: tuple[dict[str, str], ...] = ()
+    output_schema: Optional[dict[str, Any]] = None
+    autoload_skills: tuple[str, ...] = ()
+    advisor: Any = None
+    read_summarize: Optional[bool] = None
+    #: Resident-session rebuild spec (ADR-15 D5/D6); survives a park or a process restart.
+    spec: dict[str, Any] = field(default_factory=dict)
+    keep_alive: bool = False
+    #: The live agent, once built — handed to the resident runtime in ``on_agent``.
+    live: dict[str, Any] = field(default_factory=dict)
+    #: Session bundle this run's artifacts land in (ADR-16 D4), and its own archive namespace.
+    bundle: Optional[Path] = None
+    tool_dir: Optional[Path] = None
+    #: The collision-free artifact stem chosen at creation (``<topic>`` in every file name).
+    topic: str = ""
 
 
 def _payload_dict(value: Any) -> dict[str, Any]:
@@ -514,13 +536,49 @@ def _begin_session_row(agent_session_id: str, run: _Run) -> str:
     try:
         return db.begin_agent_session(
             agent_session_id=agent_session_id, agent_name=run.agent, subject=run.subject,
-            transcript_path=str(run.path), parent_session_id=run.session_key)
+            transcript_path=str(run.path), parent_session_id=run.session_key,
+            model_role=run.model_role, metadata=run.spec or None)
     except Exception:  # health: allow BLE001 -- the run stands; only the lookup row is lost
         logger.warning("agent: agent_session row was not written for %s",
                        agent_session_id, exc_info=True)
         return run.subject
     finally:
         release_or_close(db)
+
+
+def _record_transcript_path(agent_session_id: str, path: Path) -> None:
+    """Persist the actual bundle file on the row (ADR-16 D4 authoritative mapping)."""
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- the run stands without the row
+        logger.debug("agent: no store for transcript path", exc_info=True)
+        return
+    try:
+        db.set_agent_session_transcript_path(agent_session_id, str(path))
+    except Exception:  # health: allow BLE001 -- a missing update only loses the mapping
+        logger.warning("agent: transcript path not recorded for %s", agent_session_id,
+                       exc_info=True)
+    finally:
+        release_or_close(db)
+
+
+def _finalize_run_paths(agent_session_id: str, run: _Run) -> _Run:
+    """Name the transcript/archive after the *stored* subject, not the requested one.
+
+    A duplicate subject gains an `` (N)`` suffix inside ``begin_agent_session``; the file names
+    must follow the stored subject (ADR-16 D4) or two runs could share a topic.
+    """
+    if run.bundle is None:
+        return run
+    topic = session_paths.allocate_topic(run.bundle, run.subject,
+                                         discriminator=agent_session_id)
+    path = session_paths.transcript_path(run.bundle, run.subject, topic=topic)
+    tool_dir = session_paths.subagent_dir(run.bundle, run.subject, topic=topic)
+    if str(path) != str(run.path):
+        _record_transcript_path(agent_session_id, path)
+    return replace(run, path=path, tool_dir=tool_dir, topic=topic)
 
 
 def _settle(run: _Run, value: Any, error: Optional[BaseException]) -> tuple[str, str]:
@@ -532,6 +590,13 @@ def _settle(run: _Run, value: Any, error: Optional[BaseException]) -> tuple[str,
     else:
         status = "completed"
         body = str(payload.get("answer") or "")
+    sources = tuple(getattr(value, "summary_sources", ()) or ()) if value is not None else ()
+    manifest: Optional[dict[str, Any]] = None
+    try:
+        manifest = run_artifacts.settle_bundle(run, status, body, sources=sources)
+    except Exception:  # health: allow BLE001 -- the run already happened
+        logger.warning("agent: bundle artifacts were not written for %s",
+                       run.agent_session_id, exc_info=True)
     try:
         from hermes_state_registry import acquire, release_or_close
 
@@ -542,7 +607,8 @@ def _settle(run: _Run, value: Any, error: Optional[BaseException]) -> tuple[str,
     try:
         db.finish_agent_session(
             run.agent_session_id, status=status, final_response=body,
-            transcript_path=str(payload.get("transcript_path") or run.path))
+            transcript_path=str(payload.get("transcript_path") or run.path),
+            artifact_manifest=manifest)
     except Exception:  # health: allow BLE001 -- the run already happened
         logger.warning("agent: agent_session row was not settled for %s",
                        run.agent_session_id, exc_info=True)
@@ -588,6 +654,12 @@ def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
     }
     if run.shadowed:
         event["definition_shadowed"] = True
+    if "output_schema_valid" in payload:
+        event["output_schema_valid"] = payload["output_schema_valid"]
+        if payload.get("output_schema_errors"):
+            event["output_schema_errors"] = payload["output_schema_errors"]
+        if payload.get("validated") is False:
+            event["validated"] = False
     if payload.get("worktree"):
         event["worktree"] = payload["worktree"]
     if error is not None:
@@ -602,6 +674,43 @@ def _notify(run: _Run, job: agent_loop_service.AgentLoopJob, value: Any,
 # -- execution -----------------------------------------------------------------
 
 
+def _live_hooks(run: _Run) -> dict[str, Any]:
+    """Publish the built agent for owner steering; drop the record once the run settles.
+
+    The gateway/TUI authority is captured here, in the calling thread, so the roster's
+    ``subagent.steer`` check sees the same live transport a delegated child records.
+    """
+    from tools.agent_inbox import (
+        capture_steer_authority,
+        register_live_session,
+        unregister_live_session,
+    )
+
+    authority = capture_steer_authority()
+    live: dict[str, Any] = {"authority": authority}
+    run.live = live
+
+    def _on_agent(agent: Any) -> None:
+        live["agent"] = agent
+        if run.tool_dir is not None:
+            # ADR-16 D4: the subagent's tool log is its own namespace, with its own steps.
+            from tools.tool_output_archive import configure_agent_archive
+
+            configure_agent_archive(agent, run.tool_dir)
+        register_live_session(agent_session_id=run.agent_session_id, agent=agent,
+                              owner_session_id=run.session_key, goal=run.goal,
+                              model=run.model_name, depth=run.depth, authority=authority)
+        if run.keep_alive:
+            from agent.agent_session_runtime import runtime
+
+            runtime().note_agent(run.agent_session_id, agent)
+
+    def _on_settled() -> None:
+        unregister_live_session(run.agent_session_id, live.get("agent"))
+
+    return {"on_agent": _on_agent, "on_settled": _on_settled}
+
+
 def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any]:
     """The ``agent.agent_run.run`` keyword surface for this job."""
     flags = run.flags
@@ -610,12 +719,17 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "system_message": run.system_prompt,
         "model": run.model_name,
         "provider": run.provider_name,
+        "base_url": run.base_url,
+        "api_key": run.api_key,
+        "fallback_chain": [dict(entry) for entry in run.fallback_chain],
+        "model_role": run.model_role,
         "toolsets": run.toolsets,
         "all_tools": run.all_tools,
         "project_dir": run.project_dir,
         "history": history,
         "layer": run.agent,
         "agent_session_id": run.agent_session_id,
+        "transcript_path": str(run.path) if run.path else "",
         "history_session": run.session_key,
         "meta": {"agent": run.agent, "parent": "", "depth": run.depth},
         "skip_memory": flags.get("skip_memory", False),
@@ -626,6 +740,12 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "max_iterations": run.max_iterations,
         "reasoning_effort": run.reasoning_effort,
         "worktree": run.worktree,
+        "output_schema": run.output_schema,
+        "autoload_skills": list(run.autoload_skills),
+        "advisor": run.advisor,
+        "read_summarize": run.read_summarize,
+        "keep_alive": run.keep_alive,
+        **_live_hooks(run),
     }
 
 
@@ -657,11 +777,22 @@ class _Call:
     background: bool
     read_only: bool
     max_iterations: int
-    reasoning_effort: str
+    reasoning_effort: Any
     worktree: bool
     flags: dict[str, bool]
     project: Optional[Path]
     subject: str
+    model_role: str = ""
+    model_selector: str = ""
+    skill_name: str = ""
+    base_url: str = ""
+    api_key: str = field(default="", repr=False)
+    fallback_chain: tuple[dict[str, str], ...] = ()
+    spawns: Optional[frozenset[str]] = None
+    output_schema: Optional[dict[str, Any]] = None
+    autoload_skills: tuple[str, ...] = ()
+    advisor: Any = None
+    read_summarize: Optional[bool] = None
 
 
 #: Host defaults per knob; a definition overrides them, a caller argument overrides both.
@@ -689,9 +820,12 @@ def _caller_knobs(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         unknown = [name for name in toolsets if not validate_toolset(name)]
         if unknown:
             raise ValueError(f"unknown toolset(s): {', '.join(unknown)}")
-    model = _text(args.get("model"))
+    raw_model = args.get("model")
+    if isinstance(raw_model, (list, tuple)):
+        raise ValueError("model takes one selector, not a list; use '@role' or 'provider:model'")
+    model = _text(raw_model)
     if model:
-        _split_model(model)  # validate the caller's route before it can outrank a definition
+        _model_route(model)  # validate the caller's route/role before it can outrank a definition
     knobs: dict[str, Any] = {
         name: _flag(args, name) for name in (
             "background", "skip_memory", "skip_context_files", "skip_background_review",
@@ -701,6 +835,136 @@ def _caller_knobs(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     return knobs, all_tools
 
 
+def _spawn_allowlist(definition: _Definition) -> Optional[frozenset[str]]:
+    """The definition's ``spawns``: ``None`` without a definition file, else an allow-list.
+
+    Missing ``spawns`` follows omp's compatibility rule: the definition's own ``toolsets``
+    naming ``agents``/``delegation`` means ``*``; otherwise the agent cannot derive at all.
+    """
+    if not definition.source or definition.source == "argument":
+        return None
+    if "spawns" in definition.metadata:
+        return frozenset(definition.metadata.get("spawns") or ())
+    toolsets = set(definition.metadata.get("toolsets") or ())
+    return frozenset({"*"}) if toolsets & {"agents", "delegation"} else frozenset()
+
+
+def _resident_enabled() -> bool:
+    """Whether a settled background run stays resident (``agent_sessions.keep_alive``)."""
+    from agent.agent_session_runtime import session_limits
+
+    return bool(session_limits().get("keep_alive"))
+
+
+def _resident_spec(call: _Call) -> dict[str, Any]:
+    """What a wake/revive needs to rebuild this session; credentials are never included."""
+    return {
+        "model_selector": call.model_selector,
+        "model_role": call.model_role,
+        "model_name": call.model_name,
+        "provider_name": call.provider_name,
+        "toolsets": list(call.toolsets),
+        "all_tools": call.all_tools,
+        "flags": dict(call.flags),
+        "read_only": call.read_only,
+        "max_iterations": call.max_iterations,
+        "reasoning_effort": call.reasoning_effort or "",
+        "project_dir": str(call.project) if call.project else "",
+        "skill_name": call.skill_name,
+        "system_prompt": call.definition.body,
+        "prompt_source": call.definition.source,
+        "output_schema": call.output_schema,
+        "autoload_skills": list(call.autoload_skills),
+        "advisor": call.advisor,
+        "read_summarize": call.read_summarize,
+        "worktree": call.worktree,
+    }
+
+
+def _check_spawn_allowed(agent_name: str) -> None:
+    """Refuse a nested ``agent`` call the parent definition's ``spawns`` does not name."""
+    allowed = _SPAWNS.get()
+    if allowed is None or "*" in allowed or agent_name in allowed:
+        return
+    listed = ", ".join(sorted(allowed)) or "none"
+    raise ValueError(
+        f"agent {agent_name!r} is not allowed by the parent definition's spawns ({listed})")
+
+
+def _output_schema(definition: _Definition) -> Optional[dict[str, Any]]:
+    """The effective ``output`` contract: ``structured: false`` explicitly opts out."""
+    schema = definition.metadata.get("output")
+    if schema is None or definition.metadata.get("structured") is False:
+        return None
+    return schema
+
+
+def _stored_agent_advisor(agent_name: str, source: str) -> Optional[bool]:
+    """The Agent Hub's stored ``advisor`` toggle for this definition row, if any.
+
+    The row is keyed by ``(agent_id, source)`` where ``source`` is the prompt path the hub
+    edited. Application code only reads it: the spawn path consumes the value below.
+    """
+    if not source or source == "argument":
+        return None
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- no store means no stored override
+        logger.debug("agent: no session store for agent_config", exc_info=True)
+        return None
+    try:
+        row = db.get_agent_config(agent_name, source)
+    except Exception:  # health: allow BLE001 -- a read must not fail the spawn
+        logger.debug("agent: agent_config read failed for %s", agent_name, exc_info=True)
+        return None
+    finally:
+        release_or_close(db)
+    if not isinstance(row, dict) or row.get("advisor") is None:
+        return None
+    raw = row.get("advisor")
+    if isinstance(raw, bool):
+        return raw
+    try:
+        return bool(int(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _advisor_option(agent_name: str, definition: _Definition) -> Any:
+    """The per-agent advisor opt-in: a stored hub toggle, else the definition field.
+
+    ``True`` uses the configured roster/role; a string resolves through the same selector
+    grammar as ``model`` (``provider:model``, a bare id or ``@role``).
+    """
+    stored = _stored_agent_advisor(agent_name, definition.source)
+    value = stored if stored is not None else definition.metadata.get("advisor")
+    if value is None or value is False:
+        return None
+    if value is True:
+        return True
+    selector = str(value)
+    level = ""
+    from hermes_constants import parse_reasoning_effort
+
+    if selector.startswith("@"):
+        role, sep, suffix = selector.partition(":")
+        if sep and parse_reasoning_effort(suffix):
+            selector, level = role, suffix
+    else:
+        base, sep, suffix = selector.rpartition(":")
+        if sep and parse_reasoning_effort(suffix):
+            selector, level = base, suffix
+    route = _model_route(selector)
+    option: dict[str, Any] = {"model": route.model, "provider": route.provider,
+                              "selector": selector}
+    if level:
+        option["reasoning_effort"] = level
+    # Only non-secret routing metadata: this value is persisted in the resident spec.
+    return option
+
+
 def _validate(args: dict[str, Any]) -> _Call:
     """Parse the call once: arguments, then the definition, then the merged knobs.
 
@@ -708,6 +972,7 @@ def _validate(args: dict[str, Any]) -> _Call:
     dispatch, so a refused call constructs no agent.
     """
     name = _agent_name(args)
+    _check_spawn_allowed(name)
     user_prompt = _text(args.get("user_prompts"))
     if not user_prompt:
         raise ValueError("user_prompts is required")
@@ -716,17 +981,30 @@ def _validate(args: dict[str, Any]) -> _Call:
     definition = _system_prompt(project, name, skill_name, _text(args.get("system_prompts")))
     caller, all_tools = _caller_knobs(args)
     knobs = agent_definitions.resolve(caller, definition.metadata, _KNOB_DEFAULTS)
-    provider_name, model_name = _split_model(knobs["model"])
+    route = _model_route(knobs["model"])
     toolsets = [str(name) for name in (knobs["toolsets"] or [])]
     if not toolsets or "*" in toolsets or "all" in toolsets:
         all_tools, toolsets = True, []
+    # Definition-level blocking outranks async execution: the parent waits even when the host
+    # default (or the caller) asked for a background run.
+    background = False if definition.metadata.get("blocking") is True else bool(
+        knobs["background"])
     return _Call(
         agent=name, user_prompt=user_prompt, definition=definition,
-        provider_name=provider_name, model_name=model_name, toolsets=toolsets,
-        all_tools=all_tools, background=bool(knobs["background"]),
+        provider_name=route.provider, model_name=route.model, toolsets=toolsets,
+        all_tools=all_tools, background=background,
         read_only=bool(knobs["read_only"]),
         max_iterations=max(1, int(knobs["max_iterations"])),
-        reasoning_effort=str(knobs["reasoning_effort"]), worktree=bool(knobs["worktree"]),
+        reasoning_effort=knobs["reasoning_effort"] or route.reasoning_effort,
+        worktree=bool(knobs["worktree"]),
+        model_role=route.role, model_selector=str(knobs["model"] or ""), skill_name=skill_name,
+        base_url=route.base_url, api_key=route.api_key,
+        fallback_chain=route.fallback_chain,
+        spawns=_spawn_allowlist(definition),
+        output_schema=_output_schema(definition),
+        autoload_skills=tuple(definition.metadata.get("autoloadSkills") or ()),
+        advisor=_advisor_option(name, definition),
+        read_summarize=definition.metadata.get("read-summarize"),
         flags={key: bool(knobs[key]) for key in
                ("skip_memory", "skip_context_files", "skip_background_review",
                 "load_soul_identity")},
@@ -753,30 +1031,47 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
     name = call.agent
     parent_session = str(session_id or "").strip()
     agent_session_id = _new_agent_session_id(name)
-    path = run_transcript.path_for(name, agent_session_id)
+    project_dir = str(call.project) if call.project else ""
+    bundle = run_artifacts.bundle_for_run(
+        parent_session_id=parent_session, agent_session_id=agent_session_id,
+        project_dir=project_dir)
+    path = session_paths.transcript_path(bundle, call.subject or _goal(call.user_prompt))
+    keep_alive = bool(call.background and not call.worktree and _resident_enabled())
     run = _Run(agent=name, session_key=parent_session, agent_session_id=agent_session_id,
                subject=call.subject or _goal(call.user_prompt),
                user_prompt=call.user_prompt,
                system_prompt=call.definition.body, prompt_source=call.definition.source,
                context=context, context_count=context_count,
                provider_name=call.provider_name, model_name=call.model_name,
+               base_url=call.base_url, api_key=call.api_key,
+               fallback_chain=call.fallback_chain,
+               model_role=call.model_role,
                toolsets=call.toolsets, all_tools=call.all_tools,
-               project_dir=str(call.project) if call.project else "", path=path,
+               project_dir=project_dir, path=path,
                goal=_goal(call.user_prompt), depth=depth + 1, read_only=call.read_only,
                max_iterations=call.max_iterations, reasoning_effort=call.reasoning_effort,
-               worktree=call.worktree, shadowed=call.definition.shadowed, flags=call.flags)
+               worktree=call.worktree, shadowed=call.definition.shadowed, flags=call.flags,
+               output_schema=call.output_schema,
+               autoload_skills=call.autoload_skills,
+               advisor=call.advisor,
+               read_summarize=call.read_summarize,
+               spec=_resident_spec(call),
+               keep_alive=keep_alive, bundle=bundle)
     subject = _begin_session_row(agent_session_id, run)
-    run = replace(run, subject=subject)
+    run = _finalize_run_paths(agent_session_id, replace(run, subject=subject))
+    params = _params(run, history)
 
     if not call.background:
         token = _DEPTH.set(depth + 1)
+        spawn_token = _SPAWNS.set(call.spawns)
         try:
-            result = agent_run.run(call.user_prompt, **_params(run, history))
+            result = agent_run.run(call.user_prompt, **params)
         except Exception as exc:  # the tool loop gets a message, not a traceback
             logger.warning("agent %s failed: %s", name, exc, exc_info=True)
             _settle(run, None, exc)
             return tool_error(f"agent run failed: {exc}")
         finally:
+            _SPAWNS.reset(spawn_token)
             _DEPTH.reset(token)
         _settle(run, result, None)
         payload = _payload(result, run)
@@ -789,15 +1084,37 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
         return tool_error("agent needs the calling session for a background run; "
                           "pass background=false to run it inline")
     token = _DEPTH.set(depth + 1)
+    spawn_token = _SPAWNS.set(call.spawns)
     try:
-        job = agent_loop_service.service().submit(
-            lambda: agent_run.run(call.user_prompt, **_params(run, history)),
-            label=name, session_key=parent_session,
-            on_settle=lambda settled, value, error: _notify(run, settled, value, error))
+        if keep_alive:
+            from agent.agent_session_runtime import AgentSessionQueueFull, runtime
+
+            pool = runtime()
+            try:
+                pool.open_session(
+                    agent_session_id=agent_session_id, agent_name=name, subject=subject,
+                    transcript_path=str(run.path), parent_session_id=parent_session,
+                    spec=run.spec, authority=run.live.get("authority"),
+                    worktree=run.worktree)
+                job = pool.submit(
+                    agent_session_id,
+                    lambda: agent_run.run(call.user_prompt, **params),
+                    label=name, session_key=parent_session,
+                    on_settle=lambda settled, value, error: _notify(
+                        run, settled, value, error))
+            except AgentSessionQueueFull as exc:
+                _settle(run, None, exc)
+                return tool_error(str(exc), status="queue_full", code="queue_full")
+        else:
+            job = agent_loop_service.service().submit(
+                lambda: agent_run.run(call.user_prompt, **params),
+                label=name, session_key=parent_session,
+                on_settle=lambda settled, value, error: _notify(run, settled, value, error))
     except agent_loop_service.AgentLoopQueueFull as exc:
         _settle(run, None, exc)
         return tool_error(str(exc))
     finally:
+        _SPAWNS.reset(spawn_token)
         _DEPTH.reset(token)
     return json.dumps({
         "agent_session_id": agent_session_id,
@@ -806,7 +1123,8 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
         "status": "running" if job.queue_position == 0 else "queued",
         "queue_position": job.queue_position,
         "background": True,
-        "transcript_path": str(path),
+        "resident": keep_alive,
+        "transcript_path": str(run.path),
     })
 
 
@@ -818,11 +1136,16 @@ AGENT_SCHEMA: dict[str, Any] = {
         "profile and installation .agents//agents/ directories, plugin agents/ directories and "
         "skills/<skill_name>/agents/; agent_name and user_prompts are required. The definition's "
         "front matter may pin model, toolsets, read_only, max_iterations, reasoning_effort, "
-        "worktree and the skip flags; a caller argument overrides it. By default the "
+        "worktree, output, spawns, blocking and the skip flags; a caller argument overrides it "
+        "(blocking: true forces an inline run). By default the "
         "run is background and the answer arrives as a completion; background=false blocks and "
-        "returns the answer. Every call is a new agent session with its own transcript at "
-        "sessions/<agent_name>/<agent_session_id>.jsonl under the profile home; the payload "
-        "returns agent_session_id and subject, which agent_out reads back. Runs do not continue "
+        "returns the answer. A background run that is not blocking/worktree stays resident after "
+        "it settles (agent_sessions.keep_alive): it keeps its slot until the idle TTL parks it, a "
+        "message wakes it, and a parked one revives on the next message. Every call is a new agent "
+        "session with its own transcript at "
+        "<parent bundle>/<topic>.jsonl under the profile's sessions/ tree (a run with no parent "
+        "session gets its own bundle); the payload returns agent_session_id and subject, which "
+        "agent_out reads back. Runs do not continue "
         "each other implicitly: pass continue_from with a prior agent_session_id to carry that "
         "conversation forward."
     ),
@@ -852,7 +1175,10 @@ AGENT_SCHEMA: dict[str, Any] = {
             },
             "model": {
                 "type": "string",
-                "description": "Pin the route as 'provider:model', or a bare model name.",
+                "description": (
+                    "Pin the route as 'provider:model', a bare model name, or '@role' "
+                    "(@default, @task, @advisor or an auxiliary.<task> slot such as @smol)."
+                ),
             },
             "tool_sets": {
                 "type": "array",

@@ -980,6 +980,29 @@ def build_preloaded_skills_prompt(
     return "\n\n".join(prompt_parts), loaded_names, missing
 
 
+def build_agent_autoload_skills_prompt(
+    names: list[str], task_id: str | None = None,
+) -> tuple[str, list[str], list[str]]:
+    """Load ``autoloadSkills`` from a named agent definition; returns
+    ``(prompt_text, loaded_names, missing_names)``.
+
+    omp injects these as hidden messages before the child's first prompt and ignores unknown
+    names. Disabled skills count as missing here for the same reason as CLI preloads: a
+    definition must not force-load an operator-disabled skill.
+    """
+    if not names:
+        return "", [], []
+    loaded_names, missing, _disabled, prompt_parts = _load_skill_blocks(
+        [str(name).strip() for name in names if str(name).strip()],
+        lambda identifier: _load_skill_payload(identifier, task_id=task_id),
+        lambda name: (f'[IMPORTANT: The "{name}" skill was declared by this agent definition '
+                      "(autoloadSkills). Treat its instructions as active guidance for this run "
+                      "unless the user overrides them.]"),
+        task_id, disabled_names=_disabled_skill_names(), disabled_as_missing=True,
+    )
+    return "\n\n".join(prompt_parts), loaded_names, missing
+
+
 def resolve_auto_load_skills(user_config: dict | None = None) -> list[str]:
     """``skills.auto_load`` from *user_config* (else the active profile config), deduplicated;
     empty when unset, malformed, or the config is unreadable."""
