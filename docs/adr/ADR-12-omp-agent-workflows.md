@@ -1,59 +1,62 @@
-# ADR-12：omp 专属 agent 工作流的取舍（OMFG / ratchet / prewalk / auto-graph）
+# ADR-12：omp 专属 agent 工作流的新后端（OMFG / ratchet / prewalk / auto-graph，选项 C）
 
-**状态**：已决定（2026-11-04）；**未实现**。四个功能不共享同一实现层，因此本 ADR 分开决策：
-**OMFG 采纳为 skill + 现有 rules/TTSR 基座**；**auto-graph 采纳为纯客户端接线**；
-**ratchet、prewalk 不采纳**，在 Hermes 中保持 `unsupported`，并登记重新评估的条件。
+**状态**：已决定（2026-11-04）；**选项 C：四项均建立新的 host 后端/网关能力**，未实现。
+四个功能分别落在规则作者、eval 编排、会话模型交接、客户端图表四个层，因此按功能分期，不把
+它们合成一个实现。
 
-**关联**：`docs/omp-ui-panels-gateway-plan.md` §10（本 ADR 收口该行）、§0、§2.3.7、§4.7；
-`docs/omp-ui-gap-plan.md` 的 D 类清单；`gateway/panel_inventory.py:158`（`omfg` 面板）；
+**关联**：`docs/omp-ui-panels-gateway-plan.md` §0、§2.3.2、§2.3.7、§4.7、§10；
+`gateway/panel_inventory.py:158`（`omfg` 面板）；
 ADR-4（eval 执行、D10 prelude 边界、D11.2 handle 接缝）；ADR-6（TTSR 通知、规则发现、
 regex/AST 匹配）；ADR-11（typed judgment、TTSR `question` 判定、D12 的“不移植 `/omfg`”）；
 `tools/rules_tool.py`、`agent/rule_utils.py`、`agent/ttsr_runtime.py`、`agent/judgment/`、
-`hermes_cli/subcommands/rules.py`；`omp-ui/src/modes/settings.ts`、
-`omp-ui/src/modes/interactive-mode.ts`、`omp-ui/src/session/settings.ts`、
-`omp-ui/node_modules/@oh-my-pi/pi-tui/src/chat/table-chart.ts`。
+`hermes_cli/subcommands/rules.py`；`tui_gateway/` 的方法/事件契约与 authority；
+`omp-ui/src/modes/settings.ts`、`omp-ui/src/modes/interactive-mode.ts`、
+`omp-ui/src/session/settings.ts`、`omp-ui/node_modules/@oh-my-pi/pi-tui/src/chat/table-chart.ts`。
 
 **范围**：只讨论 §10 的四个 omp 专属工作流。不设计 cleanse/autoresearch、annotation、
-collab、in-process extensions 等其它 D 项；不改 ADR-6 的 TTSR 匹配/注入契约，不改 ADR-11 的
-judgment 引擎与 `question` 阈值；不新增网关实时事件、transcript 行或模型工具（`rule_manage`
-的只读 `validate` 动作除外）。消息平台、Desktop、ACP、compute-host 的 worker 帧不设计。
+collab、in-process extensions 等其它 D 项；不改 ADR-6 的 TTSR 匹配/注入契约；不改 ADR-11 的
+judgment 引擎与 `question` 阈值。**不移植 omp eval kernel 的 `ratchet(flow)` prelude**：
+ratchet 由 host 编排器实现，见 D4。消息平台、Desktop、ACP、compute-host 的 worker 帧不设计。
 
 **取证口径**：Hermes 侧引用本仓库当前工作树（2026-11-04）。omp 侧行为以本地 checkout
 `C:\Users\zarag\projects\oh-my-pi`（HEAD `6a86df85`，`@oh-my-pi/pi-coding-agent` 18.14.0）为准；
 下文 omp 路径均相对 `packages/coding-agent/` 或该 checkout 的 `docs/`。`omp-ui/node_modules`
 只作为客户端已安装的 pi-tui 行为证据，不当作上游源码。
 
-**取代关系**：ADR-11 D12 与「不采纳」清单中“`/omfg` 不移植”的**该项**由本 ADR D1–D3 取代；
-ADR-11 的判定引擎、`question` 规则实现、其它“不移植”项（auto-prewalk、stats、git staging 等）
-不变。ADR-11 对 prewalk 的“不移植”结论由本 ADR D5 重申，而不是取代。ADR-4 D10 对 eval prelude
-的边界不变；本 ADR 不实现 prelude。
+**取代关系**：
+
+- ADR-11 D12 与「不采纳」清单中“`/omfg` 不移植”的**该项**由本 ADR D1–D3 取代；ADR-11 的判定
+  引擎、`question` 规则实现、其它“不移植”项（auto-prewalk、stats、git staging 等）不变。
+- ADR-11 对 prewalk 的“不移植”结论由本 ADR D5 取代（仅限“是否移植”，判定引擎仍归 ADR-11）。
+- ADR-4 **D10** 的“不移植 omp prelude 词汇”**不被取代**：本 ADR 不实现 `ratchet()`、`agent()`、
+  `wait()`、`workpool()` 等 prelude；ratchet 用 host 编排器调用现有工具与任务能力。
+- §10 的 OMFG / ratchet / prewalk / auto-graph 行由本 ADR 收口为 **C / C / C / C**。
 
 ## 问题
 
-§10 把 **OMFG / ratchet / prewalk / auto-graph** 并为一行「omp 专属 agent 工作流」，要求先出决策记录。
-但这四项处在完全不同的层：
+§10 把 **OMFG / ratchet / prewalk / auto-graph** 并为一行「omp 专属 agent 工作流」。选项 C 意味着
+不再用 skill、提示词或纯客户端接线做“近似实现”，而是分别补 host 能力。四项的 C 不是同一种后端：
 
-| 功能 | 所在层 | 依赖 | 在 Hermes 的缺口 |
+| 功能 | 所在层 | C 要新增的能力 | 不做的替代（已否决） |
 |---|---|---|---|
-| OMFG | 规则作者工作流（模型 + TTSR） | 规则发现/存储、TTSR 匹配、judge | 没有“从抱怨生成并验证规则”的 skill/工具动作 |
-| ratchet | host 侧 eval 状态机 + eval kernel prelude | eval kernel、`task` 子代理、审批对话框、held-out split | 没有 prelude/handle，也没有 host 审批面 |
-| prewalk | 会话级模型/thinking 交接 | todo gate、首次 edit/write 边界、模型角色、auto 分类器 | 没有交接状态机；ADR-11 已排除 auto-prewalk |
-| auto-graph | 纯客户端渲染 | pi-tui 表格分析/图表规划 | 设置已注册但未接线；无 judge RPC |
+| OMFG | 规则作者工作流 | `omfg.*` RPC + host forge/validate/save + 项目/全局规则存储 | skill-only、profile-only |
+| ratchet | eval 编排 | host 状态机 + 审批请求 + 任务/命令执行 + `$HERMES_HOME/ratchet/<cwd-key>` 状态 | skill + 外部脚本、无 gate |
+| prewalk | 会话模型交接 | 会话 handoff 状态机 + todo/edit 边界钩子 + auto 分类器 | 提示词手动换模型 |
+| auto-graph | 客户端渲染 + judge | `table_chart.plan` judge RPC + `smart` planner | 仅 `always` 本地猜测 |
 
-把它们合成一个“做/不做”会得到错误结论：OMFG 的基座已经存在，缺的只是薄薄一层作者流程；
-ratchet 的核心恰恰是 host 侧不可争辩的 gate，去掉它就不是 ratchet；prewalk 的价值在“正确的
-turn 边界切换模型”，prompt 指令做不到；auto-graph 根本不需要后端。
+C 的共同代价：新增 RPC/事件、host 状态、客户端恢复、测试面；必须逐项设验收，不能用一个
+“大后端”开关掩盖部分实现。
 
 ## 1. OMFG：抱怨 → 一条 TTSR 规则
 
 ### 1.1 omp 的语义
 
-`/omfg <complaint>` 不是让模型“记住别这样”，而是生成一个**可执行的 TTSR 规则文件**：
+`/omfg <complaint>` 生成一个**可执行的 TTSR 规则文件**：
 
 - 生成器（`prompts/system/omfg-user.md`）要求优先 `condition`（JS 正则，流式命中即中断）或
   `astCondition`（ast-grep，对 edit/write 的源码快照匹配，工具副作用前拦截）；只有语义/语气/
   意图这类无法低误报模式化的行为才用 `question`（输出完成后由 judge 判 yes/no，事后警告，不中断）。
-- 候选在保存前要对**当前会话的已完成输出**做校验；`question` 候选还要 judge 在最近 8 个
+- 候选在保存前对**当前会话的已完成输出**做校验；`question` 候选还要 judge 在最近 8 个
   in-scope 输出上给出 yes（`modes/controllers/omfg-rule.ts`、`docs/ttsr-injection-lifecycle.md` §10）。
 - 最多 3 次生成，失败可带反馈重试；保存位置为项目 `.omp/rules` 或全局
   `~/.omp/agent/rules`（`modes/controllers/omfg-controller.ts`）。
@@ -61,8 +64,6 @@ turn 边界切换模型”，prompt 指令做不到；auto-graph 根本不需要
   `question` 走判定后端，阈值 0.7，不中断（ADR-6 / ADR-11 P3）。
 
 ### 1.2 Hermes 已有基座
-
-Hermes 不是从零开始：
 
 - 规则发现/解析/校验：`agent/rule_utils.py`（frontmatter 兼容 omp 的 `condition` /
   `astCondition` / `question` / `scope` / `globs`，`:12`；`check_rules` `:396`）。
@@ -76,8 +77,8 @@ Hermes 不是从零开始：
 - 会话消息读取：`SessionDB.get_messages` / `get_messages_as_conversation`
   （`hermes_state_messages.py:1365`、`:1512`）。
 
-缺口只有三处：没有“从抱怨生成规则”的**作者流程**；`rule_manage` 没有**按会话历史验证**的动作；
-`rule_manage` 不能写项目规则（这是安全设计，不是遗漏）。
+C 需要补的是：**生成/流式展示/校验/保存的 host 服务与 RPC**，以及项目级规则存储；不是规则匹配
+本身。
 
 ## 2. ratchet：host 拥有的 eval 爬山
 
@@ -88,18 +89,21 @@ omp 的 `/ratchet`（`slash-commands/builtin-modes.ts`）先建/复用 eval，�
   `keep|revert|rerun`，全部由 host 决定，模型不能改 `_state.json`。
 - 三轮人工审批 `inputs|grader|plan` 通过 host 对话框；每轮一个变体 `vN`，`train` 只给分析 agent，
   test trace 不落盘（`prompts/tools/ratchet.md`、`prompts/ratchet-kickoff.md`）。
-- 依赖 eval kernel 的 `ratchet(flow)` prelude（Python/JS 同构）与 `task` 子代理；`/ratchet` 在
-  eval/task 工具未激活时直接拒绝。
+- omp 用 eval kernel 的 `ratchet(flow)` prelude 与 `task` 子代理承载调用；`/ratchet` 在 eval/task
+  工具未激活时拒绝。
 
 Hermes 的现状：
 
 - 有 `execute_code`/eval 执行（ADR-4），但 ADR-4 **D10** 明确不移植 omp prelude 词汇
-  （`agent()`/`wait()`/`workpool()`/`judge`/`completion`，`:452`）。
-- ADR-4 **D11.2** 只登记了 eval 侧 handle 桥的设计，未实现（`:471`）。
-- 没有 host 侧 `approve()` 对话框协议，也没有 `task` 子代理与 `ratchet()` 的绑定。
+  （`agent()`/`wait()`/`workpool()`/`judge`/`completion`）。
+- ADR-4 **D11.2** 只登记了 eval 侧 handle 桥的设计，未实现（D11 第 2 条）。
+- 没有 **ratchet 专用的三阶段 approve 协议**，也没有把 `ratchet()` 方法绑定到会话的 RPC；
+  但网关已有 server → client request（`tui_gateway/contracts/server_requests.py` 的
+  `approval`/`clarify`），D4 复用该通道，不新增通用审批总线。
 
-没有这些，把 ratchet 写成 skill 只会得到“模型自己评分、自己决定保留”的循环——恰好是 ratchet
-要消除的东西。新增整套 host 状态机 + 审批 RPC + eval 桥，成本远大于该功能，且与 ADR-4 的边界冲突。
+选项 C 不推翻 ADR-4 D10：**不实现 prelude**，而是在 host 侧复刻同一套状态机，通过
+`delegate_task`/现有任务能力跑分析器，通过 `execute_code`/terminal 跑 runner，通过新的审批请求
+拿用户决定。这样模型仍然不能自批、不能改 gate。
 
 ## 3. prewalk：规划/实现两段式模型接力
 
@@ -113,16 +117,13 @@ omp 的 prewalk 是**会话级、一次性**的模型/thinking 交接（`docs/pr
   交接是会话状态，不是一条 prompt 指令。
 
 Hermes 有 `model.roles.*`、`session.setModel`（`tui_gateway/methods_config_set.py` 的 `_set_model`）
-和 todo 工具，但没有：
+和 todo 工具，但没有交接状态机、todo gate、首次 edit/write 边界钩子、auto 分类器与 per-task 恢复。
+选项 C 需要把这四件事做成 session authority 的一部分，并恢复 `/prewalk` 客户端命令。
 
-- 在“首个 edit/write 完成”这个精确边界切换的会话状态；
-- todo gate 与一次性 disarm；
-- auto 分类器及其 per-task 恢复语义。
+**缓存代价**：切换模型会改变 provider 的缓存前缀，prewalk 的收益以一次缓存重建为代价。这是该功能
+的固有成本，不是实现缺陷；D5 要求默认关闭、只在明确武装/判定为 `prewalk` 时发生、不在 turn 中间切换。
 
-ADR-11 已明确不移植 auto-prewalk（`:32`、`:151`、`:763`），§0 也把 prewalk 列为非目标。用一条
-skill 指令让模型“先规划再提醒用户换模型”不是 prewalk：它既不能自动切换，也不能保证边界。
-
-## 4. auto-graph：表格到图表的客户端渲染
+## 4. auto-graph：表格到图表的客户端渲染 + judge
 
 omp 的 `tui.autoGraph`（`docs/settings.md`）在 assistant 回答的数值表格下画图：
 
@@ -134,142 +135,146 @@ omp 的 `tui.autoGraph`（`docs/settings.md`）在 assistant 回答的数值表�
 - 无 judge/超时/异常时回退本地猜测，不阻塞回答（`planner.ts` 的 `PICK_TIMEOUT_MS`；pi-tui
   `lookupTableChart`）。
 
-Hermes 客户端使用同一套 pi-tui，且 `omp-ui/src/modes/settings.ts:468` 已注册
-`tui.autoGraph`，`interactive-mode.ts:135` 把它并入 live settings。但：
-
-- `omp-ui/src` 从未调用 `setTableCharts`（全仓 grep 只有 pi-tui 定义与 `tableChartsVisible`），
-  而 pi-tui 的默认 `chartMode = "off"`（`chat/table-chart.ts:73`）。
-- `interactive-mode.ts:643` 的 `tableChartsVisible` 硬编码 `true`，只控制可见性，不设置模式。
-- 网关侧没有 judge RPC，`gateway-session` 无法提供 `smart` 所需的 `TableChartPlanner`。
-
-因此当前设置是“存在但无效”，不是“后端缺失”。
+Hermes 客户端已注册 `tui.autoGraph`（`omp-ui/src/modes/settings.ts:468`，
+`interactive-mode.ts:135`），但 `omp-ui/src` 从未调用 `setTableCharts`，pi-tui 默认
+`chartMode = "off"`（`chat/table-chart.ts:73`）；`tableChartsVisible` 硬编码 `true`
+（`interactive-mode.ts:643`）；网关没有 judge RPC。选项 C 补两件事：客户端接线 + host
+`table_chart.plan` judge 方法。
 
 ## 选项
 
 | 功能 | A | B | C | 本 ADR |
 |---|---|---|---|---|
-| OMFG | 映射到现有 rules/TTSR + 一个 skill（无网关后端） | 不做 | 新网关 `omfg.*` RPC + 规则存储 | **A** |
-| ratchet | 映射到 skill + 外部 eval 脚本 | 不做，保持 unsupported | 新 host 状态机 + 审批 RPC + eval 桥 | **B** |
-| prewalk | 映射到 skill/提示词的手动换模型 | 不做，保持 unsupported | 新会话交接状态机 + auto 分类器 | **B** |
-| auto-graph | 客户端接线到现有 pi-tui（无后端） | 不做，移除/隐藏设置 | 新 judge RPC 供 `smart` | **A**（仅客户端） |
+| OMFG | skill + 现有 rules/TTSR，无网关后端 | 不做 | `omfg.*` RPC + host forge/validate/save + 项目/全局存储 | **C** |
+| ratchet | skill + 外部 eval 脚本 | 不做 | host 状态机 + 审批请求 + 任务/命令编排 | **C** |
+| prewalk | skill/提示词手动换模型 | 不做 | 会话交接状态机 + auto 分类器 | **C** |
+| auto-graph | 客户端 `always` 本地猜测 | 不做/移除设置 | `table_chart.plan` judge RPC + `smart` planner | **C** |
 
 ## 决策
 
-### D1. OMFG 采纳为 skill，不新增网关后端
+### D1. OMFG：新增 `omfg.*` host 服务，恢复 `/omfg` 客户端面板
 
-新增内置 skill `skills/rule-forging/SKILL.md`（名称沿用“规则锻造”，不把 `/omfg` 作为命令名）。
-它由用户在会话内显式调用（`/skill:` 或自然语言），流程固定：
+新增会话级 RPC（client → server + server → client 事件），绑定调用者 profile/session：
 
-1. 用一句话复述反复出现的行为，并引用当前会话中的一个具体输出作为反例；
-2. 触发方式优先级：代码结构 → `astCondition`；字面 token/短语 → `condition`；只有语义/意图/
-   语气且无法低误报模式化时才 `question`，并尽量加 `condition` 预过滤；
-3. `scope` 尽可能窄（如 `tool:edit(*.ts)`），禁止 `tool, text` 宽范围；
-4. 调 `rule_manage` 写入（profile scope），随后调 `rule_manage(action="validate", ...)`；
-5. 验证失败则修正并重试，最多 3 次；仍失败就报告，不保存；
-6. 报告规则名、路径、触发方式与验证结果。
+| 方向 | 名称 | 语义 |
+|---|---|---|
+| C→S | `omfg.forge` | 参数 `{session_id, complaint}`；启动一次生成，返回 `run_id` |
+| S→C | `omfg.delta` | `{run_id, text}`：生成草稿的增量文本，驱动面板 streaming |
+| S→C | `omfg.candidate` | `{run_id, rule, validation}`：解析后的候选 + 校验结果 |
+| S→C | `omfg.error` | `{run_id, message, kind}`：生成/解析/校验失败 |
+| C→S | `omfg.cancel` | `{session_id, run_id}`：取消生成 |
+| C→S | `omfg.save` | `{session_id, run_id, level, confirm?}`：保存已校验候选 |
+| S→C | `omfg.saved` | `{run_id, path, level}` |
 
-不新增 `/omfg` 网关方法；`gateway/panel_inventory.py` 的 `omfg` 面板继续 `unsupported`，note 改为
-“由 rule-forging skill 提供，非网关后端”。这样 UI 不会出现假入口。
+约束：
 
-### D2. `rule_manage` 增加只读 `validate` 动作
+- `omfg.forge` 只读会话历史做校验，**不向会话写入消息**；规则在保存后的下一次规则发现/会话启动
+  才生效，不改变当前 turn 的 TTSR。
+- 生成使用会话的 active model；没有可用模型时返回错误。usage 记入现有账本，purpose `omfg`。
+- 生成提示词移植 `prompts/system/omfg-user.md`：优先 `astCondition`/`condition`，`question` 只在
+  无语义模式时使用；输出严格 JSON；最多 3 次，失败带反馈重试。
+- `omfg.save` 是显式用户动作；**profile 统一写 `$HERMES_HOME/rules`**，project 写
+  `<session cwd>/.agents/rules`。project 保存必须 `confirm=true`，且只允许 cwd 内的相对路径；
+  覆盖已有文件必须 `overwrite=true`。**任何更早扫描根中的同名 id 一律硬拒绝**（见 D3），不能用确认
+  绕过遮蔽。保存前 `omfg.candidate` 带完整规则正文与目标路径。
+- 客户端按 `omp-ui/src/VENDORED.md` 从 checkout 恢复 OMFG 的 controller/rule/panel 代码，并在
+  `interactive-mode` 恢复 `/omfg` 入口；不改面板交互（§0.1）。
 
-在 `tools/rules_tool.py` 的 `RULE_MANAGE_SCHEMA` 中把 `action` 扩为
-`create|update|delete|validate`；`validate` 不写文件：
+### D2. OMFG 校验契约
 
-```json
-{"action": "validate", "rule_id": "ts-no-any",
- "texts": ["optional explicit outputs"], "path": "src/x.ts", "max_outputs": 8}
-```
+- `agent/omfg.py` 的 `validate_candidate(rule, outputs, *, path=None, judge_factory=None)` 复用
+  `agent.ttsr_runtime` 的编译/digest 与 `agent.judgment.resolve_judge`，不重写匹配器。
+- `condition` 对文本和工具参数 digest 匹配；`astCondition` 必须有可推断语言的 `path`，否则
+  返回 `unsupported`，不猜测；`question` 对最近 8 个 in-scope 输出逐个判定，yes ≥ 0.7 记为命中。
+- 无 judge 时返回 `judge_unavailable`；`omfg.save` 对未确认的 `question` 规则要求
+  `confirm_unconfirmed=true`，否则拒绝。
+- 校验结果只返回截断摘录（≤ 500 字符），不回显完整会话内容；不把规则正文写进 transcript。
 
-实现契约：
+### D3. OMFG 存储与安全
 
-- 只读；`texts` 省略时用 dispatcher 传入的 `session_id` 读取最近 `max_outputs`（默认 8）条
-  assistant 输出；`SessionDB.get_messages` / `get_messages_as_conversation` 是唯一来源。
-- `condition`：用 `agent.ttsr_runtime` 的编译/匹配函数与 `tool_digests`，对文本与工具参数摘要匹配；
-  不在 `rules_tool` 里重写正则或 scope 语义。
-- `astCondition`：用 `agent/ttsr_ast.py` 的进程桥；必须有可推断语言的 `path`，否则返回
-  `unsupported`，不猜测。
-- `question`：`resolve_judge(purpose="ttsr")` + `NoulQuestion`，对每个 in-scope 输出问一次；
-  yes 概率 ≥ 0.7 记为命中；无 judge 返回 `judge_unavailable`，由 skill 询问用户是否保存未确认规则。
-- 返回 `{success, rule_id, matched, matched_outputs, trigger, judge?, reason?}`；不返回原文全文，
-  只返回截断摘录，避免把敏感内容回显进上下文。
-- `create` 不强制先 validate（保持现有契约），但 skill 的验收要求先 validate；`validate` 失败时
-  skill 不得直接 create。
+- **profile 规则统一写 `$HERMES_HOME/rules`**：新增 `omfg_rule_root()`（`get_hermes_home() / "rules"`）
+  与 `write_profile_rule(rule_id, text)`（根固定为 `omfg_rule_root()`）；`$HERMES_HOME/rules` 已在
+  `agent/rule_utils.py::rule_search_roots` 的 profile scopes 内，发现/校验不需要另加根。
+- project 规则走新增 `write_project_rule`（同一 YAML/正文格式化，但路径限制在
+  `cwd/.agents/rules`，写入前校验不含 `..`/绝对路径/符号链接逃逸）。
+- 因为 profile 扫描顺序是 `.agents/rules` 先于 `rules`，且 project 根整体先于 profile，任何更早根中的
+  同名 rule id 都会遮蔽 OMFG 的 `$HERMES_HOME/rules` 文件。`omfg.save` 必须先调
+  `discover_rules(session cwd)`：若同名 id 已存在于 `$HERMES_HOME/rules` 之外（`.agents/rules`、
+  project `.agents/rules` 等），**硬拒绝**并返回冲突路径；用户必须先删除/改名/移动冲突规则，
+  不能靠“确认覆盖”绕过。仅当同名文件就在 `$HERMES_HOME/rules` 时，才允许 `overwrite=true`。
+- 保存后返回路径；`hermes rules list|show|check` 必须能立即看到/校验。
+- 不自动保存、不自动启用、不自动写项目；所有写入都来自 `omfg.save`。规则正文是用户可见的
+  提示词内容，UI 必须在保存前展示。
+- `rule_manage` 的工具语义不变（仍写 `.agents/rules`）；OMFG 的 profile/project 写入是独立的
+  host 服务，不复用工具写路径，避免模型绕过 `omfg.save` 的确认。
 
-新增 `agent/ttsr_validate.py` 承载上述纯逻辑，`rules_tool` 只做参数/JSON/错误包装。这样
-`agent/ttsr_runtime.py` 的流式状态机不被工具调用路径污染。
+### D4. ratchet：新增 host 编排器与 `ratchet.*` RPC（不实现 eval prelude）
 
-### D3. OMFG 只写 profile 规则；项目规则不自动写
+- 新增 `agent/ratchet/`（状态机 + 统计 + gate）与 `tui_gateway/methods_ratchet.py`；状态根为
+  `$HERMES_HOME/ratchet/<cwd-key>/<flow>/`（`get_hermes_home()`，不硬编码 `~/.hermes`），其中
+  `cwd-key` 是会话 cwd 的稳定键（规范化 realpath 后哈希），cwd 同时写进 `_state.json`。不能只用
+  `$HERMES_HOME/ratchet/<flow>`：omp 的 `RATCHET_ROOT` 是 `cwd/.omp/ratchet`，两个仓库的同名 flow
+  必须隔离。布局镜像 omp：`_state.json`、`baseline/`、`vN/`、`results.jsonl`、`errors.jsonl`、
+  `traces/`（仅 train）、`status.md`、`narrative.md`。
+- 方法：`ratchet.start`（kickoff/入口）、`ratchet.init`、`ratchet.plan`、`ratchet.split`、
+  `ratchet.check`、`ratchet.gate`、`ratchet.train`、`ratchet.status`；`ratchet.progress` 是进度
+  事件。客户端 `/ratchet` 调用 `ratchet.start`（kickoff 由 host 渲染）。
+- 审批：host 生成 `{stage, question, preview, content_hash}`，通过现有 server → client request
+  （`approval`/`clarify`，见 `tui_gateway/contracts/server_requests.py`）交给客户端对话框；用户
+  返回 `{approved, aborted?, feedback?}`。审批绑定内容哈希，文件/plan 变化即 stale。
+  没有审批面（headless）时只允许继续审批已 current 的 flow，否则拒绝启动。
+- 运行：runner 命令通过现有 terminal/bash 异步作业执行；host 收集 `results.jsonl`/`errors.jsonl`/
+  `traces/` 并做完整性、重复行、split/泄漏检查。`gate` 的 `keep|revert|rerun` 由 host 计算，
+  模型只能读取结果。
+- 分析器：用 `delegate_task`/现有任务能力派一个只读分析子代理，输入仅 train 行与 trace；不引入
+  eval kernel 的 `agent()`/`wait()` prelude，不推翻 ADR-4 D10。
+- 规模：这是四项中最大的一项，依赖异步作业管理、子代理结果回传与审批请求面；未具备时按 P4
+  延期，不得用“模型自评”占位。
 
-`rule_manage` 继续只写 `$HERMES_HOME/.agents/rules`（`managed_rule_root`），不修改项目、
-installation 或导入 corpus。理由：
+### D5. prewalk：会话级 handoff 状态机与 `prewalk.*` RPC
 
-- 项目规则会进入仓库、影响所有协作者与后续会话；agent 自动写入等于让一次对话改变仓库行为，
-  且难以审计。
-- 现有 docstring 已把“只写 profile”定义为安全边界；OMFG 不应为了 parity 打破它。
+- 会话状态（持久化到 session DB）：`armed`、`from`、`into`、`consumed`、`auto`、`auto_target`、
+  `planning_model`/`planning_thinking`；`/new` 重新按配置武装，resume 继承已消费状态。
+- 方法：`prewalk.arm`、`prewalk.restart`、`prewalk.off`、`prewalk.status`；事件
+  `prewalk.armed`/`prewalk.handoff`。客户端恢复 `/prewalk` 与现有设置项。
+- 钩子：成功的 `todo` 调用（含 `view`）打开 gate；在包含第一个 `edit`/`write` 结果的 assistant
+  turn 结束后切换模型/thinking；一次性 disarm；切换只改会话 active model，不改 model-role 配置。
+- auto：`resolve_judge` 读取移植的 prewalk 问题文件，按 `prewalk|primary|direct` 分类；
+  `prewalk` 概率 ≥ 0.70 且目标可解析才武装；`suggest` 只报告；每个新任务先恢复该任务规划时的
+  model/thinking，再判定，避免 `primary` 任务留在 handoff 目标上。
+- 明确接受一次 provider 缓存重建；不在 turn 中间切换，不做隐式切换；默认 `prewalk.enabled=false`、
+  `prewalk.auto=off`。子代理 prewalk 走 agent 配置/`task.prewalk`/per-agent 覆盖，与父会话隔离。
 
-skill 在用户要求项目级规则时，只输出建议的 Markdown 与目标路径，由用户显式落盘/提交。若要支持
-`scope=project` 的自动写，另立 ADR，至少需要：目标路径限制在 cwd 的 `.agents/rules`、显式
-`confirm`、内容 diff 展示、以及不覆盖非 agent-owned 文件的哈希/来源标记。
+### D6. auto-graph：新增 `table_chart.plan` judge 方法并接线客户端
 
-这是与 omp 的**已知差异**：omp 可在项目/全局之间选择，Hermes v1 只有 profile。
+- 新增只读 RPC `table_chart.plan`：参数 `{session_id, markdown, table, guess}`；host 移植
+  `auto-graph` 的 judge 问题文件与 `planner.ts` 的答案→`ChartPlan` 逻辑，调用
+  `resolve_judge(purpose="auto-graph")`；返回 `{plan: ChartPlan|null, source: "judge"|"local"}`。
+  15s 超时；无 judge/异常返回 `source:"local"` 与本地 `guess`，不阻塞。
+- 客户端：启动/设置变更调用 `setTableCharts(mode, planner)`；`always` 不调用 planner；`smart`
+  调用 `table_chart.plan`；`auto` 调用一次 `table_chart.plan`，若返回 `source:"local"` 则按
+  `always`（本地猜测）继续；`off` 关闭。`tableChartsVisible` 由模式决定，不再硬编码 `true`。
+- 表格内容只在该次 judge 请求中发送，不持久化、不写入 transcript；usage 记入账本，purpose
+  `auto-graph`。按表格源缓存结果；同一表格不重复请求。
+- 不新增图表渲染后端；图表仍由 pi-tui 在客户端绘制。
 
-### D4. ratchet 不采纳，保持 unsupported
+### D7. 能力声明、命令与文档
 
-不在 Hermes 实现 `ratchet(flow)`、`.omp/ratchet` 状态机或 `/ratchet` 命令。理由见 §2：
-去掉 host 审批/gate/split 的 ratchet 只剩“模型自评”，没有产品意义；补齐它需要 eval prelude
-（ADR-4 D10 明确拒绝）、eval handle（D11.2 未实现）与审批 RPC，规模超过本功能。
+- `gateway/panel_inventory.py`：`omfg` 从 `UNSUPPORTED` 改为 `PENDING`（ADR-12 C；方法/事件落地后
+  升 `READY`）；`docs/omp-ui-panels.json` 同步重新生成。
+- ratchet/prewalk 不是面板：在 §10 与命令能力表中登记为 `pending`，实现后注册 `/ratchet`、
+  `/prewalk`；headless 下没有审批/显式武装时不得启动。
+- auto-graph 不是面板：保持客户端设置；`runtime.describe` 不新增图表能力字段。
+- §10 行改为 **C / C / C / C**，并链接本 ADR；ADR-11 的 `/omfg` 条目加“由 ADR-12 取代”。
 
-`runtime.describe` / panel inventory 对 ratchet 保持 `unsupported`；slash 命令不注册。用户需要
-同类方法论时，用外部 eval harness + `execute_code`/terminal，自行保存结果；Hermes 不声称提供
-held-out gate。
+### D8. 边界与不变量
 
-重新评估条件（全部满足才另立 ADR）：ADR-4 D11.5 判定桥与 D11.2 handle 桥落地；存在可复用的
-host 审批面（不能是模型自答）；有一个真实 flow 与明确的预算/安全需求。
-
-### D5. prewalk 不采纳，保持 unsupported
-
-不在 Hermes 实现会话级模型交接、todo gate、auto-prewalk 分类器或 `/prewalk` 命令。理由见 §3：
-它是会话状态机，不是提示词；ADR-11 已排除 auto-prewalk，且 §0 将其列为非目标。
-
-手动替代不需要新代码：用户在规划完成后用现有 `/model` 或 model roles 切到便宜模型。文档要明确
-这不是 prewalk：没有自动边界、没有一次性 disarm、没有 per-task 恢复。`omp-ui/src/session/settings.ts`
-里的 prewalk 设置继续不接线；如果客户端显示它，必须标 `unsupported`，不能静默保存后无效。
-
-重新评估条件：会话级模型/thinking 切换已有可持久化的 handoff 状态、todo 完成事件可被 host 订阅、
-且能在 assistant turn 边界做一次性切换；届时另立 ADR，不与本 ADR 的 OMFG/auto-graph 混在一起。
-
-### D6. auto-graph 采纳为纯客户端接线，不新增后端
-
-在 `omp-ui/src/modes/interactive-mode.ts` 中：
-
-- 启动与 `tui.autoGraph` 变更时调用 pi-tui 的 `setTableCharts(mode, planner?)`；
-- `off` → `"off"`；`always` → `"always"`；`smart` / `auto` → `"always"`（本地猜测），因为
-  Hermes 网关没有 judge RPC；等未来有 judge 能力再传 planner，不改协议；
-- `tableChartsVisible` 改为 `cfgTuiAutoGraph.get(settings) !== "off"`，而不是硬编码 `true`；
-- 设置项描述在网关会话中注明 `smart` 当前等同 `always`（本地图表），避免虚假承诺。
-
-不新增 `tui.autoGraph` 的网关字段/事件；不向服务端发送表格内容；图表完全由客户端从已渲染的
-Markdown 生成。这与 §0「终端渲染能力是客户端 pi-tui 的事」一致。
-
-### D7. 能力声明与文档
-
-- `gateway/panel_inventory.py`：`omfg` 继续 `UNSUPPORTED`，note 指向 rule-forging skill；
-  ratchet/prewalk 不作为面板新增（它们是命令级能力），在 §10 与 `runtime.describe` 的能力说明中
-  保持 unsupported。
-- auto-graph 不是面板，不在 `runtime.describe.panels` 中广告；它是客户端设置。
-- `docs/omp-ui-panels-gateway-plan.md` §10 行改为“已决定（ADR-12）”，并链接本文件；
-  `docs/omp-ui-gap-plan.md` 的 D 类描述不再把四项混为同一后端。
-- 本 ADR 落地时，ADR-11 的“不移植 `/omfg`”条目加注“已由 ADR-12 D1–D3 取代（仅 `/omfg` 项）”。
-
-### D8. 不新增的东西
-
-- 不新增网关 RPC/事件/transcript 行；
-- 不新增模型工具（`rule_manage` 的 `validate` 动作是现有工具的扩展）；
-- 不改变 TTSR 匹配、注入、repeat、context mode 的现有语义；
-- 不改变 system prompt 前缀缓存：规则仍在会话启动/规则重载时发现，OMFG 保存的规则**不在当前
-  turn 自动生效**（与现有规则发现边界一致）；
-- 不自动运行 OMFG：只有用户显式调用 skill 才生成规则。
+- 不实现 omp eval kernel 的 `ratchet()`/`agent()`/`wait()`/`workpool()`/`judge()`/`completion()`
+  prelude（ADR-4 D10 不变）；ratchet 的编排在 host。
+- 不新增 transcript 行；OMFG/auto-graph 的调用不进入会话消息；prewalk 只切换模型/thinking。
+- 不改变 TTSR 匹配/注入/repeat/context mode；OMFG 保存的规则在下次发现时生效。
+- 所有新 RPC 走现有 authority/contract/capability 生成流程；事件只发给发起会话的本地 viewer。
+- 所有写入路径用 `get_hermes_home()`；不硬编码 `~/.hermes`。
 
 ## 协议与实现落点
 
@@ -277,100 +282,122 @@ Markdown 生成。这与 §0「终端渲染能力是客户端 pi-tui 的事」�
 
 | 文件 | 改动 |
 |---|---|
-| `skills/rule-forging/SKILL.md` | 新增；触发条件、首选 `astCondition`/`condition`、scope 收窄、3 次重试、validate 后 create、只写 profile |
-| `tools/rules_tool.py` | `RULE_MANAGE_SCHEMA.action` 加 `validate`；新增 `texts`/`path`/`max_outputs`；handler 接受 `session_id` |
-| `agent/ttsr_validate.py` | 新增纯函数：`validate_rule_against_outputs(rule, outputs, *, path=None, judge_factory=None)`；复用 `ttsr_runtime` 的编译/digest 与 `judgment.resolve_judge` |
-| `agent/ttsr_runtime.py` | 只读导出/复用现有匹配函数；不改流式协调器行为 |
-| `tests/tools/test_rules_tool.py`（或现有规则测试文件） | validate 的 regex/AST/question/无 judge/无 session 分支 |
-| `tests/agent/test_ttsr_validate.py` | 纯函数边界：空输出、scope 过滤、截断、judge 阈值 |
+| `agent/omfg.py` | 新增：prompt 渲染、流式生成、JSON 解析、3 次重试、`validate_candidate` |
+| `agent/ttsr_validate.py` | 可选拆分：纯匹配/判定函数，供 OMFG 与未来工具复用 |
+| `agent/rule_utils.py` | 新增 `omfg_rule_root()`（`get_hermes_home()/rules`）、`write_profile_rule`（根固定为 `omfg_rule_root()`，不写 `.agents/rules`）、`write_project_rule`（路径校验 + 格式化）；`rule_manage` 的 `.agents/rules` 路径不变 |
+| `tui_gateway/methods_omfg.py` | 新增 `omfg.forge/cancel/save`；事件 `omfg.delta/candidate/saved/error` |
+| `tui_gateway/contracts/` | 方法/事件 schema；能力协商 |
+| `omp-ui/src/modes/controllers/omfg-*.ts`、`overlays/omfg-panel.ts` | 从 checkout 恢复并接 `modes/rpc/gateway-*`；`/omfg` 入口 |
+| `tests/` | 生成/校验/保存/项目路径/无模型/无 judge/取消 |
 
-`validate` 的返回示例：
+### ratchet
 
-```json
-{"success": true, "rule_id": "ts-no-any", "trigger": "condition",
- "matched": true, "matched_outputs": 1,
- "excerpt": ": any", "judge": null}
-```
+| 文件 | 改动 |
+|---|---|
+| `agent/ratchet/` | 状态机、split、统计、gate、报告；`ratchet.ts` 的 Python 对应实现 |
+| `tui_gateway/methods_ratchet.py` | `init/plan/split/check/gate/train/status/start`；`approve` 请求；`progress` 事件 |
+| `tui_gateway/contracts/` | 方法/请求/事件 schema；审批请求的 client 响应 |
+| `omp-ui/src/` | 恢复 `/ratchet` kickoff 与审批对话框接线（不改交互结构） |
+| `tests/` | 审批哈希/stale、split 冻结、泄漏拒绝、重复行、keep/revert/rerun、headless 拒绝 |
 
-无 judge 的 `question`：
+### prewalk
 
-```json
-{"success": false, "error": "judge_unavailable",
- "rule_id": "no-unverified-test-claims", "matched": false}
-```
+| 文件 | 改动 |
+|---|---|
+| session state/DB | handoff 字段与持久化；`/new`/resume 语义 |
+| `agent/prewalk.py` | 武装/恢复/触发判定；auto 分类器；问题文件 |
+| turn/tool hooks | todo 成功 gate；首个 edit/write 的 turn 边界切换 |
+| `tui_gateway/methods_prewalk.py` | `arm/restart/off/status`；事件 |
+| `omp-ui/src/` | 恢复 `/prewalk` 命令；设置项接线 |
+| `tests/` | todo gate、一次性、resume、auto 路由/阈值、per-task 恢复、无 judge |
 
 ### auto-graph
 
 | 文件 | 改动 |
 |---|---|
-| `omp-ui/src/modes/interactive-mode.ts` | 启动/设置变更调用 `setTableCharts`；`tableChartsVisible` 由模式决定；`smart`/`auto` 传 `"always"` |
-| `omp-ui/src/modes/interactive-mode.test.ts`（或现有设置测试） | `off` 不画、`always` 画、`smart` 不调用 planner、切换即时生效 |
-| `omp-ui/src/modes/settings.ts` | 网关会话的描述注明 `smart` 当前等同 `always` |
-
-不修改 `omp-ui/node_modules`；pi-tui 的 `setTableCharts`/`lookupTableChart` 已存在。
+| `tui_gateway/methods_table_chart.py` | `table_chart.plan`；judge 调用与 `ChartPlan` 映射 |
+| `agent/` 问题文件 | 移植 `auto-graph.json`；`resolve_judge(purpose="auto-graph")` |
+| `omp-ui/src/modes/interactive-mode.ts` | `setTableCharts` 接线；`tableChartsVisible` 由模式决定；planner 调 RPC |
+| `omp-ui/src/modes/settings.ts` | 保持四值；描述 `smart` 走 judge、`auto` 条件 |
+| `tests/` | off/always/smart/auto、超时回退、缓存、无 judge、无表格内容落盘 |
 
 ## 分阶段
 
-- **P1（OMFG）**：`agent/ttsr_validate.py` + `rule_manage validate` + skill + 测试 + `hermes rules check`
-  互操作。完成前 `omfg` 面板保持 unsupported。
-- **P2（auto-graph）**：客户端接线 + 设置描述 + 客户端测试。不涉及网关。
-- **P3（文档收口）**：§10、gap plan、panel inventory note、ADR-11 取代注记。
-- **不做**：ratchet、prewalk 的任何代码；不新增 RPC/事件。
+1. **P1 OMFG**：`omfg.*` 服务 + 客户端恢复 + 项目/全局保存 + 测试。先落 profile 保存，再落
+   project 确认写；两步都属 P1，不拆成“先 skill 后后端”。
+2. **P2 auto-graph**：`table_chart.plan` + 客户端接线；这是四项中最小、可独立验收的一项。
+3. **P3 prewalk**：handoff 状态机 + auto 分类器 + 客户端命令；默认关闭。
+4. **P4 ratchet**：host 编排器 + 审批 + 作业/子代理；依赖最多，最后落。未具备审批/子代理前
+   不启动“半套 ratchet”。
 
 ## 验收
 
-1. **OMFG 生成**：对一个具体抱怨，skill 产生一条合法规则（kebab-case name、description、body、
-   至少一个 trigger、窄 scope）；`hermes rules list` 能看到，`hermes rules check` 无错误。
-2. **OMFG 验证**：对包含违规片段的会话历史，`condition`/`astCondition` 返回 `matched=true`；
-   对干净历史返回 `false`；`question` 在 judge 可用时按 0.7 判定，judge 不可用时返回
-   `judge_unavailable` 且不伪造 yes。
-3. **OMFG 安全**：`rule_manage` 仍只写 profile；任何项目/installation 路径的写入被拒绝；
-   skill 不自动执行，不把规则正文回显为未截断的会话内容。
-4. **OMFG 生效边界**：保存后当前 turn 不改变 TTSR；下一次规则发现/会话启动才加载。
-5. **auto-graph**：`off` 时数值表格下无图；`always` 时有图；`smart`/`auto` 在无 judge 时仍出本地图，
-   且不发起网络/网关调用；设置切换无需重启会话。
-6. **ratchet/prewalk**：`runtime.describe`/panel inventory 仍为 unsupported；没有 `/ratchet`、
-   `/prewalk` 命令，没有 `.omp/ratchet` 状态写入；客户端切换 prewalk 设置不会静默改变模型。
-7. **回归**：ADR-6 的 TTSR 规则发现/匹配/注入、ADR-11 的 judgment CLI 与 `question` 阈值不变；
-   `scripts/check` 通过。
+1. **OMFG 生成/流式**：`/omfg` 打开面板；`omfg.delta` 增量可见；候选解析成功；无模型/取消/
+   非法 JSON 都落到 `omfg.error` 且不保存。
+2. **OMFG 校验**：违规历史 `condition`/`astCondition` 命中；干净历史不命中；`question` 0.7、
+   最近 8 输出、无 judge 返回 `judge_unavailable`；不伪造 yes。
+3. **OMFG 保存**：profile 写 `$HERMES_HOME/rules`；project 写 `cwd/.agents/rules` 且必须
+   `confirm=true`；同名 id 已存在于 `.agents/rules` 或 project 根时**硬拒绝**并返回冲突路径，
+   不能靠确认覆盖；仅 `$HERMES_HOME/rules` 内同名文件可 `overwrite=true`；`..`/绝对路径/符号链接
+   逃逸被拒绝；`hermes rules check` 通过；当前 turn 不受影响。
+4. **ratchet**：`approval`/`clarify` 三类审批内容哈希生效，改动后 stale；split 冻结；test trace
+   缺失被 gate 拒绝；重复 result 行/不完整 slot 被拒绝；`keep|revert|rerun` 由 host 产生；headless
+   无审批时拒绝启动；两个仓库使用同名 flow 时状态互不串扰；不存在 eval prelude。
+5. **prewalk**：`/prewalk` 武装；todo 成功才开 gate；首个 edit/write 的 turn 结束切换；一次性；
+   resume 继承；`/new` 按设置重置；auto `prewalk` ≥0.70 才武装，`primary`/`direct` 不切换；
+   每任务恢复；无 judge 不分类；模型切换只发生在边界。
+6. **auto-graph**：`off` 无图；`always` 本地图；`smart` 调 `table_chart.plan`，超时回退本地；
+   `auto` 在 `source:"local"` 时等同 `always`；设置变更实时生效；表格内容不落盘/不进 transcript。
+7. **回归**：ADR-6 TTSR 规则发现/匹配/注入、ADR-11 judgment CLI 与 `question` 阈值不变；
+   `scripts/check`、面板覆盖测试、契约生成检查通过。
 
 ## 风险
 
-- **规则是提示词注入面**：用户抱怨可能诱导生成压制重要行为的规则。缓解：显式调用、profile-only、
-  保存前展示规则正文/路径、`hermes rules check`、可随时删除、不自动写项目。
-- **验证不是证明**：`validate` 只证明规则能命中给出的/最近的输出，不证明未来无误报。skill 要
-  提示用户先用 `condition`/`astCondition` 的窄 scope；`question` 有 judge 成本与误判。
-- **judge 成本**：`question` 每个 in-scope 输出一次；`max_outputs` 默认 8，且只在用户显式
-  validate 时发生；无 judge 不重试。
-- **auto-graph 误导**：本地猜测可能选错图类型；默认不改变数据，只影响展示；`off` 可完全关闭；
-  `smart` 在 Hermes 不做模型判断，不声称等价。
-- **预期落差**：用户可能期待 ratchet/prewalk 的自动能力。文档与 UI 必须明确 unsupported 与手动替代，
-  不提供假入口或静默 stub。
+- **后端面积大**：四项同时引入 RPC、事件、状态机、客户端恢复与测试。缓解：P1–P4 独立验收，
+  未完成的项保持 `pending`/unsupported，不伪造能力。
+- **ratchet 的信任边界**：审批、split、gate 必须在 host；任何“模型自己确认/自己改状态”的实现
+  都违背本 ADR。test trace 泄漏、重复行、不完整结果必须拒绝而不是警告后继续。
+- **prewalk 的缓存与成本**：模型切换必然重建 provider 缓存；auto 可能频繁切换。缓解：默认关闭、
+  阈值 0.70、per-task 恢复、显式 `/prewalk`、不在 turn 中切换。若实测成本不可接受，回到 D5 的
+  重新评估，而不是静默降级。
+- **OMFG 的规则注入面**：模型生成的是未来会注入的提示词。缓解：显式 `/omfg`、保存前展示、
+  项目写入确认、`hermes rules check`、可删除、当前 turn 不生效。
+- **auto-graph 的数据与延迟**：表格内容会发给 judge provider；每表一次调用可能慢。缓解：仅
+  `smart`/`auto`、15s 超时、按表格源缓存、失败回退本地、不持久化。
+- **契约漂移**：新方法/事件必须走 `scripts/gen_gateway_contracts.py` 与面板覆盖门；客户端
+  `gateway-contract.generated.ts` 重新生成，不手改生成文件。
 
-## 不采纳
+## 不采用的实现方式
 
-- **新增 `omfg.*` 网关 RPC / 新面板后端**：现有 skill + rules 工具已覆盖；网关只会重复规则存储。
-- **允许 OMFG 自动写项目规则**：需要独立的审批/归属/覆盖设计，见 D3。
-- **把 ratchet 写成 skill**：没有 host gate 的“爬山”是自评循环，违背该功能的目的。
-- **把 prewalk 写成提示词 skill**：不能切换模型/thinking，也不能在正确 turn 边界生效。
-- **为 auto-graph 新增 judge RPC**：当前没有消费者需求；先接线本地 `always`，未来有 judge 再接 planner。
-- **在本 ADR 实现 eval prelude / handle 桥**：归 ADR-4 D11.2/D11.5。
+- **OMFG skill-only / profile-only**：不能覆盖项目规则，也没有 omp 的流式面板与保存确认。
+- **ratchet skill + 外部脚本**：没有 host 审批/gate/split，等于模型自评。
+- **prewalk 提示词手动换模型**：不能在 todo gate 与首个 edit/write 边界自动切换。
+- **auto-graph 仅 `always`**：`smart`/`auto` 的 judge 选择缺失，不满足选项 C。
+- **移植 eval kernel prelude（`ratchet()`/`agent()`/`wait()`/…）**：ADR-4 D10 仍然有效；本 ADR 用
+  host 编排替代，不引入第二套 kernel 词汇。
+- **为 OMFG 复用 `rule_manage` 写项目规则**：会绕过保存确认；项目写入走 `omfg.save`。
+- **为 prewalk 改写 model-role 配置**：omp 只改会话 active model；本 ADR 保持会话级。
 
 ## 遗留
 
-1. 项目级规则保存（`scope=project`）是否值得做，取决于用户是否需要把 OMFG 产物提交进仓库；
-   需要审批、路径限制与来源标记，另立 ADR。
-2. `smart` 图表在网关获得 judge 能力后是否接线；届时只需在客户端传 `TableChartPlanner`，不改 wire。
-3. ratchet 的重新评估条件见 D4；prewalk 见 D5。条件未满足前保持 unsupported，不排期。
+1. ratchet 的审批请求复用现有 `approval`/`clarify` server → client request；若现有 schema 不足以携带
+   `stage`/`content_hash`，只扩展该 request 的字段，不新增通用审批通道，也不允许模型自答。
+2. ratchet 的分析器用 `delegate_task` 还是未来的 handle 桥；若 ADR-4 D11.2 先落地，可替换实现，
+   但 host gate 不变。
+3. OMFG 项目规则的归属/覆盖策略（是否允许覆盖非 agent 创建的规则）在 P1 实现时以内容哈希与
+   `overwrite` 确认收口；默认拒绝覆盖。
+4. prewalk 的 auto 默认值是否保持 `off`；当前决定是保持，避免默认成本。
+5. `table_chart.plan` 是否未来泛化为通用 `judgment.*` RPC；当前保持领域方法，避免把图表 schema
+   塞进通用判定协议。
 
 ## 对 §10 的修正
 
 `docs/omp-ui-panels-gateway-plan.md` §10 的 **OMFG / ratchet / prewalk / auto-graph** 行由本 ADR
-收口：
+收口为 **C / C / C / C**：
 
 | 项 | 决定 | 退出条件 |
 |---|---|---|
-| OMFG | **A（skill + rules/TTSR，无网关后端）** | D1–D3 验收通过；面板仍 unsupported，skill 可用 |
-| ratchet | **B（不做）** | 保持 unsupported；D4 的重评条件满足才另立 ADR |
-| prewalk | **B（不做）** | 保持 unsupported；D5 的重评条件满足才另立 ADR |
-| auto-graph | **A（纯客户端接线）** | D6 验收通过；无网关改动 |
+| OMFG | **C（`omfg.*` host 服务 + 面板）** | D1–D3、验收 1–3；面板 `pending` → `ready` |
+| ratchet | **C（host 编排器 + 审批 + `ratchet.*`）** | D4、验收 4；未具备审批/子代理前保持 pending |
+| prewalk | **C（会话 handoff + auto 分类器 + `prewalk.*`）** | D5、验收 5；默认关闭 |
+| auto-graph | **C（`table_chart.plan` + 客户端 planner）** | D6、验收 6；无网关图表渲染 |

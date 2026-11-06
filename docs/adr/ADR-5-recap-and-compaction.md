@@ -31,8 +31,8 @@ cache-parity fork 骨架，`/btw` 已改用它）→ `agent/recap.py`：prompt �
 `status.update`/`agent.print`/`review.summary` 冒充。
 
 **关联**：`docs/omp-ui-panels-gateway-plan.md` §0.1、§0.3、§2.3.2、§2.3.2.1、§4.7、§9；
-ADR-2（D4、D9）；ADR-3（`append_display_row`、行/事件边界）；ADR-4（`canonical_method`、分阶段与客户端
-接线方式）；**ADR-10 是本 ADR 的角色与投影底座**（D1 `custom` 行、D6 capability、D8 单一投影、D10
+ADR-2（D4、D9）；ADR-3（`append_display_row`、行/事件边界）；ADR-4（`execute_code` 的 JS 后端与模型面
+additive 参数写法）；**ADR-10 是本 ADR 的角色与投影底座**（D1 `custom` 行、D6 capability、D8 单一投影、D10
 `TranscriptRole` + `TRANSCRIPT_ROLES`、D11 模型转换）。
 
 **范围**：只讨论 omp-ui ↔ Hermes canonical local gateway。消息平台、Desktop、Ink sidecar、ACP、
@@ -368,7 +368,7 @@ compaction.summary {
 }
 ```
 
-- 声明在 `tui_gateway/contracts/events.py`（与 `message.adviser` 同风格，`:261-262`）。事件是行之外的
+- 声明在 `tui_gateway/contracts/events.py`（与 `message.advisor` 同风格，`:261-262`）。事件是行之外的
   **第二份送达**，不是第二份真值：payload 由与 D3 同一个 helper 从承载行构造。
 - 生产点 1（回合内自动压缩，**canonical 进程**）：`_commit_compaction`
   （`agent/conversation_compression.py:3577`）在提交成功后从本次 `compressed` 的承载行（D2 的 metadata +

@@ -1148,6 +1148,7 @@ holds across gateway crashes, restarts, and updates:
 | Gateway messages    | `~/.hermes/state.db`   | SQLite — canonical store for all session messages |
 | Gateway routing index | `gateway_routing` table in `~/.hermes/state.db` | Maps session keys to active session IDs (origin metadata, expiry flags) |
 | Legacy routing mirror | `~/.hermes/sessions/sessions.json` | Backward-compat mirror of the routing index, written when `gateway.write_sessions_json: true` (the default) |
+| Cold session mirror | `~/.hermes/sessions/<project>/<timestamp>_<id>.jsonl` + same-named directory | Created only by `hermes sessions mirror`; the manifest lives at `~/.hermes/sessions/.mirror/<profile>.jsonl` |
 
 The SQLite database uses WAL mode for concurrent readers and a single writer, which suits the gateway's multi-platform architecture well.
 
@@ -1175,8 +1176,53 @@ persistence failed for that run.
 Sessions created before state.db became canonical may have leftover
 `*.jsonl` files in `~/.hermes/sessions/`. They are no longer written or
 read by Hermes. Safe to delete after verifying the corresponding session
-exists in state.db.
+exists in state.db. This does not apply to the cold mirrors described above:
+those live under `sessions/<project>/` and are written only by
+`hermes sessions mirror`.
 :::
+
+## Cold mirror and offloading
+
+`state.db` is canonical. A mirror is an explicit, read-only export — never a second
+write path, and never part of a live turn:
+
+```bash
+hermes sessions mirror --all                 # write cold JSONL copies
+hermes sessions mirror --session-id <id>     # one session (id prefix accepted)
+hermes sessions mirror --since 2026-01-01    # sessions started after a point in time
+hermes sessions mirror --all --verify        # also check every bundle's sha256/size
+```
+
+Each session gets `<timestamp>_<session-id>.jsonl` plus an artifact directory of the same
+name holding tool-output archives (`<step>.<tool>.log`, and `-original.log` when a live
+truncation kept one), subagent transcripts/reports, and advisor transcripts. The manifest
+records the session id, path, sha256, byte count, message count and mirrored timestamp;
+re-running the command is idempotent and rewrites a bundle atomically only when its content
+changed.
+
+To reclaim disk space for old, finished conversations, add `--prune-source`:
+
+```bash
+hermes sessions mirror --all --prune-source            # default age gate: 180 days
+hermes sessions mirror --all --prune-source --older-than 0
+hermes sessions restore <session-id>
+```
+
+`--prune-source` deletes only `messages` rows whose bundle already verified; the `sessions`
+metadata row (routing identity, profile, title, counters) survives and is marked
+`offloaded`. The age gate measures the last **user** message (falling back to
+`started_at`), defaults to 180 days, and `--older-than 0` is the only way to bypass it —
+including when `--session-id` names a single session. Open sessions, rows under a live turn
+lease, sessions with any continuation (a compression child or branch), and count/sha
+mismatches are always refused. Offloaded rows are exempt from automatic
+retention pruning and the empty-session sweeps, so the cold copy cannot be deleted by
+housekeeping.
+
+Reads handle the state explicitly: `session.list` returns the row with
+`restore_required: true`, `session.most_recent` and `hermes -c` skip it, and `session.resume`
+verifies the bundle and restores the message rows before loading. A missing or corrupt bundle refuses the
+resume with a reason; it never returns an empty conversation. `hermes sessions restore <id>`
+runs the same verified restore directly.
 
 ### Database Schema
 

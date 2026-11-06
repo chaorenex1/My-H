@@ -3,7 +3,7 @@
 **状态**：已决定（2026-11-03）；**P1–P4 已实现（2026-11-04）**，P5 未开始。分阶段：**P1** `agent/judgment/` 类型契约、文本判定、
 本地 llama.cpp 文本后端（复用 `hermes_cli/local_runtime`）、TypeSafe / OpenRouter Decisions 原生判定、
 配置、账本、`$HERMES_HOME/judgment/` 缓存/审计库、候选拒绝冷却、`hermes judgment`；**P2** OpenAI
-Decisions、Workers AI Clef、`max_questions` 分片、`judgglob` / `judggrep` 语义 find 工具与
+Decisions、Workers AI Clef、`max_questions` 分片、`judgrg` 判定路由搜索工具与
 `$HERMES_HOME/judgment/eval/` 判定文件；**P3** TTSR `question` 规则（依赖 ADR-6 P1）；**P4** 图像
 判定与 `box`；**P5** 判定日志面板（dashboard `/judgment`）。P3 已落地：`question` 规则在 assistant
 消息/工具轮次完成后判定（`noul` + 0.7 阈值），复用 ADR-6 的 `ttsr.triggered` 与隐藏 reminder，客户端
@@ -25,8 +25,8 @@ ADR-6（TTSR 通知、D2 的 `question` 字段、P2 的 judge 规则）；`agent
 `packages/coding-agent/src/judgment/{index,cache,standalone}.ts`、
 `packages/coding-agent/src/export/ttsr.ts`。
 
-**范围**：新增旁路判定原语、配置、CLI、账本/审计库、本地 llama.cpp 文本后端、`judgglob`/`judggrep`
-语义 find 工具、`$HERMES_HOME/judgment/eval/` 判定文件、图像/box 判定、以及 dashboard 的判定日志面板。
+**范围**：新增旁路判定原语、配置、CLI、账本/审计库、本地 llama.cpp 文本后端、`judgrg` 判定路由
+搜索工具、`$HERMES_HOME/judgment/eval/` 判定文件、图像/box 判定、以及 dashboard 的判定日志面板。
 不新增 transcript 行；唯一新增的实时帧是 P5 的 `judgment.batch_progress`（ADR-4 batch 落地后喂现有
 omp-ui HUD），不改 Desktop/Ink 渲染；不改主 provider 路由；不迁移
 `/goal` 的 `goal_judge`、`monitor`、auto-prewalk、auto-thinking、git staging；不实现 ADR-4 D11.5 的
@@ -147,22 +147,22 @@ usage 单独一张表。后续请求只把未命中的问题发给 provider。�
 |---|---|---|
 | TTSR `question` 规则（omp `docs/ttsr-injection-lifecycle.md:290-330`、`export/ttsr.ts:86-103`） | ADR-6 P2/P3 的 `question` 字段；P1 运行时尚未实现 | **P3 移植**：完成 output 后判定，`noul` + 0.7 阈值，不流式中断 |
 | eval `judge()`/`judge_batch()`（`eval/judgment-bridge.ts`、`judgment-batch-bridge.ts`） | ADR-4 D11.5 的 `serve_rpc` 接缝（未实现） | **不实现桥**；D11.5 落地时调用本引擎；**P2** 先落 `$HERMES_HOME/judgment/eval/` 判定文件 |
-| `find`/jfind（`docs/tools/find.md`） | Hermes 没有语义 find；只有 `grep`/`glob` | **P2 移植为 `judgglob`/`judggrep` 两个模型工具**，读原始文件/路径，不写入 |
+| `find`/jfind（`docs/tools/find.md`） | Hermes 没有语义 find；只有 `grep`/`glob` | **P2 移植为 `judgrg` 一个模型工具**：判定选路后跑 `rg`/`ast-grep`，读原始文件/路径，不写入 |
 | auto-prewalk（`docs/prewalk.md:113`） | `docs/omp-ui-panels-gateway-plan.md:24` 列为非目标，§10 待决策 | **不移植** |
 | title drift / unexpected-stop classifier | `agent/title_generator.py`、`agent/turn_stop_gates.py`/`turn_failure_copy.py` 的现有启发式 | **不移植**；没有 typed-judgment 消费者 |
 | `omp stats`、git TUI AI staging、`/omfg` | 无等价前端/命令；`omp stats` 的判定进度由 dashboard 面板取代 | **不移植**；**P5** 用 dashboard `/judgment` 面板展示运行记录 |
 | omp `JudgmentBatchProgressHud`（`packages/coding-agent/src/modes/progress-hud.ts:75`，挂在 `interactive-mode.ts:2128`） | omp-ui 已带该组件；Hermes 缺 batch 进度事件与 ADR-4 D11.5 的 batch 桥 | **P5**：dashboard `/judgment` 面板展示 runs；ADR-4 D11.5 落地后发 `judgment.batch_progress`（`{id,intent,done,total,failed,cost}`）给现有 HUD，不新增 transcript 行 |
 
-本 ADR 移植**子系统**、本地 llama.cpp 文本后端、`judgglob`/`judggrep`、`$HERMES_HOME/judgment/eval/`
+本 ADR 移植**子系统**、本地 llama.cpp 文本后端、`judgrg`、`$HERMES_HOME/judgment/eval/`
 文件、TTSR 消费点、图像/box 与 dashboard 面板；prewalk、title drift、unexpected-stop、omp stats/git/
 omfg 不移植。本 ADR **不以 prewalk 为理由**：它在计划里是非目标。P1 的即时消费者是 CLI 与本地文本
-路线；P2 的 `judgglob`/`judggrep` 是第一个产品消费者；P3 的 TTSR 依赖 ADR-6 P1。不为了“凑消费者”把
+路线；P2 的 `judgrg` 是第一个产品消费者；P3 的 TTSR 依赖 ADR-6 P1。不为了“凑消费者”把
 `goal_judge` 迁到 typed judgment——那会改 `/goal` 的 JSON 理由与 wait 语义。
 
 ### 2. Hermes 现有链路：辅助调用有了，判定没有
 
 **没有判定引擎**：全仓库的 Python 代码没有 `Judge`/`JudgmentRequest`/原始 wire 一类的实现；
-`judgment` 一词的其它出现（adviser 提示词、评估文档、vendor 副本）都不是这套 typed judgment 子系统。
+`judgment` 一词的其它出现（advisor 提示词、评估文档、vendor 副本）都不是这套 typed judgment 子系统。
 
 **辅助调用是事实标准**：`agent/auxiliary_client.py:7966` 的 `call_llm(task=..., messages=..., temperature=...,
 max_tokens=..., timeout=...)` 统一处理 provider 解析、凭证、fallback、重试和响应校验；
@@ -222,13 +222,13 @@ Workers AI 或“判定 API”概念；provider profile（`providers/base.py:142
 | A. 纯文本 Judge（只走 `call_llm`，不新增原生 wire） | 否 | 文本是 one-hot，没有校准概率；TTSR 的 0.7 阈值会失真。文本保留为无 native 时的候选/`on` 路线 |
 | B. Native-first + 文本回退（本 ADR） | **采用** | 与 omp 的 `judge` 角色语义一致；原生给校准概率，文本覆盖没有原生凭证的用户 |
 | C. 复用 `auxiliary.goal_judge` | 否 | `/goal` 需要自由文本理由、wait 指令和 JSON 容错；提示词/超时/解析都不同 |
-| D. 移植全部 omp 消费者 | 否 | prewalk 是计划非目标；stats/git/omfg 无 Hermes 前端；只移植 `judgglob`/`judggrep`、TTSR、eval 文件与日志面板 |
+| D. 移植全部 omp 消费者 | 否 | prewalk 是计划非目标；stats/git/omfg 无 Hermes 前端；只移植 `judgrg`、TTSR、eval 文件与日志面板 |
 | E. 新核心包 vs 插件 | **核心包** | TTSR/未来 eval 桥是核心调用方；插件加载顺序和 profile 作用域不适合做判定原语 |
 | F. 关键词解析 vs `response_format`/JSON | **关键词** | omp 已验证；小模型/thinking 前导更稳；one-hot 文本语义明确；`auxiliary_structured_output.py` 的 schema 协商仍可作为后续显式替代 |
 | G. 缓存 WAL vs DELETE | **DELETE** | 遵守 `hermes_state_wal.py:265-275` 的“新库不要 WAL”约束 |
 | H. 缓存保存 usage vs 只存答案 | **只存答案** | session ledger 是计费唯一来源；缓存 usage 会双计 |
 | I. 本地后端自建 worker vs 复用 managed llama.cpp | **复用** | `hermes_cli/local_runtime` 已有二进制/监督/端点解析；只加 `LocalChatBackend` |
-| J. 语义 find 不移植 vs `judgglob`/`judggrep` | **两个只读工具** | omp find 是判定最大的产品消费者；工具化后仍保持受限 schema/预算 |
+| J. 语义 find 不移植 vs `judgrg` | **一个只读路由工具** | omp find 是判定最大的产品消费者；工具化后仍保持受限 schema/预算 |
 | K. UI 做成 transcript 行 vs dashboard 面板 | **dashboard 面板** | 不污染模型上下文/prompt cache；runs 审计 + eval 文件已足够展示 |
 | L. eval 判定只进 DB vs 文件 + DB | **文件 + DB** | 文件可离线/批量检查，DB 供面板过滤；两者都不含正文 |
 
@@ -242,9 +242,9 @@ Workers AI 或“判定 API”概念；provider profile（`providers/base.py:142
 - 调用方拥有调度、超时和生命周期。P3 的 TTSR 在 assistant 消息完成后调用；判定失败只记日志，不向
   用户展示错误，也不伪造通知。
 - 引擎只在 `max_questions` 分片时使用有界线程（最多 4 个）；不创建常驻后台线程。
-- 不新增通用的 `judge` 模型工具：模型不能传任意 questions/state。**P2 显式新增两个只读产品工具**
-  `judgglob`/`judggrep`（toolsets 的 `judgment` toolset），它们只构造本 ADR 定义的受限问题（语义路径/片段
-  相关性），不能把判定引擎变成任意分类器。
+- 不新增通用的 `judge` 模型工具：模型不能传任意 questions/state。**P2 显式新增一个只读产品工具**
+  `judgrg`（toolsets 的 `judgment` toolset），它只构造本 ADR 定义的受限 `choice` 问题（意图 → 工具，
+  决策表见 D14），不能把判定引擎变成任意分类器。
 
 ### D2. 类型契约：问题、答案、错误与校验
 
@@ -535,7 +535,7 @@ judgment:
 模型，静默用于后台判定会造成成本意外。需要时把主模型加进 `auxiliary.judge` 或
 `judgment.native` 之外的显式文本路线。
 
-`purpose` 是调用方传入的字符串（`ttsr`、`eval`、`judggrep`、`judgglob`、`cli`、未来消费者），只用于
+`purpose` 是调用方传入的字符串（`ttsr`、`eval`、`find`、`cli`、未来消费者），只用于
 日志/账本/审计标签，不参与路由。
 
 ### D6. 缓存与审计：答案只缓存 native，运行记录供 UI/日志
@@ -731,13 +731,13 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 - 文档：`website/docs/user-guide/configuration.md` 的 auxiliary 表与新增 `judgment` 小节；
   `website/docs/integrations/providers.md` 注明“judgment 不是聊天 provider”；`website/docs/reference/
   environment-variables.md` 新增 TypeSafe/Cloudflare 行；`website/docs/reference/cli-commands.md`
-  新增 `hermes judgment ask|doctor|log`；`website/docs/user-guide/features/` 新增 `judggrep`/`judgglob`
+  新增 `hermes judgment ask|doctor|log`；`website/docs/user-guide/features/` 新增 `judgrg`
   与 `/judgment` 面板说明。不更新 `docs/omp-ui-panels-gateway-plan.md`（判定没有 transcript 区块）。
 
 ### D11. Footprint 与兼容
 
 - **新增文件**：`agent/judgment/`（含 `local.py`）、`hermes_cli/subcommands/judgment.py`、
-  `tools/judggrep_tool.py`、`tools/judgglob_tool.py`、`hermes_cli/web_routers/judgment.py`、
+  `tools/judgrg_tool.py`、`hermes_cli/web_routers/judgment.py`、
   `web/src/pages/JudgmentPage.tsx`、测试；修改配置默认值、aux 槽位、env 键、`aux_accounting.py` 的公开
   getter、`hermes_cli/main.py` 的 subcommand 注册、`toolsets.py` 的 `_HERMES_CORE_TOOLS` 与
   `judgment` toolset、`web/src/App.tsx` 的路由/导航、文档。不改 `model_tools.py`、`run_agent.py`、
@@ -745,13 +745,13 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
   Desktop/Ink/omp-ui 组件。
 - **零默认调用**：默认配置没有 native 路由、`judgment.tools.enabled: auto` 在无 native 时隐藏工具、
   TTSR 未实现；没有消费者会在后台调用。显式入口是 `hermes judgment ask|log`，以及用户启用 native
-  judge 后的 `judgglob`/`judggrep`。
-- **prompt cache 不受影响**：判定是独立请求，不进入会话消息序列。`judggrep`/`judgglob` 是
+  judge 后的 `judgrg`。
+- **prompt cache 不受影响**：判定是独立请求，不进入会话消息序列。`judgrg` 是
   service-gated core 工具：无 native 时 `check_fn` 隐藏，默认工具表不变；会话开始时已有 native 则
-  工具表包含它们。中途改配置/凭证在下一个会话生效，不按轮次换面。
+  工具表包含它。中途改配置/凭证在下一个会话生效，不按轮次换面。
 - **profile 隔离**：`$HERMES_HOME/judgment/`、拒绝冷却键、凭证读取、dashboard 面板查询都用
   `get_hermes_home()`；多路复用网关按 profile 绑定。
-- **模型权限面**：没有通用 `judge` 工具；只有两个受限、只读的 find 工具（D14）。它们不能传任意
+- **模型权限面**：没有通用 `judge` 工具；只有一个受限、只读的搜索工具（D14）。它不能传任意
   questions/state，也不能写文件。
 - **SQLite**：新库用 DELETE journal，遵守 `hermes_state_wal.py:275` 的约束；缓存/审计失败不阻断判定。
 - **跨平台**：路径用 `Path`；Windows 大小写/分隔符不参与缓存键（键是内容哈希）；`.env` 优先于 shell
@@ -762,7 +762,7 @@ P3 只做“判定 API + 规则消费”，不重做 ADR-6 P1 的匹配/通知/�
 - 不实现 ADR-4 D11.5 的 eval 内核桥/prelude；该桥落地时调用本引擎，判定文件由本 ADR 写。
 - 不移植 auto-prewalk/auto-thinking、title drift/unexpected-stop、`omp stats`、git TUI staging、`/omfg`：
   Hermes 没有对应功能或已有别的启发式，先有消费者再谈判定。**（`/omfg` 项已由 ADR-12 D1–D3
-  取代：改为 rule-forging skill + rules/TTSR，判定引擎与本条其它项不变，2026-11-04。）**
+  取代：改为 `omfg.*` host 服务 + rules/TTSR，判定引擎与本条其它项不变，2026-11-04。）**
 - 不把 `goal_judge`、`monitor`、approval classifier 迁到 typed judgment：它们各自有提示词/JSON/超时
   语义，迁移会改变行为；需要时另立 ADR。
 - 不做 `question` 规则的流式中断/回滚：判定只在消息完成后进行；ADR-6 P3 的 stream rewind 只覆盖
@@ -804,72 +804,97 @@ judgment:
 - **验收**：服务器在跑时离线判定成功；服务器停掉时 `JudgmentUnavailable` 且没有云端请求；别名/显式
   `base_url` 的解析与主模型一致；`autostart: true` 只启动已安装引擎。
 
-### D14. 语义 find：`judgglob` / `judggrep` 两个只读模型工具
+### D14. 判定路由搜索：`judgrg` 一个只读模型工具
 
-为了移植 omp `find` 的语义检索，同时不把判定做成通用分类器，新增两个受限模型工具，
-归入独立的 `judgment` toolset。工具只在用户显式开启且判定可用时出现；不进入 core toolset。
+为了移植 omp `find` 的检索入口，同时不把判定做成通用分类器，新增一个受限模型工具，归入独立的
+`judgment` toolset。工具以 service-gated 条目列入 `_HERMES_CORE_TOOLS`，但默认工具表只在判定可用时
+才包含它；`judgment.tools.enabled` 为 `off` 时永远不可达。
 
-```python
-# tools/judgglob_tool.py
+工具**只接收请求本身**：用户问题、Agent 任务或代码分析目标。调用方不给模式、pattern、glob 或语言。
+判定只输出**意图 label**（`purpose="find"`）；由此推导的检索策略、工具与 pattern 都是代码侧的确定性
+映射，范围固定为 cwd（判定不能输出路径）：
+
+```text
+Request (question / task / analysis goal)
+  ↓
+Judgment (choice over agent/judgment/prompts/find.json)
+  ├── rg        → content search (literal / config / TODO)
+  ├── ast-grep  → structural search (call / type / pattern)
+  └── rg → ast-grep → hybrid (symbol / unknown implementation / cross-language)
+```
+
+判定逻辑是数据，不是代码：`agent/judgment/prompts/find.json`（随 wheel 打包）保存
+
+```text
+Query 类型            首选工具        判断依据
+literal               rg             精确文本
+symbol                rg + ast-grep  名称与定义结构
+call                  ast-grep       AST 调用表达式
+type                  ast-grep       AST 类型结构
+config                rg             配置文本
+todo                  rg             注释文本
+pattern               ast-grep       结构匹配
+unknown_implementation rg → ast-grep  先定位再结构分析
+cross_language        rg → ast-grep  文本初筛后按语言分析
+```
+
+```json
+// tools/judgrg_tool.py
 {
-  "name": "judgglob",
-  "description": "Semantically rank file paths by a plain-language description. Read-only.",
+  "name": "judgrg",
+  "description": "Read-only search: judgment routes a request to ripgrep or ast-grep.",
   "parameters": {
     "type": "object",
     "properties": {
-      "query": {"type": "string", "description": "What the files do or contain."},
-      "path": {"type": "string", "description": "Directory or file scope; defaults to cwd."},
-      "limit": {"type": "integer", "minimum": 1, "maximum": 128, "default": 32},
-      "hidden": {"type": "boolean", "default": False},
-    },
-    "required": ["query"],
-  },
-}
-
-# tools/judggrep_tool.py
-{
-  "name": "judggrep",
-  "description": "Semantic grep: return file ranges that implement a described behavior. Read-only.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "query": {"type": "string"},
-      "path": {"type": "string"},
-      "glob": {"type": "string", "description": "Optional include glob, e.g. 'src/**/*.py'."},
-      "keywords": {
-        "type": "array", "items": {"type": "string"}, "default": [],
-        "description": "Optional identifiers/terms for the lexical prefilter.",
-      },
-      "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-      "context_lines": {"type": "integer", "minimum": 0, "maximum": 8, "default": 2},
+      "query": {"type": "string", "description": "The user question, agent task, or code-analysis goal."}
     },
     "required": ["query"],
   },
 }
 ```
 
-- **门控**：`judgment.tools.enabled: auto|on|off`（默认 `auto`）。`judggrep`/`judgglob` 加入
+- **门控**：`judgment.tools.enabled: auto|on|off`（默认 `auto`）。`judgrg` 加入
   `_HERMES_CORE_TOOLS`（与 `code_intel`/`code_graph_update` 同一 service-gated 模式），并归入
   `judgment` toolset；不需要用户额外 opt-in toolset。`check_fn` 回答可达性：`auto` 仅当
   `has_native_judge()` 为真，`on` 允许文本判定（结果带 `uncalibrated: true` 警告），`off` 永远不可达。
   `check_fn` 只读配置/凭证，不发网络请求、不按会话临时换面；`disabled_toolsets: [judgment]` 可整组
   移除。工具表在会话开始时按配置/凭证确定；会话中途改配置在下一个会话生效，避免 prompt cache 抖动。
-- **`judgglob` 流程**：列文件（gitignore-aware；默认排除隐藏、二进制、空文件、凭证文件）→ 文件名
-  词法预筛 → 每批 64 个 `noul` 问题（“这个文件名/路径是否匹配描述？”）→ 返回按概率排序的路径。
-  只读目录树与文件名/大小，不读正文。
-- **`judggrep` 流程**：在 scope 内用 query + `keywords` 做词法预筛（最多 20 个文件、每文件 4 MiB、
-  每文件 24 个 8 KiB 窗口）→ 每个窗口生成 384 B sketch（最多 46 个/请求）→ `noul` 评分（≥0.45 进入
-  验证，最多 40 段）→ 完整段验证 → 合并相邻命中（阈值 0.20）→ 返回 `path:start-end`、概率、snippet。
-  最多 16 个请求在飞，20s wall budget，读文件不写。
-- **返回**：`judgglob` 为 `{query, hits:[{path, score, confidence}], coverage, stats}`；`judggrep` 为
-  `{query, hits:[{path, score, ranges:[{start,end,p,snippet}]}], coverage:"complete|partial|unavailable",
-  stats:{files, windows, requests, failed}}`。两者都带 `uncalibrated` 仅当文本判定。`judggrep` 的
-  snippet 走现有 `grep`/`read` 的截断与 secret redaction；凭证/二进制文件在扫描前已排除。
-- **错误**：空 query、坏 path/glob 是 `tool_error`；没有可用 judge 时 `tool_error("judgment unavailable;
-  use grep/glob")`，不能把“没判定”说成“没有命中”；全部请求失败时 error 并提示“不是 absence 证据”；
-  部分失败保留命中并标 `partial`。
-- **不写**：两个工具都不写文件、不改 git、不读隐藏文件（除非显式命名）、不读凭证/二进制文件；不
-  接受任意 questions/state。
+- **判定表**：`agent/judgment/decision.py` 读取 `prompts/find.json` 的 `intent.criteria` 构造
+  `ChoiceQuestion`，`plans` 把意图映射到执行模式（`content`/`ast`/`hybrid`）；`purpose="find"`。
+  `questions` 只被判定 API 消费（choice + criteria），`plans` 只被 `find.py` 消费；判定只返回
+  label，pattern/scope 是确定性代码。表在加载时校验（criteria 非空、每个 plan 有 criterion、每个
+  criterion 有 plan、mode 合法、`unknown_implementation` 必须存在）；坏表抛 `JudgmentError`，不会在
+  import 时崩溃。判定不可用时 `tool_error`，不能把“没判定”说成“没有命中”；答案不是合法 label 时
+  退化为确定性猜测（代码形态 → `pattern`，否则 `unknown_implementation`）。
+- **范围**：默认从 cwd 开始；`limit=50`、`context_lines=0`、`hidden=false` 是内部常量，调用方不能
+  用参数改变策略。命中仍按 `limit` 截断并标 `truncated`。
+- **`content`（rg）**：`rg --json -i --max-count 20`，pattern 是 query 词（引号短语整体保留）的
+  转义 alternation；命中按文件合并相邻区间，snippet 走现有 secret redaction。VCS/缓存目录用
+  `-g '!<dir>/**'` 排除，凭证文件用大小写不敏感的 `--iglob '!<credential>'` 排除。
+- **`ast`（ast-grep）**：`ast-grep run --pattern <pattern> --json=stream`；不传 `--lang`，由 ast-grep
+  按文件扩展名推断语言，因此同一 pattern 可以跨语言命中。pattern 默认是 code-shaped query；`call`
+  意图只命名一个标识符时合成 `<name>($$$)` 便携调用模板。query 不是代码形态且无法合成、或 ast-grep
+  未安装时降级到 `content`，并在结果里写 `fallback` 原因，不伪装成 AST 命中。
+- **`hybrid`（rg → ast-grep）**：先跑 `content` 定位候选；`symbol`/`unknown_implementation`/
+  `cross_language` 在 query 是代码形态时用 query、是单个标识符时用该标识符做 AST pattern，再跑一次
+  `ast` 并按文件合并，`tools` 报告 `["rg", "ast-grep"]`。没有可用 pattern 或 ast-grep 未安装时只跑
+  rg，`tools: ["rg"]`，并在 `fallback` 里说明原因。
+- **返回**：`{query, intent, mode:"content|ast|hybrid|files|path", tools:["rg"|"ast-grep"], hits,
+  coverage:"complete|partial|unavailable", stats:{requests, failed, matches, truncated, elapsed_ms}}`。
+  `content`/`ast` 的 hit 是 `{path, ranges:[{start,end,snippet}]}`；`files`/`path` 是 `{path}`。
+  `fallback` 仅在降级时出现，`uncalibrated` 仅在文本判定时出现。
+- **`files`/`path` 兜底**：query 没有可检索词时退化为 `rg --files`；query 本身是 glob 时退化为
+  `rg --files --iglob`。它们不是判定意图，只在无法做内容/AST 检索时兜底。
+- **错误**：空 query 是 `tool_error`；没有可用 judge 时 `tool_error("judgment unavailable; use
+  search_files instead")`；全部判定请求失败时 error 并提示“不是 absence 证据”；rg/ast-grep 缺失时
+  给出安装命令（`hermes pm install ripgrep|ast-grep`）；超时或非零退出仍有命中时保留命中并标
+  `partial`。
+- **打包**：`find.json` 是运行时数据；`pyproject.toml` 的 `[tool.setuptools.package-data]` 必须有
+  `agent = ["judgment/prompts/*.json"]`，否则 sealed wheel 里判定表缺失、每次调用都报不可读。
+- **本地文件系统**：与旧 judg 工具一致，`judgrg` 在 agent 主机上直接运行 `rg`/`ast-grep`，不经过
+  `search_files` 的 per-task 环境；容器/SSH 会话搜索的是 agent 主机而不是远端工作区。schema 描述与
+  configuration 文档都写明这一点；需要远端检索时用 `search_files`。
+- **不写**：不写文件、不改 git；凭证/二进制文件即使被点名也不进入结果；不接受任意 questions/state。
 
 ### D15. 图像与 box：native-first，文本 vision 显式 opt-in
 
@@ -1019,15 +1044,13 @@ if provider in {"llamacpp", "llama.cpp", "llama-cpp", "local"} and not base_url:
 ### find 工具
 
 ```text
-judgglob(query, path?, limit=32, hidden=false)
-  -> {query, hits:[{path, score, confidence}], coverage, stats}
-
-judggrep(query, path?, glob?, limit=20, context_lines=2)
-  -> {query, hits:[{path, score, ranges:[{start, end, p, snippet}]}],
-      coverage:"complete|partial|unavailable", stats:{files, windows, requests, failed}}
+judgrg(query)
+  -> {query, intent, mode:"content|ast|hybrid|files|path", tools, hits,
+      coverage:"complete|partial|unavailable",
+      stats:{requests, failed, matches, truncated, elapsed_ms}}
 ```
 
-两个工具都只读、受 `judgment.tools.enabled`/`check_fn` 与 20s/caps 约束；没有可用 judge 时返回
+工具只读、受 `judgment.tools.enabled`/`check_fn` 与 20s 超时约束；没有可用 judge 时返回
 `tool_error`，不能把“未判定”说成“没有命中”。
 
 ### eval 文件与面板
@@ -1098,8 +1121,8 @@ q0: noul 0.82
 usage: input=420 output=2 cost=$0.0001
 cache: 0/1 hit
 
-$ hermes judgment log --limit 5 --purpose judggrep
-2026-11-03T12:00:00Z judggrep typesafe/jev-1.14.0 ok 6/8 cached 1.2s 420tok $0.0001
+$ hermes judgment log --limit 5 --purpose find
+2026-11-03T12:00:00Z find typesafe/jev-1.14.0 ok 6/8 cached 1.2s 420tok $0.0001
 ```
 
 ## 实现落点
@@ -1116,8 +1139,8 @@ $ hermes judgment log --limit 5 --purpose judggrep
 | 链 | `agent/judgment/chain.py` | 解析、native-only tail、`has_native_judge`、拒绝冷却、图像/box 过滤 |
 | 缓存/审计 | `agent/judgment/cache.py` | SQLite DELETE、canonical 键、`states`/`answers`/`runs`、上限、best-effort |
 | 判定文件 | `agent/judgment/eval_files.py` | `$HERMES_HOME/judgment/eval/{questions,batches,logs}` 写入/轮转 |
-| find 引擎 | `agent/judgment/find.py` | 关键词预筛、窗口/草图/验证级联、`p=0.45/0.20` 阈值、16 并发与 20s wall budget、限制与排除规则 |
-| 工具 | `tools/judggrep_tool.py`、`tools/judgglob_tool.py` | 两个只读语义 find 工具、schema、caps、`judgment` toolset 注册 |
+| find 引擎 | `agent/judgment/decision.py`、`agent/judgment/prompts/find.json`、`agent/judgment/find.py` | 决策表加载/校验、意图 `choice` 问题、`rg`/`ast-grep` 执行、hybrid 合并、20s 超时、凭证/二进制排除与 `partial` 语义 |
+| 工具 | `tools/judgrg_tool.py` | 一个只读路由搜索工具、schema、caps、`judgment` toolset 注册 |
 | 工具集 | `toolsets.py` | `judgment` toolset + `judgment.tools.enabled` 门控 |
 | 配置 | `agent/judgment/config.py` | `judgment` 默认值/校验、`auxiliary.judge`、local/tools/images/audit |
 | CLI | `hermes_cli/subcommands/judgment.py` | `ask` / `doctor` / `log`；`hermes_cli/main.py` 注册 |
@@ -1129,7 +1152,7 @@ $ hermes judgment log --limit 5 --purpose judggrep
 | omp-ui HUD | `tui_gateway/contracts/events.py`、`gateway/local_viewer_events.py` | P5/ADR-4 落地后发 `judgment.batch_progress` 喂现有 `JudgmentBatchProgressHud`；不新增组件 |
 | 账本 | `agent/aux_accounting.py` | 公开 `current_context()` getter |
 | 文档 | `website/docs/user-guide/configuration.md`、`website/docs/integrations/providers.md`、`website/docs/user-guide/features/` | 配置、非聊天 provider、工具/面板说明 |
-| 测试 | `tests/agent/test_judgment_*.py`、`tests/tools/test_judggrep_tool.py`、`tests/tools/test_judgglob_tool.py`、`tests/hermes_cli/test_judgment_cli.py`、`tests/hermes_cli/test_judgment_web.py`、`tests/hermes_cli/test_aux_slots.py` | 解析、wire mock、链、缓存/审计、工具、CLI、面板、槽位顺序 |
+| 测试 | `tests/agent/test_judgment_*.py`、`tests/tools/test_judgrg_tool.py`、`tests/hermes_cli/test_judgment_cli.py`、`tests/hermes_cli/test_judgment_web.py`、`tests/hermes_cli/test_aux_slots.py` | 解析、wire mock、链、缓存/审计、工具、CLI、面板、槽位顺序 |
 
 P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确定文件名），只增加
 “完成后判定 + 0.7 阈值 + `ttsr.judge` 门控”，不改 ADR-6 的匹配/交付。
@@ -1139,7 +1162,7 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
 | P1 | D1–D3、D13 本地 llama.cpp、D4 的 TypeSafe + OpenRouter、候选拒绝冷却、D5–D8、D10、D11、D6/D16 的 `runs` 审计表 | `hermes judgment ask` 对文本/本地/TypeSafe/OpenRouter 返回结构化答案；文本解析与 omp 语义一致；账本只记一次；`$HERMES_HOME/judgment/judgment.db` 按 state/model/问题隔离；`runs` 可查；401/402/403 冷却不重复付费；无默认后台调用 |
-| P2 | D4 的 OpenAI Decisions + Workers AI Clef、`max_questions` 分片、D14 `judgglob`/`judggrep`、D16 的 `$HERMES_HOME/judgment/eval/` 文件 | 四种 wire 的 mock 契约测试；分片合并/部分 usage；两个工具在 native judge 下返回路径/区间/概率；无 judge 时报 “use grep/glob”；20s/文件/请求 caps 生效；eval JSONL 按 session/execution 落盘并轮转 |
+| P2 | D4 的 OpenAI Decisions + Workers AI Clef、`max_questions` 分片、D14 `judgrg`、D16 的 `$HERMES_HOME/judgment/eval/` 文件 | 四种 wire 的 mock 契约测试；分片合并/部分 usage；工具在 native judge 下按策略返回路径/区间/snippet；无 judge 时报 “use search_files”；20s 超时、结果/区间 caps 生效；eval JSONL 按 session/execution 落盘并轮转 |
 | P3 | D9 TTSR `question` 规则（依赖 ADR-6 P1） | `question` 规则 `auto` 只走 native、`on` 可用文本、阈值 0.7、失败静默；通知/reminder 与 ADR-6 P1 一致；无新行/事件 |
 | P4 | D15 图像判定、`box`、图像 fitting/bounds、图像缓存身份 | 已实现（2026-11-04）：四类 wire 的图像契约；fit/pad 后 box 反映射；TypeSafe/Workers AI/OpenAI 上限；无兼容候选报错；无图请求字节不变 |
 | P5 | D16 的 `/judgment` 页面与 API | 面板列出 runs、过滤 purpose/status、显示缓存命中/tokens/cost/latency、空态/损坏态、profile 隔离；不显示正文/密钥 |
@@ -1162,7 +1185,7 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 7. **配置**：`auxiliary.judge` 出现在 `DEFAULT_CONFIG`、`AUX_TASK_KEYS`、picker 与文档；顺序测试
    更新；非法 `judgment.native` 路由 warning + 跳过；env 键出现在 `.env.example`/文档/`_EXTRA_ENV_KEYS`。
 8. **默认零 footprint**：system prompt、transcript 行、除 P5 HUD 外的 gateway 事件、omp-ui/Desktop/Ink
-   组件均无 diff；`judggrep`/`judgglob` 在 `_HERMES_CORE_TOOLS` 但 `auto` 无 native 时 `check_fn` 隐藏；
+   组件均无 diff；`judgrg` 在 `_HERMES_CORE_TOOLS` 但 `auto` 无 native 时 `check_fn` 隐藏；
    不按会话动态加工具；`disabled_toolsets: [judgment]` 可整组移除；dashboard 只新增只读 `/judgment` 页面；
    主对话的 prompt cache 前缀在会话内稳定。
 9. **CLI**：`ask` 输出答案/usage/缓存命中；`log` 读 `runs` 表；`--json` 可解析；退出码 0/1/2 正确；
@@ -1178,10 +1201,13 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 13. **本地后端**：`llamacpp` 端点存在时离线判定成功（无网络请求）；端点消失或
    `supervisor.ensure_model_ready(model)` 返回 false 时 `JudgmentUnavailable` 且不回退云端；
    `autostart: true` 只启动已安装引擎；`merge_prompt` 只影响本地后端；usage 只记一次。
-14. **find 工具**：`judgglob` 返回排序路径；`judggrep` 返回 `path:start-end`/概率/snippet；无 native
-   且 `auto` 时 `check_fn` 隐藏（core 列表仍在）；`disabled_toolsets: [judgment]` 可整组移除；没有
-   judge 时 tool_error 指向 grep/glob；20s wall、文件/窗口/请求 caps、只读/隐藏/凭证过滤、部分失败
-   coverage 生效；文本判定结果标 `uncalibrated`。
+14. **find 工具**：`judgrg` 只接收请求字符串；`agent/judgment/prompts/find.json` 的九个意图全部可选
+    且各有 plan；`literal`/`config`/`todo` → `rg`，`call`/`type`/`pattern` → `ast-grep`，
+    `symbol`/`unknown_implementation`/`cross_language` → `rg → ast-grep`（hybrid）；AST 不需要
+    `--lang`（按文件推断）；无 native 且 `auto` 时 `check_fn` 隐藏（core 列表仍在）；
+    `disabled_toolsets: [judgment]` 可整组移除；没有 judge 时 tool_error 指向 search_files；20s 超时、
+    `limit`/`truncated`、只读/凭证过滤、部分失败 coverage 生效；文本判定结果标 `uncalibrated`；
+    sealed wheel 里有 `judgment/prompts/find.json`。
 15. **图像/box**：四类 wire 的编码契约；Jev/Workers AI/OpenAI 上限与 fit/pad；box 反映射；
    无兼容候选显式报错；`judgment.images: false` 时带图请求 ValidationError；图像缓存 identity 合并
    MIME/base64 变体、TypeSafe 忽略 detail。
@@ -1217,9 +1243,9 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 - **本地运行时**：`llamacpp` 端点由现有 supervisor 管理，judgment 只在 `autostart` 时尝试启动已安装
   引擎；服务器未启动、模型不匹配、上下文不足都必须返回 `JudgmentUnavailable`，不能悄悄切云端。小模型
   的单轮合并提示词可能仍输出前言，解析失败按失败处理。
-- **find 工具成本/误判**：`judggrep` 的语义分数不是“代码理解”保证，低分可能只是 sketch 差；20s/
-  文件/请求 caps 与 `partial` 必须生效，工具结果要明确“不是 absence 证据”。`judgglob` 只按文件名，
-  不读正文，避免把大文件内容送进判定。
+- **find 工具成本/误判**：判定只负责选路，不负责保证命中；词法 pattern 与派生 glob 是近似，20s
+  超时与结果 caps 必须生效，工具结果要明确“不是 absence 证据”。`path` 模式只匹配文件名，`content`
+  才读正文；`ast` 降级必须带 `fallback` 原因。
 - **图像成本/兼容**：图像判定按次计费且 Jev 有严格尺寸/像素范围；fit/pad 会重编码，可能损失细节或
   放大成本。Workers AI/OpenAI 的上限与 TypeSafe assets 语义不同，必须按 wire 拒绝而不是截断。
 - **面板/审计隐私**：`runs`/JSONL 只存哈希与计数；`eval_debug` 默认 false，开启后也只写脱敏正文。
@@ -1230,7 +1256,7 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 ## 不采纳
 
 - **把通用 `judge` 暴露成模型工具**：模型可以传任意 questions/state，绕过调用方的门槛/预算。只允许
-  D14 的两个受限、只读 find 工具。
+  D14 的受限、只读搜索工具。
 - **把判定结果写成 transcript 行或伪造/通用实时事件**：没有这类消费者；会增加 prompt/持久化面。
   HUD 只认真实的 `judgment.batch_progress`（ADR-4 batch），dashboard 是只读日志面。
 - **复用 `auxiliary.goal_judge`**：`/goal` 的 JSON 理由、wait 指令、超时和解析都不同；迁移会改变
@@ -1241,7 +1267,7 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
   来源。端点上限（如 Workers AI 64）作为路由默认值内置。
 - **在本 ADR 实现 eval 内核桥/prelude，或移植 auto-prewalk/auto-thinking/git staging/omfg**：eval 桥
   由 ADR-4 D11.5 拥有、落地时调用本引擎；其余没有 Hermes 消费者。**（omfg 的 `/omfg` 项已由
-  ADR-12 改为 skill 路线；本 ADR 仍不实现它。）**
+  ADR-12 改为 `omfg.*` host 服务；本 ADR 仍不实现它。）**
 - **P1–P3 做图像/box**：图像/box 是 P4 的明确交付，不是“没有消费者就砍掉”；P1–P3 遇到带图请求
   直接报 `JudgmentValidationError`，避免半实现。
 - **缓存 WAL 或 usage 表**：WAL 与仓库 SQLite 约束冲突；usage 表与 session ledger 双计。
@@ -1254,8 +1280,8 @@ P3 的实现落点复用 ADR-6 的 `TtsrCoordinator` 等价物（P1 落地后确
 - **自己实现 llama.cpp/模型下载/监督**：D13 复用 `hermes_cli/local_runtime`，只加 `LocalChatBackend`。
 - **在 `/judgment` 面板显示 state/问题/答案正文或密钥**：面板只显示计数、哈希、来源/模型、usage；
   正文只在 `eval_debug` 的脱敏 JSONL 里。
-- **让 `judggrep`/`judgglob` 写文件、读隐藏/凭证文件或接受任意 questions**：它们是只读产品工具，不是
-  通用判定入口。
+- **让 `judgrg` 写文件、把凭证/二进制文件放进结果、或接受任意 questions**：它是一个只读产品工具，
+  不是通用判定入口。
 
 ## 遗留
 

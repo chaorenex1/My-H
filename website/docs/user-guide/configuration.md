@@ -27,7 +27,7 @@ Run `hermes setup --portal` — one OAuth gets you a model provider and all four
 ├── memories/       # Persistent memory (MEMORY.md, USER.md)
 ├── skills/         # Agent-created skills (managed via skill_manage tool)
 ├── cron/           # Scheduled jobs
-├── sessions/       # Gateway sessions
+├── sessions/       # Session bundles (cold mirrors + artifacts; state.db is canonical)
 └── logs/           # Logs (errors.log, gateway.log — secrets auto-redacted)
 ```
 
@@ -970,11 +970,16 @@ tool_output:
   max_bytes: 50000        # terminal output cap (chars)
   max_lines: 2000         # read_file pagination cap
   max_line_length: 2000   # per-line cap in read_file's line-numbered view
+  artifacts:              # per-session tool-output archive (ADR-16)
+    enabled: true
+    redact: true          # scrub secrets before anything reaches disk
+    exclude_tools: ["read_file", "todo", "agent_out"]
 ```
 
 - **`max_bytes`** — When a `terminal` command produces more than this many characters of combined stdout/stderr, Hermes keeps the first 40% and last 60% and inserts a `[OUTPUT TRUNCATED]` notice between them. Default `50000` (≈12-15K tokens across typical tokenisers).
 - **`max_lines`** — Upper bound on the `limit` parameter of a single `read_file` call. Requests above this are clamped so a single read can't flood the context window. Default `2000`.
 - **`max_line_length`** — Per-line cap applied when `read_file` emits the line-numbered view. Lines longer than this are truncated to this many chars followed by `... [truncated]`. Default `2000`.
+- **`artifacts`** — The session bundle's tool-output archive. Every tool result is written to `$HERMES_HOME/sessions/<project>/<session>/<step>.<tool>.log`, and a truncated result additionally keeps its pre-truncation text in `<step>.<tool>-original.log`. `redact: true` scrubs secrets before the write; `exclude_tools` names contract-shaped or already-bounded results that must not be truncated twice. The archive is host-side only — the model's recovery path stays `cache/spillover/`.
 
 Raise the limits on models with large context windows that can afford more raw output per call. Lower them for small-context models to keep tool results compact:
 
@@ -989,6 +994,27 @@ tool_output:
   max_bytes: 20000
   max_lines: 500
 ```
+
+### Structural Read Summaries
+
+`read.summarize` (omp's `read.summarize` / named-agent `read-summarize`) lets a whole-file
+`read_file` return declarations instead of every body line:
+
+```yaml
+read:
+  summarize:
+    enabled: false       # opt-in; explicit offset/limit reads are never summarized
+    prose: false         # also summarize .md/.txt (otherwise verbatim)
+    min_total_lines: 100 # shorter files stay verbatim
+```
+
+Elided spans are rendered as `start-end|... (N lines elided; read_file(path=..., offset=start,
+limit=N))`, so the agent can request exact bytes with `offset`/`limit`. tree-sitter is the primary
+engine when the optional codegraph extra is installed; Python falls back to the stdlib `ast`, other
+languages to a conservative declaration heuristic. A named agent's summaries stay in memory for
+the run and settle writes them into the session bundle's `<topic>_ast.json`, read back with
+`agent_out(mode="ast_summary")`. A named agent's `read-summarize: true/false` field overrides
+`enabled` for that run.
 
 ### Tool-Result Spillover Budget
 
@@ -1389,7 +1415,7 @@ agent:
   coding_instructions: ""      # Standing project-wide coding rules appended to the coding brief
 ```
 
-`agent.max_plugin_continuations` bounds how many times a plugin may keep a turn open through the stop gate (`hermes_cli.plugin_runtime.request_continuation`), separately from the verification budget so an adviser acting on its own finding cannot consume the coding-verification allowance.
+`agent.max_plugin_continuations` bounds how many times a plugin may keep a turn open through the stop gate (`hermes_cli.plugin_runtime.request_continuation`), separately from the verification budget so an advisor acting on its own finding cannot consume the coding-verification allowance.
 
 `verify_on_stop` accepts `true` (on everywhere), `false` (off — the default), or `"auto"` (legacy surface-aware behavior: on for interactive coding surfaces — CLI, TUI, desktop — and programmatic callers; off for messaging surfaces like Telegram/Discord where the verification narrative reads as chat noise). Off is the default everywhere: fresh installs ship `false` and the config migration turned it off on existing installs, so enabling it is an explicit opt-in. The `HERMES_VERIFY_ON_STOP` env var overrides the config value when set.
 
@@ -1551,7 +1577,7 @@ The same slots are editable as **roles** in omp-ui's `/models` hub (`hermes omp`
 | Hub role | Hermes config | Notes |
 |----------|---------------|-------|
 | `task` | `delegation.provider` / `delegation.model` (+ `delegation.fallback_providers`) | `auto` = inherit the parent agent |
-| `advisor` | `adviser.provider` / `adviser.model` | no per-role effort or chain; `adviser.enabled` still gates it |
+| `advisor` | `advisor.provider` / `advisor.model` | no per-role effort or chain; `advisor.enabled` still gates it |
 
 Three more hub features map onto the profile config:
 
@@ -2075,18 +2101,38 @@ hermes judgment log --limit 20 --purpose cli
 
 `ask` exits 0 on success, 2 for a bad parameter/question file, and 1 when no candidate can answer. `doctor` is offline: it lists route/credential availability, the text and local routes, tool gating, image capability, and cache/audit state.
 
-### Semantic find tools
+### Judgment-routed search
 
-Two read-only model tools use the judgment route. They build their own restricted yes/no questions — the model cannot pass questions or state — and they never write files or touch git.
+One read-only model tool, `judgrg`, takes a single input: the request (a user question, an agent task, or a code-analysis goal). A restricted choice question — the model cannot pass questions or state — classifies the intent and therefore the tool, and then ripgrep or ast-grep runs. It runs on the local filesystem, not inside a sandboxed task environment, so container/SSH sessions should use `search_files` for the remote tree.
 
-| Tool | What it returns |
+The decision logic is data: `agent/judgment/prompts/find.json` maps each query type to a preferred tool and its criteria.
+
+| Query type | Tool | Signal |
+|---|---|---|
+| `literal` | rg | exact text |
+| `symbol` | rg + ast-grep | name and definition structure |
+| `call` | ast-grep | AST call expression |
+| `type` | ast-grep | AST type structure |
+| `config` | rg | configuration text |
+| `todo` | rg | comment text |
+| `pattern` | ast-grep | structural match |
+| `unknown_implementation` | rg → ast-grep | locate first, then structure |
+| `cross_language` | rg → ast-grep | text prefilter, then per-language analysis |
+
+The judged intent maps to an execution mode:
+
+| Mode | What it returns |
 |---|---|
-| `judgglob` | `{query, hits:[{path, score, confidence}], coverage, stats}` — paths ranked by a plain-language description (names and locations only, no contents). |
-| `judggrep` | `{query, hits:[{path, score, ranges:[{start, end, p, snippet}]}], coverage, stats}` — the file ranges that implement a described behavior. |
+| `content` | `{hits:[{path, ranges:[{start, end, snippet}]}]}` — text matches from rg. |
+| `ast` | The same range shape, from a structural code pattern. |
+| `hybrid` | rg hits merged with an ast-grep pass when the query is also code-shaped. |
+| `files` / `path` | Fallbacks when the request has no searchable terms: `rg --files` (and `--iglob` for a glob query). |
 
-`judgglob` scans the tree (skipping VCS/cache dirs, hidden files, credentials, binaries, and root-`.gitignore` matches), lexically shortlists 128 paths, and judges them in batches of 64. `judggrep` prefilters at most 20 files by keyword (4 MiB per file, 24 windows of 8 KiB), scores 384-byte sketches at a 0.45 cutoff, verifies at most 40 full passages, merges adjacent hits at 0.20, keeps at most 16 requests in flight, and stops at a 20 s wall budget. `context_lines` widens the reported range.
+The full payload is `{query, intent, mode, tools, hits, coverage, stats:{requests, failed, matches, truncated, elapsed_ms}}`, plus `fallback` when an AST plan degraded and `uncalibrated: true` for text judgments.
 
-Gate them with `judgment.tools.enabled`:
+Scope defaults to cwd and the judge cannot change it; `limit=50`, `context_lines=0`, and `hidden=false` are internal constants, so callers cannot tune the strategy around the judgment. VCS/cache dirs and credential files are excluded case-insensitively; `content` searches a case-insensitive alternation of the request terms and merges adjacent ranges (snippets are redacted); `ast` passes the request as the ast-grep pattern and lets ast-grep infer the language per file, so one pattern can match several languages. A bare named symbol becomes the AST identifier pattern, and a bare named call becomes `<name>($$$)`. AST degrades to `content` with a `fallback` reason when the request is prose and no pattern can be synthesized, or when ast-grep is not installed; hybrid reports `tools: ["rg"]` plus a `fallback` note in that case.
+
+Gate it with `judgment.tools.enabled`:
 
 ```yaml
 judgment:
@@ -2094,9 +2140,9 @@ judgment:
     enabled: auto        # auto = only when a native route is credentialed; on = text allowed; off = hidden
 ```
 
-With `auto`, the tools are hidden unless `has_native_judge()` is true; `on` also allows the one-hot text route and marks results `uncalibrated: true`. `disabled_toolsets: [judgment]` removes both tools. The decision is made at session start from config/credentials (no network call), so the tool list does not churn mid-conversation.
+With `auto`, the tool is hidden unless `has_native_judge()` is true; `on` also allows the one-hot text route, where `uncalibrated: true` means the intent choice came from a text judge (not that the hits are fuzzy). `disabled_toolsets: [judgment]` removes it. Ripgrep is required; AST plans additionally need the optional ast-grep package (`hermes pm install ast-grep`) and degrade to `content` when it is missing. Gating is decided at session start from config/credentials (no network call), so the tool list does not churn mid-conversation.
 
-When no judge is reachable the tools return a tool error pointing at `glob`/`search_files`; when every judgment request failed they say so explicitly — never "no matches", because an unjudged tree is not evidence of absence. Partial failures keep their hits and report `coverage: partial`.
+When no judge is reachable the tool returns a tool error pointing at `search_files`; when every judgment request failed it says so explicitly — never "no matches", because an unjudged tree is not evidence of absence. A timed-out or failed matcher keeps its hits and reports `coverage: partial`; a missing `rg`/`ast-grep` returns the install command.
 
 ### Eval files
 

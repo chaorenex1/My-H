@@ -306,8 +306,8 @@ lsp:
   # trusted_workspaces: ["~/code/my-app"]
 
   # WHERE diagnostics are shown — never whether a scanner runs. `enabled` above and
-  # `code_intel.semgrep.enabled` remain the subsystem switches; `hermes code index`
-  # ignores this block.
+  # `code_intel.semgrep.enabled` remain the subsystem switches; Semgrep is live-only,
+  # so `hermes code index` never runs it and ignores this block.
   display:
     lsp:
       # off | inline | late | both
@@ -391,7 +391,7 @@ warning; a write never fails because of this block.
 `hermes lsp status` prints the resolved policy (`display.lsp.mode`,
 `display.semgrep.mode`, and their severities) plus the separate
 `code_intel.semgrep.enabled` scanner switch, so `display.semgrep.mode: off`
-is not mistaken for turning the Semgrep index off.
+is not mistaken for turning the Semgrep scanner off.
 
 Every verdict that reaches one delivery point becomes a single row: files keep
 the queue's pop order and appear once, and each file's lines keep their source
@@ -415,15 +415,20 @@ LSP verdict. `source` is fixed to `semgrep`; each line ends with the rule id.
 Every successful edit rescans the bytes it wrote. Findings from the previous
 scan are dropped even when the new scan is clean, disabled, or fails — a stale
 finding is never merged back. `lsp.display.semgrep.mode: off` skips the
-write-time scan only; `code_intel.semgrep.enabled` remains the switch for
-`hermes code index`'s Semgrep layer, which ignores `lsp.display` entirely.
+write-time scan only; `code_intel.semgrep.enabled` remains the scanner switch.
+
+Semgrep is live-only: `hermes code index` never runs it and never stores
+findings, so there is no Semgrep layer in the graph to go stale, and
+`hermes code status` reports `semgrep.source: "live_only"`.
 
 Explicit tool calls are not filtered by `lsp.display`: `code_graph_update`
-with `refresh_file` + `semgrep: true` returns the scan's `findings` for the
-current bytes, and `code_intel` with `action: "diagnostics"` plus a `path`
-scans that file live (`"source": "live_scan"`). Without a path, or when
-Semgrep cannot scan, the stored graph is returned and labelled
-`"source": "stored_graph"` — it may describe an older revision.
+with `refresh_file` + `semgrep: true` returns the scan's findings for the
+current bytes in the stored-diagnostic shape (`code` is the rule id), and
+`code_intel` with `action: "diagnostics"` plus a `path` scans that file live
+(`"source": "live_scan"`). Without a path, or when Semgrep cannot scan, the
+stored graph is returned and labelled `"source": "stored_graph"` with
+`"semgrep": "live_only"`; that answer carries parsing/analysis diagnostics
+only — stored Semgrep rows are filtered out rather than served as current.
 
 ### Per-server keys
 
