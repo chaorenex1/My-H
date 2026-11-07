@@ -2023,11 +2023,14 @@ from . import (
     methods_projects as _methods_projects, methods_session_foreign as _methods_session_foreign,
     methods_session_control as _methods_session_control, methods_subagents as _methods_subagents,
     methods_vault as _methods_vault, methods_free_tier as _methods_free_tier,
+    methods_judgment as _methods_judgment,
     methods_connectors as _methods_connectors, methods_connectors_account as _methods_connectors_account,
     methods_display as _methods_display, methods_display_watch as _methods_display_watch,
     methods_onboarding as _methods_onboarding, methods_i18n as _methods_i18n, methods_machine as _methods_machine,
     methods_shared_metrics as _methods_shared_metrics, methods_plugin_catalog as _methods_plugin_catalog,
     methods_model_roles as _methods_model_roles, methods_omp_ui as _methods_omp_ui,
+    methods_prewalk as _methods_prewalk,
+    methods_table_chart as _methods_table_chart,
     methods_transcript as _methods_transcript)
 
 for _m in (
@@ -2039,9 +2042,11 @@ for _m in (
     _methods_session, _methods_prompt, _methods_config,
     _methods_config_set, _methods_complete, _methods_tools, _methods_tools_plugin_servers, _methods_profiles, _methods_images,
     _methods_bot_relay, _prompt_turn, _billing_view, _methods_projects, _methods_session_foreign,
-    _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier, _methods_connectors,
+    _methods_session_control, _methods_subagents, _methods_vault, _methods_free_tier,
+    _methods_judgment, _methods_connectors,
     _methods_connectors_account, _methods_display, _methods_display_watch, _methods_onboarding,
     _methods_i18n, _methods_machine, _methods_shared_metrics, _methods_plugin_catalog,
-    _methods_model_roles, _methods_omp_ui, _methods_transcript):
+    _methods_model_roles, _methods_omp_ui, _methods_prewalk, _methods_table_chart,
+    _methods_transcript):
     _m.register(sys.modules[__name__])
 del _m

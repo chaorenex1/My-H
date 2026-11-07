@@ -2048,6 +2048,75 @@ export interface I18nCatalogResult {
   surface: LocaleSurface
   messages: Record<string, string>
 }
+export interface JudgmentJudgeParams {
+  profile?: string | null
+  questions?: Record<string, unknown> | null
+  questions_file?: string | null
+  contexts?: Record<string, unknown> | null
+  labels?: Record<string, string[]> | null
+  purpose?: string | null
+  budget_usd?: number | null
+  timeout_ms?: number | null
+  state: unknown
+  images?: JudgmentImageAsset[] | null
+}
+export interface JudgmentImageAsset {
+  mime_type: string
+  data?: string | null
+  path?: string | null
+  detail?: string | null
+}
+export interface JudgmentJudgeResult {
+  kind: 'native' | 'local' | 'online'
+  api: string
+  provider: string
+  model: string
+  answers: Record<string, unknown>
+  usage: JudgmentUsage
+  cost_usd: number | null
+  cached_questions?: number
+}
+export interface JudgmentUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens?: number
+  cache_write_tokens?: number
+  reasoning_tokens?: number
+  request_count?: number
+  raw_usage?: unknown
+}
+export interface JudgmentBatchParams {
+  profile?: string | null
+  questions?: Record<string, unknown> | null
+  questions_file?: string | null
+  contexts?: Record<string, unknown> | null
+  labels?: Record<string, string[]> | null
+  purpose?: string | null
+  budget_usd?: number | null
+  timeout_ms?: number | null
+  items: JudgmentBatchItem[]
+  min_ok: number
+  max_concurrency: number
+}
+export interface JudgmentBatchItem {
+  key: string | number
+  state: unknown
+  images?: JudgmentImageAsset[] | null
+}
+export interface JudgmentBatchResult {
+  results: JudgmentBatchEntry[]
+  min_ok_met: boolean
+}
+export interface JudgmentBatchEntry {
+  key: string | number
+  ok: boolean
+  result?: JudgmentJudgeResult | null
+  error?: JudgmentItemError | null
+}
+export interface JudgmentItemError {
+  type: string
+  message: string
+}
 export type PingParams = Record<string, never>
 export interface PingResult {
   pong: boolean
@@ -2173,6 +2242,30 @@ export interface ModelPresetsApplyResult {
 }
 export interface ModelPresetsDeleteResult {
   name: string
+}
+export interface PrewalkSessionParams {
+  profile?: string | null
+  session_id: string
+}
+export interface PrewalkStatusResult {
+  enabled?: boolean
+  armed?: boolean
+  from?: string
+  into?: string
+  consumed?: boolean
+  auto?: boolean
+  auto_mode?: 'off' | 'suggest' | 'on'
+  auto_target?: string
+  planning_model?: string
+  planning_thinking?: unknown
+  gate?: 'open' | 'closed'
+}
+/** ``/prewalk [target] [from]``: a target/planning selector overrides the config block. */
+export interface PrewalkArmParams {
+  profile?: string | null
+  session_id: string
+  target?: string | null
+  from?: string | null
 }
 /** ``word`` is the token under the cursor (``@`` prefix = context reference); ``cwd`` / ``session_id`` pick the directory the listing resolves against. */
 export interface CompletePathParams {
@@ -4085,6 +4178,17 @@ export interface LlmOneshotParams {
 }
 export interface LlmOneshotResult {
   text: string
+}
+export interface TableChartPlanParams {
+  profile?: string | null
+  markdown: string
+  table: unknown
+  guess: unknown
+  mode?: 'auto' | 'smart'
+}
+export interface TableChartPlanResult {
+  plan?: unknown
+  source: 'judge' | 'local'
 }
 export interface SystemBatteryParams {
   profile?: string | null
@@ -7034,6 +7138,20 @@ export type ChangeSignalPayload = Record<string, unknown>
 export interface CommandsChangedPayload {
   commands?: unknown[] | null
 }
+export interface PrewalkArmedPayload {
+  enabled?: boolean
+  armed?: boolean
+  from?: string
+  into?: string
+  auto?: boolean
+  auto_target?: string
+}
+export interface PrewalkHandoffPayload {
+  from_model?: string
+  into_model?: string
+  provider?: string
+  consumed?: boolean
+}
 export const TRANSCRIPT_ROLES = [
   'user',
   'developer',
@@ -7240,6 +7358,10 @@ export interface RpcMethods {
   'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult }
   /** Session/message counts over the last ``days`` for the (optionally scoped) profile store. */
   'insights.get': { params: InsightsGetParams; result: InsightsGetResult }
+  /** Answer one typed side-channel judgment; local authority only. */
+  'judgment.judge': { params: JudgmentJudgeParams; result: JudgmentJudgeResult }
+  /** Run a question set over many states with bounded fan-out; local authority only. */
+  'judgment.judge_batch': { params: JudgmentBatchParams; result: JudgmentBatchResult }
   /** Archive a skill (restorable via curator) or remove a memory chunk. */
   'learning.delete': { params: LearningNodeParams; result: LearningMutationResult }
   /** Node content (SKILL.md or memory chunk) for an edit prefill. */
@@ -7350,6 +7472,14 @@ export interface RpcMethods {
   'plugins.manage': { params: PluginsManageParams; result: PluginsManageResult }
   /** Spawn a hidden agent that brings the desktop preview's dev server back up. */
   'preview.restart': { params: PreviewRestartParams; result: TaskIdResult }
+  /** Arm the one-shot handoff (works even while prewalk.enabled is false). */
+  'prewalk.arm': { params: PrewalkArmParams; result: PrewalkStatusResult }
+  /** Disarm the pending handoff without changing its planning history. */
+  'prewalk.off': { params: PrewalkSessionParams; result: PrewalkStatusResult }
+  /** Return to the planning model/thinking, then arm a fresh handoff. */
+  'prewalk.restart': { params: PrewalkArmParams; result: PrewalkStatusResult }
+  /** Read the session's one-shot prewalk handoff state; local authority only. */
+  'prewalk.status': { params: PrewalkSessionParams; result: PrewalkStatusResult }
   /** Kill one background process the caller's session owns and return its output snapshot. */
   'process.kill': { params: ProcessKillParams; result: ProcessKillResult }
   /** Background processes owned by the caller's session (desktop status stack poll). */
@@ -7548,6 +7678,8 @@ export interface RpcMethods {
   'subscription.upgrade': { params: SubscriptionUpgradeParams; result: SubscriptionUpgradeResult }
   /** Host battery for the status bar; always resolves, ``available: false`` when unreadable. */
   'system.battery': { params: SystemBatteryParams; result: SystemBatteryResult }
+  /** Plan one table's chart through the judge, falling back to the client's local guess; local authority only. */
+  'table_chart.plan': { params: TableChartPlanParams; result: TableChartPlanResult }
   /** Record the client's column width for server-side rendering. */
   'terminal.resize': { params: TerminalResizeParams; result: TerminalResizeResult }
   /** Persist a toolset / MCP enable-disable change and rebuild the session agent so it takes effect now. */
@@ -7693,6 +7825,8 @@ export const RPC_METHODS = [
   'image.render',
   'input.detect_drop',
   'insights.get',
+  'judgment.judge',
+  'judgment.judge_batch',
   'learning.delete',
   'learning.detail',
   'learning.edit',
@@ -7748,6 +7882,10 @@ export const RPC_METHODS = [
   'plugins.list',
   'plugins.manage',
   'preview.restart',
+  'prewalk.arm',
+  'prewalk.off',
+  'prewalk.restart',
+  'prewalk.status',
   'process.kill',
   'process.list',
   'process.stop',
@@ -7847,6 +7985,7 @@ export const RPC_METHODS = [
   'subscription.state',
   'subscription.upgrade',
   'system.battery',
+  'table_chart.plan',
   'terminal.resize',
   'tools.configure',
   'tools.list',
@@ -8251,6 +8390,10 @@ export interface BackendGatewayEventMap {
   'preview.restart.complete': SideAgentCompletePayload
   /** Progress line from the preview-restart agent. */
   'preview.restart.progress': PreviewRestartProgressPayload
+  /** The session's prewalk arm state changed (arm/restart/off). */
+  'prewalk.armed': PrewalkArmedPayload
+  /** The one-shot handoff switched the session's active model at a tool-batch boundary. */
+  'prewalk.handoff': PrewalkHandoffPayload
   /** projects.db moved; refetch the project list + tree. */
   'projects.changed': ChangeSignalPayload
   /** A prompt reached its terminal outcome (completed / aborted / error), keyed by the submit id. */
@@ -8394,6 +8537,8 @@ export const GATEWAY_EVENT_TYPES = [
   'preview.open',
   'preview.restart.complete',
   'preview.restart.progress',
+  'prewalk.armed',
+  'prewalk.handoff',
   'projects.changed',
   'prompt.result',
   'queue.updated',

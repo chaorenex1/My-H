@@ -1699,6 +1699,42 @@
       }
     },
     {
+      "name": "judgment.judge",
+      "summary": "Answer one typed side-channel judgment; local authority only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/JudgmentJudgeParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/JudgmentJudgeResult"
+        }
+      }
+    },
+    {
+      "name": "judgment.judge_batch",
+      "summary": "Run a question set over many states with bounded fan-out; local authority only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/JudgmentBatchParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/JudgmentBatchResult"
+        }
+      }
+    },
+    {
       "name": "learning.delete",
       "summary": "Archive a skill (restorable via curator) or remove a memory chunk.",
       "params": [
@@ -2685,6 +2721,78 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/TaskIdResult"
+        }
+      }
+    },
+    {
+      "name": "prewalk.arm",
+      "summary": "Arm the one-shot handoff (works even while prewalk.enabled is false).",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkArmParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PrewalkStatusResult"
+        }
+      }
+    },
+    {
+      "name": "prewalk.off",
+      "summary": "Disarm the pending handoff without changing its planning history.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkSessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PrewalkStatusResult"
+        }
+      }
+    },
+    {
+      "name": "prewalk.restart",
+      "summary": "Return to the planning model/thinking, then arm a fresh handoff.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkArmParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PrewalkStatusResult"
+        }
+      }
+    },
+    {
+      "name": "prewalk.status",
+      "summary": "Read the session's one-shot prewalk handoff state; local authority only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkSessionParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PrewalkStatusResult"
         }
       }
     },
@@ -4467,6 +4575,24 @@
         "name": "result",
         "schema": {
           "$ref": "#/components/schemas/SystemBatteryResult"
+        }
+      }
+    },
+    {
+      "name": "table_chart.plan",
+      "summary": "Plan one table's chart through the judge, falling back to the client's local guess; local authority only.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/TableChartPlanParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/TableChartPlanResult"
         }
       }
     },
@@ -24138,6 +24264,552 @@
         "title": "InterruptStatus",
         "type": "string"
       },
+      "JudgmentBatchEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Key"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgmentJudgeResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgmentItemError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "key",
+          "ok"
+        ],
+        "title": "JudgmentBatchEntry",
+        "type": "object"
+      },
+      "JudgmentBatchItem": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Key"
+          },
+          "state": {
+            "title": "State"
+          },
+          "images": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/JudgmentImageAsset"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Images"
+          }
+        },
+        "required": [
+          "key",
+          "state"
+        ],
+        "title": "JudgmentBatchItem",
+        "type": "object"
+      },
+      "JudgmentBatchParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "questions_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions File"
+          },
+          "contexts": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contexts"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Purpose"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Usd"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Ms"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JudgmentBatchItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "min_ok": {
+            "title": "Min Ok",
+            "type": "integer"
+          },
+          "max_concurrency": {
+            "title": "Max Concurrency",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "min_ok",
+          "max_concurrency"
+        ],
+        "title": "JudgmentBatchParams",
+        "type": "object"
+      },
+      "JudgmentBatchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/JudgmentBatchEntry"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "min_ok_met": {
+            "title": "Min Ok Met",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "min_ok_met"
+        ],
+        "title": "JudgmentBatchResult",
+        "type": "object"
+      },
+      "JudgmentImageAsset": {
+        "additionalProperties": false,
+        "properties": {
+          "mime_type": {
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Data"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Path"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "mime_type"
+        ],
+        "title": "JudgmentImageAsset",
+        "type": "object"
+      },
+      "JudgmentItemError": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "title": "JudgmentItemError",
+        "type": "object"
+      },
+      "JudgmentJudgeParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "questions": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions"
+          },
+          "questions_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Questions File"
+          },
+          "contexts": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contexts"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Labels"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Purpose"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Usd"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Ms"
+          },
+          "state": {
+            "title": "State"
+          },
+          "images": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/JudgmentImageAsset"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Images"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "JudgmentJudgeParams",
+        "type": "object"
+      },
+      "JudgmentJudgeResult": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "native",
+              "local",
+              "online"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "api": {
+            "title": "Api",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "answers": {
+            "additionalProperties": true,
+            "title": "Answers",
+            "type": "object"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/JudgmentUsage"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "cached_questions": {
+            "default": 0,
+            "title": "Cached Questions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "api",
+          "provider",
+          "model",
+          "answers",
+          "usage",
+          "cost_usd"
+        ],
+        "title": "JudgmentJudgeResult",
+        "type": "object"
+      },
+      "JudgmentUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "default": 0,
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "default": 0,
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "request_count": {
+            "default": 0,
+            "title": "Request Count",
+            "type": "integer"
+          },
+          "raw_usage": {
+            "default": null,
+            "title": "Raw Usage"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "JudgmentUsage",
+        "type": "object"
+      },
       "KanbanRunParams": {
         "additionalProperties": false,
         "properties": {
@@ -32996,6 +33668,219 @@
           "operation"
         ],
         "title": "PreviewVaultOperation",
+        "type": "object"
+      },
+      "PrewalkArmParams": {
+        "additionalProperties": false,
+        "description": "``/prewalk [target] [from]``: a target/planning selector overrides the config block.",
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "From"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "PrewalkArmParams",
+        "type": "object"
+      },
+      "PrewalkArmedPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "armed": {
+            "default": false,
+            "title": "Armed",
+            "type": "boolean"
+          },
+          "from": {
+            "default": "",
+            "title": "From",
+            "type": "string"
+          },
+          "into": {
+            "default": "",
+            "title": "Into",
+            "type": "string"
+          },
+          "auto": {
+            "default": false,
+            "title": "Auto",
+            "type": "boolean"
+          },
+          "auto_target": {
+            "default": "",
+            "title": "Auto Target",
+            "type": "string"
+          }
+        },
+        "title": "PrewalkArmedPayload",
+        "type": "object"
+      },
+      "PrewalkHandoffPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "from_model": {
+            "default": "",
+            "title": "From Model",
+            "type": "string"
+          },
+          "into_model": {
+            "default": "",
+            "title": "Into Model",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "title": "Provider",
+            "type": "string"
+          },
+          "consumed": {
+            "default": true,
+            "title": "Consumed",
+            "type": "boolean"
+          }
+        },
+        "title": "PrewalkHandoffPayload",
+        "type": "object"
+      },
+      "PrewalkSessionParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "PrewalkSessionParams",
+        "type": "object"
+      },
+      "PrewalkStatusResult": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "armed": {
+            "default": false,
+            "title": "Armed",
+            "type": "boolean"
+          },
+          "from": {
+            "default": "",
+            "title": "From",
+            "type": "string"
+          },
+          "into": {
+            "default": "",
+            "title": "Into",
+            "type": "string"
+          },
+          "consumed": {
+            "default": false,
+            "title": "Consumed",
+            "type": "boolean"
+          },
+          "auto": {
+            "default": false,
+            "title": "Auto",
+            "type": "boolean"
+          },
+          "auto_mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "suggest",
+              "on"
+            ],
+            "title": "Auto Mode",
+            "type": "string"
+          },
+          "auto_target": {
+            "default": "",
+            "title": "Auto Target",
+            "type": "string"
+          },
+          "planning_model": {
+            "default": "",
+            "title": "Planning Model",
+            "type": "string"
+          },
+          "planning_thinking": {
+            "default": null,
+            "title": "Planning Thinking"
+          },
+          "gate": {
+            "default": "open",
+            "enum": [
+              "open",
+              "closed"
+            ],
+            "title": "Gate",
+            "type": "string"
+          }
+        },
+        "title": "PrewalkStatusResult",
         "type": "object"
       },
       "ProcessEntry": {
@@ -50189,6 +51074,71 @@
         "title": "SystemBatteryResult",
         "type": "object"
       },
+      "TableChartPlanParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
+          },
+          "table": {
+            "title": "Table"
+          },
+          "guess": {
+            "title": "Guess"
+          },
+          "mode": {
+            "default": "smart",
+            "enum": [
+              "auto",
+              "smart"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown",
+          "table",
+          "guess"
+        ],
+        "title": "TableChartPlanParams",
+        "type": "object"
+      },
+      "TableChartPlanResult": {
+        "additionalProperties": false,
+        "properties": {
+          "plan": {
+            "default": null,
+            "title": "Plan"
+          },
+          "source": {
+            "enum": [
+              "judge",
+              "local"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "TableChartPlanResult",
+        "type": "object"
+      },
       "TaskIdResult": {
         "additionalProperties": false,
         "description": "The side agent runs detached; its answer lands on the parent session as an event carrying\nthis ``task_id``.",
@@ -57198,6 +58148,30 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/PreviewRestartProgressPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "prewalk.armed",
+      "summary": "The session's prewalk arm state changed (arm/restart/off).",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkArmedPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "prewalk.handoff",
+      "summary": "The one-shot handoff switched the session's active model at a tool-batch boundary.",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/PrewalkHandoffPayload"
           }
         }
       ]
