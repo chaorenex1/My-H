@@ -1,6 +1,6 @@
 # ADR-17：判定器作为一等旁路服务（omp 全量对齐与外部消费者）
 
-**状态**：已决定（2026-11-06）；**P0–P6 未实现**。分阶段：**P0** 契约与 fixture；
+**状态**：已决定（2026-11-06）；**P0–P5 已实现；P6 未实现**。分阶段：**P0** 契约与 fixture；
 **P1** 问题库/渲染器/标签；**P2** 文本后端对齐；**P3** 候选链/目录/凭证/成本；
 **P4** 原生对齐与通用 RPC；**P5** 消费者；**P6** 面板/进度。
 
@@ -68,7 +68,7 @@ ADR-11 的裁剪在当时减少了成本与风险，但现在与需求冲突：
 - 候选链没有 catalog kind、`default` 兜底、TTL、凭证刷新和成本门；
 - 缓存没有 usage 表，缓存键与 omp 不同；
 - auto-thinking、title drift、unexpected-stop、git staging 被判为不移植；
-- P5 面板、batch progress、eval 桥未实现。
+- P6 面板、batch progress 未实现（eval 桥已随 P4/P5 落地）。
 
 ### 2. 外部消费者没有入口
 
@@ -208,15 +208,22 @@ ADR-11 的裁剪在当时减少了成本与风险，但现在与需求冲突：
   - 从第一个 native 候选起，只保留 native（native-only 尾）。
   - 没有 native 时走 `tiny → smol → default`；有 native 但全部失败时，默认不追加文本，
     `text_after_native: true` 才追加。
-  - 解析结果 TTL 5 分钟；凭证变化在下一次 TTL 后生效。
+  - 解析计划（chain → 目录/角色条目）按 `(profile home, 配置指纹)` 缓存 5 分钟；
+    配置改动改指纹即重解析。凭证与冷却按候选逐次解析，登录/轮换在下一次判定生效。
+    omp 的 `CANDIDATE_TTL_MS` 是 1s（只影响远程目录发现）；Hermes 无远程目录，
+    取 5 分钟避免多 profile 进程重复解析。5 分钟同时是拒绝冷却的值，两者是不同旋钮。
   - `has_native_judge()` = 解析后的**第一个**候选是否为 native；不联网。
 - **凭证**：401/403 先刷新/轮换（OpenAI/OpenRouter 走现有凭证池；
   TypeSafe/Cloudflare 环境变量无兄弟凭证，直接失败），重试一次；仍失败则冷却 5 分钟。
   402 不重试，直接冷却。
 - **冷却**：进程内、按 profile home 键隔离。
 - **成本门**：`judgment.cost_gate`（默认单次 $0.05、单会话 $0.50，可配）；
-  每个候选 `admit()`，成功后 `record()`；超限抛 `JudgmentBudgetExceeded`，
-  消费者可降级到本地/关闭，不得静默换昂贵模型。
+  每个候选 `admit()`，成功后 `record()`；失败的提示词尝试把已计费 usage 记入（原生分片
+  仍只走 session ledger）；超限抛 `JudgmentBudgetExceeded`，
+  消费者可降级到本地/关闭，不得静默换昂贵模型。P3 的 spend 桶是进程内、
+  按 profile home + session id 隔离；外部 RPC 的 `budget_usd` 由 P4 的 host 入口强制。
+- **P3 配置来源**：`resolve_judge()` / `has_native_judge()` / `doctor_routes()` 仍读取
+  当前 profile 的 live config；冻结会话配置的绑定随 P4 的 host 入口统一处理。
 - **本地**：`kind=local`；合并 system+user；`guard_state=false`；无图像/box；
   `parse_retries=0`；输出预算按模型是否推理选 16/1024，不做重试升级。
 - **图像/box 过滤**：按候选 `image_input`、`boxes`、`max_questions` 过滤；
@@ -270,6 +277,15 @@ ADR-11 的裁剪在当时减少了成本与风险，但现在与需求冲突：
 - **批量**：host 拥有整轮 run；有界 fan-out（4）、每项一次重试、`min_ok`、
   `drain` 分批取 settled；单 item 失败返回 `error` 不抛；usage 记同一账本。
 - 外部消费者不直接持有 provider 凭证；由 `resolve_judge` 解析。
+- **P0 schema**：`agent/judgment/schemas/judgment-v1.schema.json` 固定 `JudgeRequest`、
+  `JudgeResult`、`BatchRequest`、`BatchResult`。请求 `state` 为 string/object/array，且
+  `questions` 与 `questions_file` 必须且只能提供一个。
+  `judge_batch` 的 `items` 是 `{key, state, images?}`；问题定义与 `contexts`/`labels` 共用一份，
+  `max_concurrency` 为 1–4。返回的 `results` 带原 `key` 且与输入同序；每项为
+  `{key, ok: true, result}` 或 `{key, ok: false, error: {type, message}}`，并返回 `min_ok_met`。
+- **P0 fixtures/package data**：可重放 fixture 锁定 omp 18.14.0 的问题形状推断；schema
+  和 `agent/prompts/judge/*.json`、`agent/judgment/prompts/*.md` 按包资源声明，打入 wheel。
+
 
 ### D7. 消费者（全部落地）
 
@@ -353,6 +369,29 @@ judgment:
 | P4 | assets、按模型 bounds、`requestModelId`、分片、usage 表、通用 RPC/CLI | 四 wire 契约；分片 partial usage；`judge`/`judge_batch` 与 `__judge__` 别名 |
 | P5 | TTSR 32k tokens、eval 桥、auto-thinking、prewalk、auto-graph、title drift、unexpected-stop、git staging | 每个消费者有边界/失败/成本测试 |
 | P6 | P5 面板、batch progress | 不存正文；事件只发本地 viewer |
+
+**P5 实现备注**：
+
+- **TTSR**：`JUDGED_CONTENT_MAX_TOKENS = 32_000` 记录 omp 预算；Python 尚无 Jev tokenizer，
+  按 ADR 的过渡口径落到 24,000 字符上限（`ttsr_runtime.JUDGED_CONTENT_MAX_CHARS`），不再用 56k。
+- **eval 桥**：`execute_code` 生成的 `hermes_tools` 增加 `judge()` / `judge_batch()`，走
+  `__judge__` / `__judge_batch__` host op；远程文件沙箱仍拒绝（local authority）。
+- **auto-thinking**：`agent.reasoning_auto`（`off|auto|on`，默认 off）、
+  `reasoning_auto_max_effort`（`xhigh|max`）、`reasoning_auto_timeout_ms`（默认 4000）。
+  每用户回合分类一次并固定整轮；`auto` 仅 native，`on` 允许文本；解析结果按路由 clamp。
+- **prewalk**：`agent/prewalk.py` 会话状态机（`model_config.prewalk` 持久化）、
+  `prewalk.arm|restart|off|status` RPC、`/prewalk` 命令与 `prewalk.armed|handoff` 事件；
+  默认 `prewalk.enabled=false`、`prewalk.auto=off`；todo 成功打开 gate，首个 `write_file`/`patch`
+  成功后一次性交接；auto 仅 native、阈值 0.70、4s；`/prewalk off` 抑制配置重启武装。
+- **auto-graph**：`table_chart.plan` 只做 judge 精修，客户端已算好的 `guess` 作为回退；
+  15s 超时；`auto` 无 native 时直接回退 local，`smart` 可用文本；markdown/答案不持久化。
+- **title drift**：`auxiliary.title_generation.refresh_after_prompts`（默认 0=off）；
+  只用最近 3000 字符窗口判定，`user` 标题永不改写；同源 CAS 刷新防止覆盖并发重命名。
+- **unexpected-stop**：`agent.unexpected_stop_detection`（`none|mechanical|smart`，
+  默认 mechanical）；只有 `smart` 对文本收尾判定，阈值 0.5，每回合一次续跑；nudge 是
+  scaffolding 行，不落 SQLite。
+- **git staging**：`hermes git stage "<instruction>"` 与受限 `git_stage` 工具；按 hunk 判定，
+  `git apply --cached` 只写 index，永不提交、永不改 worktree。
 
 ---
 

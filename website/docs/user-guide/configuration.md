@@ -1989,7 +1989,7 @@ If you use Codex OAuth as your main model provider, vision works automatically �
 **Vision requires a multimodal model.** If you set `provider: "main"`, make sure your endpoint supports multimodal/vision — otherwise image analysis will fail.
 :::
 
-The **Judge** slot (`auxiliary.judge`) is the text-only, one-hot fallback for typed judgments. It defaults to `reasoning_effort: none` and `max_tokens: 4096` (the keyword answer should land after any thinking preamble), and its `images: false` default keeps text judgment text-only; set it to `true` to let a known-vision chat model take images (still never `box`). Native judgment routes are configured separately under the top-level `judgment:` section — see [Judgment](#judgment).
+The **Judge** slot (`auxiliary.judge`) is the compatibility text route for typed judgments: when pinned to a provider or model it is tried first under `mode: text`, and it keeps its own `images: false` default (a known-vision chat model can take images, never `box`). The judgment chain's normal prompted tail is `auxiliary.tiny` → `auxiliary.smol` → `auxiliary.default`; the output budget and parse retries live under `judgment.text`. Native judgment models are configured separately under the top-level `judgment:` section — see [Judgment](#judgment).
 
 ### Environment Variables (legacy)
 
@@ -2016,20 +2016,69 @@ Judgments are typed side-channel questions: a caller supplies a JSON state and n
 judgment:
   mode: auto                 # auto | native | text | off
   text_after_native: false   # text cannot stand in for failed native probabilities
-  cache: true
-  cache_max_states: 50000
-  audit: true
-  audit_max_runs: 20000
+  chain:                     # attempt order; ids resolve through `models`
+    - native:typesafe/jev-1.14
+    - native:openrouter/typesafe-jev-1.14
+    - tiny                   # auxiliary.tiny
+    - smol                   # auxiliary.smol
+    - default                # auxiliary.default (main model)
+  models:                    # judgment catalog, not the chat model picker
+    - {id: typesafe/jev-1.14, kind: native, api: typesafe,
+       provider: typesafe, model: jev-1.14.0}
+    - {id: openrouter/typesafe-jev-1.14, kind: native,
+       api: openrouter-decisions, provider: openrouter,
+       model: typesafe/jev-1.14}
+  cost_gate:
+    max_usd_per_call: 0.05   # 0 disables the cap
+    max_usd_per_session: 0.50
+  cache:
+    enabled: true
+    max_states: 50000
+    usage: true              # native billed-attempt ledger (`usage` table)
+  audit:
+    enabled: true
+    max_runs: 20000
   timeout_ms: 10000          # native per-attempt timeout
-  parse_retries: 2           # text parse retries (each billed)
   redact_state: true         # native state goes through redact_for_egress
-  images: true               # false rejects image/box requests before any candidate
-  native: []                 # explicit routes; empty = text fallback only
+  images:
+    enabled: true            # false rejects image/box requests before any candidate
+    assets:
+      allow_local: true      # path assets must live under cwd or $HERMES_HOME
+      allow_remote: false    # remote URLs are never fetched
+      max_bytes: 16777216
+  text:
+    parse_retries: 2         # unparseable replies; each retry is billed
+    max_tokens: 4096         # below 1024 warns (Anthropic thinking-budget floor)
+    disable_reasoning: true  # explicit reasoning_config={enabled: false}
 ```
+
+Chain entries are either `native:<model-id>` / `local:<model-id>` references into `judgment.models`, or a role name. Roles map onto the auxiliary slots: `tiny` → `auxiliary.tiny`, `smol` → `auxiliary.smol`, `default` → `auxiliary.default` (provider `auto` + empty model = the main model); `memory` and `commit` map to `background_review` / `commit_message` if you name them explicitly. `auxiliary.judge` remains as a compatibility text route and is appended first under `mode: text` only when you pinned a provider or model on it.
+
+The chain is resolved once and reused for five minutes per profile; credentials and cooldowns are evaluated per candidate, so a login or rotation applies on the next judgment. `judgment.native` (the pre-ADR-17 list of routes) is still accepted and folded into the catalog and the front of the chain.
+
+Config merge replaces lists wholesale: defining `judgment.models` replaces the built-in catalog, so define `judgment.chain` alongside it (or re-include the built-in ids). Otherwise the inherited default chain references ids that no longer exist; `hermes judgment doctor` and the chain log report those references as skipped rather than silently dropping them.
+
+Text candidates use `fallback: false`: the provider/model resolved for the candidate is fixed, and a helper/provider fallback never swaps it underneath the judgment chain. A parse retry sends the retry system prompt plus a forced `submit_judgment` tool call, and the answer is read from that tool argument when the free-form keyword reply cannot be parsed.
 
 Image and `box` questions are native-first. Requests with images only consider candidates that accept them: TypeSafe and OpenRouter Decisions take `box`; OpenAI Decisions takes images but no `box`; Workers AI takes up to 4 images (4 MiB each, 8 MiB total, 16 MP) and no `box`. When no configured candidate supports the request, the judgment fails with `no compatible judge candidate supports images/box` — images are never dropped or demoted to text.
 
 Jev-style routes enforce 280–1568 px sides and 78,400–2,458,624 px total, so Hermes scales an image into those bounds (keeping its aspect ratio) and pads short sides with the top-left pixel before sending; `box` edges are then mapped back onto the source image and clamped. Workers AI and OpenAI caps reject the request instead of resizing it. The cache identity includes each image's decoded-bytes digest, MIME, and `detail`, so padded/unpadded base64 of the same bytes share an answer; TypeSafe drops `detail` from both the wire and the cache key.
+
+Images can be inline base64 (`data`) or a local path (`path`). Path assets are resolved under the working directory or `$HERMES_HOME`, capped by `images.assets.max_bytes`, and remote URLs are rejected rather than fetched. A catalog entry can narrow a wire's image bounds per model; undeclared bounds keep the wire's defaults:
+
+```yaml
+judgment:
+  models:
+    - id: openrouter/typesafe-jev-1.14
+      kind: native
+      api: openrouter-decisions
+      provider: openrouter
+      model: typesafe/jev-1.14
+      request_model_id: typesafe/jev-1.14   # wire model; cache/ledger keep `model`
+      image_input: {maxCount: 4, maxBytes: 4194304, maxSide: 1568, maxPixels: 2458624}
+```
+
+`request_model_id` is what the endpoint is asked for; `model` remains the configured id in the answer cache and the session ledger, so rotating an endpoint alias never misses the cache. Each billed native HTTP attempt also writes one `usage` row (provider/model/tokens/cost) to `judgment.db`; pure cache hits and text/local judgments write none.
 
 Text vision is opt-in and never answers `box`:
 
@@ -2039,36 +2088,46 @@ auxiliary:
     images: true             # also requires a model known to accept image input
 ```
 
-Each native route names a wire, a provider, and a model. Four wires are implemented: `typesafe`, `openrouter-decisions`, `openai-decisions`, and `workers-ai-systemone`. These endpoints are **not chat providers**: they never appear in `hermes model`, `/models`, or chat routing.
+Each native model in `judgment.models` names a wire, a provider, and a model. Four wires are implemented: `typesafe`, `openrouter-decisions`, `openai-decisions`, and `workers-ai-systemone`. These endpoints are **not chat providers**: they never appear in `hermes model`, `/models`, or chat routing.
 
 ```yaml
 judgment:
-  native:
-    - api: typesafe
+  models:
+    - id: typesafe/jev-1.14
+      kind: native
+      api: typesafe
       provider: typesafe
       model: jev-1.14.0
       # base_url: https://api.typesafe.ai   # or TYPESAFE_BASE_URL
-    - api: openrouter-decisions
+    - id: openrouter/typesafe-jev-1.14
+      kind: native
+      api: openrouter-decisions
       provider: openrouter
       model: typesafe/jev-1.14
-    - api: openai-decisions
+    - id: openai/gpt-6-luna
+      kind: native
+      api: openai-decisions
       provider: openai-api
       model: gpt-6-luna
-    - api: workers-ai-systemone
+    - id: cloudflare/clef
+      kind: native
+      api: workers-ai-systemone
       provider: cloudflare-workers-ai
       model: "@cf/cloudflare/clef"
       max_questions: 64        # 0 = endpoint default (64 for Workers AI)
 ```
 
-Credentials: `TYPESAFE_API_KEY` (and optional `TYPESAFE_BASE_URL`); OpenRouter reuses `OPENROUTER_API_KEY` or the credential pool; OpenAI reuses `OPENAI_API_KEY`/`OPENAI_BASE_URL` or the `openai-api` credential pool; Workers AI needs `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID` (it fills `<account>` in the `ai/run` endpoint). A 401/402/403 cools that candidate for five minutes instead of paying for the same refusal on every judgment.
+Credentials: `TYPESAFE_API_KEY` (and optional `TYPESAFE_BASE_URL`); OpenRouter reuses `OPENROUTER_API_KEY` or the credential pool; OpenAI reuses `OPENAI_API_KEY`/`OPENAI_BASE_URL` or the `openai-api` credential pool; Workers AI needs `CLOUDFLARE_API_TOKEN` plus `CLOUDFLARE_ACCOUNT_ID` (it fills `<account>` in the `ai/run` endpoint). A 401/403 first refreshes or rotates the pooled credential and retries the candidate once; if that fails, the candidate cools down for five minutes. A 402 is billing by definition and cools down immediately without a retry. TypeSafe and Workers AI are environment-only, so they have no sibling credential to rotate to.
 
-When a wire caps questions per call (`max_questions`, defaulting to the endpoint's own limit — 64 for Workers AI), Hermes splits the request into shards of at most four concurrent calls, merges the answers, and sums usage. A shard failure stops the remaining shards; already-billed shards stay recorded and nothing partial is cached.
+When a wire caps questions per call (`max_questions`, defaulting to the endpoint's own limit — 64 for Workers AI), Hermes splits the request into shards of at most four concurrent calls, merges the answers, and sums usage. A shard failure stops the remaining shards; already-billed shards stay in the session ledger and their aggregate usage is reported back to the cost gate before the failure propagates. Nothing partial is cached. For a prompted or local catalog entry (no sharder), `max_questions` is a hard filter: a request with more questions skips that candidate.
 
 `mode`:
-- `auto` — native routes first. Text is used only when no native route has credentials, or when `text_after_native: true`.
-- `native` — native routes only; no text fallback.
-- `text` — `auxiliary.judge` only (one-hot probabilities).
+- `auto` — the configured chain. From the first credentialed native candidate on, only native candidates remain (a prompted model never stands in for failed native probabilities). Roles are used only when no native candidate resolves, or when `text_after_native: true` appends the text tail.
+- `native` — native candidates from the chain only; no text fallback.
+- `text` — the role tail `tiny → smol → default`, plus `auxiliary.judge` first if you pinned a provider/model on it.
 - `off` — no judgments.
+
+Every candidate attempt passes a process-local cost gate; a successful result records its cost against the call and the ambient session, and a failed prompted attempt records the usage it was billed for (parse retries included). Native shard usage stays in the session ledger and the run audit, never the gate. Crossing `max_usd_per_call` or `max_usd_per_session` raises `JudgmentBudgetExceeded` before the next attempt, so a consumer can degrade or switch the feature off but the chain never silently swaps in a more expensive model. Pure cache hits are not recorded. The spend buckets live in the process, keyed by profile home + session id. A caller-supplied `budget_usd` (Python, CLI `--budget`, or the batch/RPC schema) lowers the call cap; `0` refuses before any candidate runs.
 
 Local tiny models reuse the managed llama.cpp runtime; there is no downloader and no cloud fallback:
 
@@ -2081,25 +2140,32 @@ judgment:
   local:
     autostart: false         # start the managed server when missing (installed engines only)
     merge_prompt: true       # one merged user turn for small models
-    answer_max_tokens: 16
-    reasoning_max_tokens: 1024
+    parse_retries: 0         # local classifiers never re-ask
+    answer_max_tokens: 16    # non-reasoning tiny models
+    reasoning_max_tokens: 1024  # models catalogued as reasoning
 ```
 
-The cache and run audit live in `$HERMES_HOME/judgment/judgment.db` (DELETE journal). Only native answers are cached; `runs` stores hashes/counts, never state or answer bodies, and the session ledger remains the only billing source. An unavailable or corrupt store degrades to uncached judgments instead of failing them.
+The local budget is fixed per call (16 tokens, or 1024 when the model is known to reason); it never escalates on a parse failure because local classifiers get no parse retries. A local model can also be a catalog candidate addressed as `local:<id>` (`kind: local`), which lets a chain fall through an uninstalled local model without touching `auxiliary.judge`.
+
+The cache, run audit, and native usage ledger live in `$HERMES_HOME/judgment/judgment.db` (DELETE journal). Only native answers are cached; `runs` stores hashes/counts and the `usage` table stores one row per billed native attempt, never state or answer bodies. The session ledger remains the billing source for cost gates; the usage table is the queryable native trail. An unavailable or corrupt store degrades to uncached judgments instead of failing them.
 
 Run and inspect judgments from the CLI:
 
 ```bash
-hermes judgment ask --state-file state.json --questions-file questions.json
-hermes judgment ask --state "text" --questions-file questions.json --json
-hermes judgment ask --state-file state.json --questions-file box.json --image shot.png
+hermes judgment ask --state-file state.json --questions questions.json
+hermes judgment ask --state "text" --questions auto-graph --context chart.column=status
+hermes judgment ask --state "text" --questions questions.json --json --budget 0.02
+hermes judgment ask --state-file state.json --questions box.json --image shot.png
+hermes judgment batch --file batch.json --json
 hermes judgment doctor
 hermes judgment log --limit 20 --purpose cli
 ```
 
-`--image` is repeatable; the flag order is the index `box` questions name. A question file entry with `instructions` plus an integer `image` (and no `criteria`) is a `box` question.
+`--questions` takes a bundled name (`auto-thinking`, `auto-prewalk`, `auto-graph`, `title-drift`, `unexpected-stop`, `git-stage`) or a JSON file; `--questions-file` remains as the legacy spelling. `--context qid.key=value` sets one template field (or `--context 'qid={"json": ...}'` replaces the whole context), `--budget` caps the call in USD, and `--timeout-ms` aborts the judgment. `--image` is repeatable; the flag order is the index `box` questions name. A question file entry with `instructions` plus an integer `image` (and no `criteria`) is a `box` question.
 
-`ask` exits 0 on success, 2 for a bad parameter/question file, and 1 when no candidate can answer. `doctor` is offline: it lists route/credential availability, the text and local routes, tool gating, image capability, and cache/audit state.
+`batch --file` reads a `BatchRequest` object (`items: [{key, state, images?}]`, shared `questions`/`questions_file`/`contexts`/`labels`, `min_ok`, `max_concurrency` 1–4). Results keep the input key and order; a failed item returns `{ok: false, error}` instead of aborting the run. `ask` exits 0 on success, 2 for a bad parameter/question file, and 1 when no candidate can answer; `batch` exits 0 when `min_ok` is met, 1 otherwise. `doctor` is offline: it lists route/credential availability, the text and local routes, tool gating, image capability, and cache/audit/usage state.
+
+Inside `execute_code`, the local sandbox exposes the same contract as `__judge__` / `__judge_batch__` line-JSON ops: they are not model tools and do not consume the tool-call budget. Remote filesystem/SSH sandboxes are not local authority and reject these ops.
 
 ### Judgment-routed search
 
@@ -2156,6 +2222,39 @@ $HERMES_HOME/judgment/
 ```
 
 Every `purpose="eval"` judgment appends one request-level JSONL line (`ts`, session/execution/request ids, mode, api, provider, model, question/cache counts, usage, latency, status, error, and state/answer hashes); standalone runs key on the request id under `logs/_standalone/`. Bodies are omitted unless `judgment.eval_debug: true`, which writes the already-redacted state and the answers. `judgment.eval_max_bytes` (default 50 MiB) evicts the oldest log files only — `questions/` and `batches/` are never deleted.
+
+### Judgment consumers
+
+The bundled question files also back product-side classifiers. All are off or conservative by default
+and fail silently (the configured behavior stands, with a debug log):
+
+```yaml
+agent:
+  reasoning_auto: off             # off | auto (native judge only) | on (text allowed)
+  reasoning_auto_max_effort: xhigh  # xhigh | max
+  reasoning_auto_timeout_ms: 4000
+  unexpected_stop_detection: mechanical  # none | mechanical | smart (judged text stop)
+
+prewalk:
+  enabled: false                  # explicit /prewalk still works while off
+  from: "@default"
+  into: "@smol"
+  auto: off                       # off | suggest | on (native judge, P(prewalk) >= 0.70)
+  auto_target: "@smol"
+
+auxiliary:
+  title_generation:
+    refresh_after_prompts: 0      # judge the title every N operator prompts; 0 = off
+```
+
+`auto-thinking` classifies once per user turn so the reasoning fields stay identical across retries
+and tool iterations. `prewalk` hands the session from `from` to `into` once, at the first successful
+`write_file`/`patch` after a successful `todo_list` call; the state persists in the session row, and
+`/prewalk off` suppresses a config-enabled re-arm. `auto-graph` (`tui.autoGraph: auto|smart`) asks
+`table_chart.plan` per numeric table, with the client's local guess as the fallback; `auto` only uses
+a native judge. Title drift never rewrites a user-pinned name. `git stage "<instruction>"` judges
+unstaged hunks and stages only the accepted ones into the index — it never commits or touches the
+working tree.
 
 ## TTSR rules (local omp-ui viewers)
 
