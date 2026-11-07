@@ -195,6 +195,14 @@ def _resolve_budget_fallback(
     return final_response, _turn_exit_reason, preserved_verification_fallback, interrupted
 
 
+def _start_title_drift_check(agent, messages, status: str, *, interrupted: bool, failed: bool) -> None:
+    """Launch the ADR-17 P5 post-turn title check; import kept local so finalization stays cheap."""
+    if interrupted or failed:
+        return
+    from agent.title_generator import start_title_drift_check
+    start_title_drift_check(agent, messages, final_status=status or "completed")
+
+
 def _rollback_interrupted_preflight_display(agent, interrupted) -> None:
     """Roll back the preflight-seeded display count only when an interrupt wins before
     any provider response; compaction state (incl. ``-1``) stays with the real-usage
@@ -699,6 +707,16 @@ def finalize_turn(
     # self-hosted endpoint with the main request (#117296) may go out now.
     from agent.turn_context import start_deferred_title_upgrade
     _guarded_cleanup("start_deferred_title_upgrade", lambda: start_deferred_title_upgrade(agent), _cleanup_errors, logger)
+    # ADR-17 P5: a settled turn may have moved the session away from its generated title. The
+    # judgment and any regeneration run off the critical path; interrupted/failed turns never
+    # reach the checker (the helper decides, keeping this hook branch-free).
+    _guarded_cleanup(
+        "start_title_drift_check",
+        lambda: _start_title_drift_check(
+            agent, messages, str(_turn_exit_reason or "completed"),
+            interrupted=interrupted, failed=failed),
+        _cleanup_errors, logger,
+    )
     # ``user_message`` may be a multimodal list of parts; the trajectory format wants a string.
     _guarded_cleanup(
         "save_trajectory",

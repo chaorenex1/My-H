@@ -189,6 +189,50 @@ class SessionTitlesMixin:
             raise ValueError(f"invalid automatic title source: {source!r}")
         return self._set_session_title(session_id, title, source=source)
 
+    def refresh_auto_title(self, session_id: str, title: str, *, source: str, expected_title: str) -> bool:
+        """Replace an automatic title of the SAME authority, but only while the row still holds
+        *expected_title* (a caller re-reading the title between a judgment and its write must not
+        overwrite the result). Unlike ``set_auto_title``, an existing equal-authority title does
+        not block the rewrite; a ``user`` name, a NULL source (pre-provenance manual names) or a
+        higher-authority title still wins. Returns False when the refresh was refused."""
+        if source not in (self.TITLE_SOURCE_DERIVED, self.TITLE_SOURCE_LLM):
+            raise ValueError(f"invalid automatic title source: {source!r}")
+        return bool(self._execute_write(
+            lambda conn: self._refresh_auto_title_in_transaction(
+                conn, session_id, title, source=source, expected_title=expected_title)
+        ))
+
+    def _refresh_auto_title_in_transaction(self, conn, session_id: str, title: str, *,
+                                           source: str, expected_title: str):
+        """Reuse the refresh CAS rules inside an authority-owned transaction; never commit here."""
+        title = self.sanitize_title(title)
+        if not title:
+            return []
+        current = conn.execute(
+            "SELECT title, title_source, hidden FROM sessions WHERE id = ?", (session_id,),
+        ).fetchone()
+        if current is None:
+            return []
+        # NULL ranks as ``user`` in _title_rank: an untitled row or a pre-provenance manual name
+        # can never be refreshed, and neither can a newer write of another authority.
+        if current["title"] is None or current["title"] != expected_title:
+            return []
+        current_rank = self._title_rank(current["title_source"])
+        if current_rank >= self._title_rank(self.TITLE_SOURCE_USER):
+            return []
+        if current_rank > self._title_rank(source):
+            return []
+        if ((current["title"] or "") == self.CANONICAL_BOT_CHAT_TITLE and bool(current["hidden"])
+                and title != self.CANONICAL_BOT_CHAT_TITLE):
+            return []
+        cleared = self._resolve_title_conflict(conn, session_id, title)
+        affected = [cleared] if cleared else []
+        changed = conn.execute(
+            "UPDATE sessions SET title = ?, title_source = ? WHERE id = ? AND title IS ? AND title_source IS ?",
+            (title, source, session_id, current["title"], current["title_source"]),
+        ).rowcount
+        return [*affected, session_id] if changed else affected
+
     def get_session_title(self, session_id: str) -> Optional[str]:
         """Get the title for a session, or None."""
         row = self._read_one("SELECT title FROM sessions WHERE id = ?", (session_id,))
