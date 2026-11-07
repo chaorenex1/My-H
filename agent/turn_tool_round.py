@@ -234,6 +234,13 @@ def run_tool_round(
         failed = True
         return _verdict("break")
 
+    # ADR-12 D5 / ADR-17 P5: the one-shot prewalk handoff fires at this batch boundary, never
+    # between calls. A failure here is a debug log, never a turn failure.
+    from agent.prewalk import advance_after_tool_batch, collect_tool_results
+
+    advance_after_tool_batch(
+        agent, assistant_message, collect_tool_results(messages, assistant_message.tool_calls))
+
     if agent._tool_guardrail_halt_decision is not None:
         decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"

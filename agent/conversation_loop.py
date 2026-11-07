@@ -1684,6 +1684,10 @@ def _run_conversation_turn(
     # in-place boundary would make a later uncompressed result look compacted.
     agent._last_compaction_in_place = agent._last_compression_attempt_recorded = False
     agent._last_compression_attempt_in_place = None
+    # ADR-17 P5: auto reasoning is fixed per user turn; never inherit the previous
+    # turn's overlay (the gateway caches agents across turns).
+    agent._auto_reasoning_config = None
+    agent._auto_reasoning_route = None
     begin_fast_mode_turn(agent, conversation_history)
 
     # Adopt ~/.hermes/.env credential/base-url edits made since the last turn — a
@@ -1722,6 +1726,14 @@ def _run_conversation_turn(
         )
     except PreflightCompressionTimedOut as _preflight_timeout_exc:
         return _preflight_timeout_result(agent, _preflight_timeout_exc, conversation_history)
+
+    # ADR-17 P5: one classification per user turn, resolved before the loop so every
+    # iteration sends the same effort and the prompt prefix stays cached. Also arms a
+    # prewalk handoff for this task (ADR-12 D5); both fail soft.
+    from agent.turn_consumers import prepare_turn_consumers
+
+    prepare_turn_consumers(agent, _ctx.user_message, _ctx.conversation_history)
+
     # Voice turns may run on auxiliary.voice_chat: bound after the prompt/row/compaction were settled
     # against the main model, undone in finalize_turn (and run_conversation's finally on early exits).
     from agent.voice_turn_route import begin_voice_turn_route

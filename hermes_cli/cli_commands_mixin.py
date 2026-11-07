@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- ADR-12 D5 /prewalk: this facade gained only a four-line dispatch shim; the handler lives in hermes_cli/cli_prewalk_command.py
 """Slash-command handlers for the interactive CLI (``HermesCLI`` inherits ``CLICommandsMixin``).
 
 cli.py-internal symbols (``_cprint``/``_ACCENT``/``save_config_value``…) are imported LAZILY inside
@@ -2091,6 +2092,12 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         saved = explicit_global and _save("agent.service_tier", saved_value)
         outcome = _scope_outcome(explicit_global, saved)
         _cp(_accent_line(_t("fast.set_to", feature=feature_name, value=saved_value.upper(), scope=outcome)))
+
+    # ---- /prewalk -------------------------------------------------------------------------
+    def _handle_prewalk_command(self, cmd: str):
+        """Handle /prewalk via its owner module (ADR-12 D5, local sessions only)."""
+        from hermes_cli.cli_prewalk_command import handle_prewalk_command
+        return handle_prewalk_command(self, cmd)
 
     # ---- /debug, /update, /voice, /wake ---------------------------------------------------
     def _handle_debug_command(self, cmd_original: str = ""):
