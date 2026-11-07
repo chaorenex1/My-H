@@ -8,8 +8,13 @@ from hermes_cli.config_defaults_agent_loop import _agent_loop
 from hermes_cli.config_defaults_agent_sessions import _agent_sessions
 from hermes_cli.config_defaults_auxiliary import auxiliary_defaults
 from hermes_cli.config_defaults_code_execution import _code_execution
+from hermes_cli.config_defaults_consumers import (
+    agent_consumer_defaults,
+    top_level_consumer_defaults,
+)
 from hermes_cli.config_defaults_judgment import judgment_defaults
 from hermes_cli.config_defaults_lsp import lsp_defaults
+from hermes_cli.config_defaults_misc import misc_defaults
 from hermes_cli.config_defaults_ttsr import ttsr_defaults
 from hermes_cli.config_defaults_omp import OMP_CONFIG_SECTION
 
@@ -288,7 +293,10 @@ DEFAULT_CONFIG = {
         # timeout_s <= 0 disables; poll_s = sampling interval. Invalid values (NaN, Inf,
         # non-positive poll) warn and fall back to defaults. See agent/turn_liveness.py.
         "turn_liveness": {"timeout_s": 600.0, "poll_s": 15.0},
+        **agent_consumer_defaults(),
     },
+
+    **top_level_consumer_defaults(),
 
     "terminal": {
         "backend": "local",
@@ -1982,11 +1990,6 @@ DEFAULT_CONFIG = {
         "url": "",  # empty = default https://models.dev/api.json
     },
 
-    "network": {
-        # Force IPv4. With broken/unreachable IPv6, Python tries AAAA first and hangs for the full
-        # TCP timeout before falling back. True skips IPv6 entirely.
-        "force_ipv4": False,
-    },
     # Gateway monitoring: service health + redacted operational diagnostics exported over OTLP to an
     # operator endpoint (OTEL Collector, DataDog, ...). Content-free by construction: no prompts,
     # messages, tool args/results, session history, usage analytics, audit logs, or trajectories.
@@ -2010,15 +2013,7 @@ DEFAULT_CONFIG = {
         # secret values); values are read from the environment at export time.
         "export": {"otlp": {"enabled": False, "endpoint": "", "headers_env": {}}},
     },
-    # Native hosted-room Discussion ceilings, shared by all members per discussion.
-    # Positive integers only (no unlimited/0). Read from the root owner's config at service
-    # startup for all hosted rooms; restart the owning service after changing them.
-    "hosted_rooms": {
-        "discussion": {
-            "max_rounds": 3,
-            "max_messages": 10,
-        },
-    },
+    **misc_defaults(),
     "gateway": {  # Gateway settings (messaging platforms: Telegram, Discord, Slack, ...).
         "unmanaged_idle_exit_seconds": 600,  # client-auto-started gateway only; 0 disables
         # Seconds a SIGTERM-interrupted agent unwinds before teardown (short: service stop budgets).
@@ -2254,10 +2249,6 @@ DEFAULT_CONFIG = {
         },
     },
 
-    "doctor": {
-        # Per-probe timeout (seconds) for `hermes doctor --live` real-call probes.
-        "live_probe_timeout": 10,
-    },
 
     "updates": {
         # Passive version/banner checks only; explicit `hermes update --check` remains enabled.
@@ -2642,14 +2633,16 @@ OPTIONAL_ENV_VARS = OptionalEnvVars({
     # Judgment transports (ADR-11): TypeSafe/Cloudflare answer typed questions; they are not
     # chat providers and never appear in the model picker.
     "TYPESAFE_API_KEY": _prov(
-        "TypeSafe judgment API key (native System One decisions; unused without judgment.native)",
+        "TypeSafe judgment API key (native System One decisions; used by the default "
+        "judgment chain when present)",
         "TypeSafe API key", "https://typesafe.ai/"),
     "TYPESAFE_BASE_URL": _base_url("TypeSafe"),
     "CLOUDFLARE_API_TOKEN": _prov(
-        "Cloudflare API token for Workers AI judgment models (Clef; unused until ADR-11 P2)",
+        "Cloudflare API token for Workers AI judgment models (Clef; add a "
+        "workers-ai-systemone entry to judgment.models to use it)",
         "Cloudflare API token", "https://dash.cloudflare.com/profile/api-tokens"),
     "CLOUDFLARE_ACCOUNT_ID": _prov(
-        "Cloudflare account ID for Workers AI judgment endpoints (ADR-11 P2)",
+        "Cloudflare account ID for Workers AI judgment endpoints",
         "Cloudflare account ID", None, password=False),
     "GOOGLE_API_KEY": _prov("Google AI Studio API key (also recognized as GEMINI_API_KEY)",
         "Google AI Studio API key", "https://aistudio.google.com/app/apikey"),
