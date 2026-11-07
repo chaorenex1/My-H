@@ -55,6 +55,8 @@ import type { TokenRateMeter } from "../utils/token-rate";
 import { disposeProgramStatus, initProgramStatus, resendProgramStatus, setProgramStatusEnabled } from "../utils/run-status";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { setSvgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
+import { setTableCharts, type TableChartRequest } from "@oh-my-pi/pi-tui/chat/table-chart";
+import type { ChartPlan } from "@oh-my-pi/pi-tui/charts/chart-plan";
 import { setTranscriptActionHandler } from "@oh-my-pi/pi-tui/chat/transcript-actions";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -156,6 +158,13 @@ const STILL_CLOSING_DELAY_MS = 3_000;
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
 /** Status-line slot of the link-hint mode prompt; the `omp:` prefix keeps it apart from extension keys. */
 const DEFAULT_WORKING_MESSAGE = "Working…";
+
+/** `table_chart.plan` answer: the judge's plan, or `local` to draw the caller's guess. */
+interface TableChartPlanReply {
+	readonly plan: ChartPlan | null;
+	readonly source: "judge" | "local";
+}
+
 /** Retire a fully-closed todo HUD after this delay (client-side display state). */
 const TODO_HUD_AUTO_CLEAR_SECONDS = 5;
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
@@ -498,6 +507,8 @@ export class InteractiveMode {
 	#workingMessageAccentCacheKey?: WorkingMessageAccentCacheKey;
 	#workingMessageAccentCacheValue?: WorkingMessageAccent;
 	#workingMessageAccentCacheHasValue = false;
+	/** `auto` mode saw no native judge: later tables keep the local guess without an RPC. */
+	#autoGraphLocal = false;
 	#sessionInfoOverlayHandle: OverlayHandle | undefined;
 	unsubscribe?: () => void;
 	onInputCallback?: (input: SubmittedUserInput) => void;
@@ -641,7 +652,7 @@ export class InteractiveMode {
 	}
 
 	get tableChartsVisible(): boolean {
-		return true;
+		return cfgTuiAutoGraph.get(this.settings) !== "off";
 	}
 
 	resolveAssistantMessageLinkHrefs(hrefs: readonly string[]): Promise<ReadonlyMap<string, string>> {
@@ -898,6 +909,10 @@ export class InteractiveMode {
 				this.ui.requestRender();
 			}),
 		);
+		this.#eventBusUnsubscribers.push(
+			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
+		);
+		this.#applyAutoGraphSetting();
 		this.#applyUiSettingChanges(cfgLiveUiSettings.get(this.settings), cfgLiveUiSettings.get(this.settings));
 		this.#subscribeToAgent();
 		this.#idleRecapReady = true;
@@ -1152,10 +1167,57 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Charts under assistant tables per `tui.autoGraph`: `smart` picks charts through the session's judge,
-	 * `auto` only while the judge role resolves to a native backend (checked per table, so a login or
-	 * role change mid-session applies), else the local guess.
+	 * Charts under assistant tables per `tui.autoGraph`: `off` leaves tables as tables,
+	 * `always` draws the local guess, and `smart`/`auto` ask the gateway's `table_chart.plan`
+	 * judge once per table. `auto` is `smart` here: when the judge answers `local` (no judge,
+	 * timeout or malformed answers) the planner keeps the local guess, so the table still
+	 * charts exactly as `always` would.
 	 */
+	#applyAutoGraphSetting(): void {
+		const setting = cfgTuiAutoGraph.get(this.settings);
+		this.#autoGraphLocal = false;
+		if (setting === "off") {
+			setTableCharts("off");
+			return;
+		}
+		if (setting === "always") {
+			setTableCharts("always");
+			return;
+		}
+		// `undefined` (no promise) is pi-tui's documented local path: it draws the guess with
+		// `worthCharting`, exactly like `always`. A rejected promise also falls back that way,
+		// while resolving `null` means "the judge saw no chart".
+		setTableCharts("smart", request =>
+			setting === "auto" && this.#autoGraphLocal ? undefined : this.#planTableChart(request, setting));
+	}
+
+	/** The `smart` planner: one `table_chart.plan` call per table; a local verdict rejects so pi-tui keeps its guess. */
+	async #planTableChart(
+		request: TableChartRequest,
+		mode: "auto" | "smart",
+	): Promise<ChartPlan | null> {
+		const local = (error: Error): never => {
+			if (mode === "auto") this.#autoGraphLocal = true;
+			logger.debug("Table chart planning fell back to the local guess", { error: String(error) });
+			throw error;
+		};
+		const gateway = this.session.gateway;
+		if (!gateway) return local(new Error("no gateway session"));
+		let result: TableChartPlanReply;
+		try {
+			result = await gateway.client.request<TableChartPlanReply>("table_chart.plan", {
+				markdown: request.markdown,
+				table: request.table,
+				guess: request.guess,
+				mode,
+			});
+		} catch (error) {
+			return local(error instanceof Error ? error : new Error(String(error)));
+		}
+		if (result.source === "local") return local(new Error("no native judge"));
+		return result.plan;
+	}
+
 	#applyUiSettingChanges(next: LiveUiSettings, previous: LiveUiSettings): void {
 		const any = (...ids: (keyof LiveUiSettings)[]) => ids.some(id => !Bun.deepEquals(next[id], previous[id]));
 		let rebuildChat = false;
@@ -1256,6 +1318,10 @@ export class InteractiveMode {
 		}
 		if (any("tui.renderSvg")) {
 			setSvgFigureRendering(cfgTuiRenderSvg.get(this.settings));
+			rebuildChat = true;
+		}
+		if (any("tui.autoGraph")) {
+			this.#applyAutoGraphSetting();
 			rebuildChat = true;
 		}
 		if (any("tui.textSizing")) {
