@@ -2,9 +2,9 @@
 
 When the model stops with a text answer, these gates may instead append the answer as an
 interim row plus a user-role nudge and continue the turn: late language-server verdicts on this
-turn's edits (a durable row, see ``_late_lsp_verdicts``), verify-on-stop (#65919),
-the ``pre_verify`` plugin hook after code edits, the kanban worker terminal-tool guard, and
-the todo reminder for an unfinished plan (ADR-2 D11).
+turn's edits (a durable row, see ``_late_lsp_verdicts``), the smart unexpected-stop retry
+(ADR-17 P5), verify-on-stop (#65919), the ``pre_verify`` plugin hook after code edits, the
+kanban worker terminal-tool guard, and the todo reminder for an unfinished plan (ADR-2 D11).
 Each keeps the candidate answer as a budget-exhaustion fallback
 (``pending_verification_response``) and clears ``final_response`` so the finalizer can tell
 this gate from error exits (#61631). Nothing here imports ``agent.conversation_loop`` at
@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.message_metadata import append_message
@@ -34,6 +35,128 @@ class StopGateVerdict:
     final_response: Any
     pending_verification_response: Any
     pending_verification_response_previewed: Any
+
+
+_UNEXPECTED_STOP_MODES = ("none", "mechanical", "smart")
+_UNEXPECTED_STOP_DEFAULT_MODE = "mechanical"
+# One judged retry per user turn: a stop nudge demands the next tool call or the final
+# answer, so judging the answer to a nudge only chains no-op "nothing more to add" turns.
+_UNEXPECTED_STOP_MAX_NUDGES = 1
+# Gateway-routed judges can take ~12s; matches omp's judgment-adjacent 15s budget.
+_UNEXPECTED_STOP_JUDGE_TIMEOUT_MS = 15_000
+# Leading characters of the request shown to the judge: enough for the ask and its
+# constraints without letting a pasted log crowd a small judge model's context.
+_UNEXPECTED_STOP_REQUEST_CHARS = 2000
+_UNEXPECTED_STOP_THRESHOLD = 0.5
+_UNEXPECTED_STOP_PROMPT = Path(__file__).resolve().parent / "prompts" / "unexpected-stop-retry.md"
+
+
+def _unexpected_stop_mode() -> str:
+    """``agent.unexpected_stop_detection``: ``none`` | ``mechanical`` | ``smart``."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly() or {}
+        agent_cfg = config.get("agent") if isinstance(config, dict) else None
+        raw = agent_cfg.get("unexpected_stop_detection") if isinstance(agent_cfg, dict) else None
+    except Exception:
+        logger.debug("unexpected-stop mode lookup failed", exc_info=True)
+        return _UNEXPECTED_STOP_DEFAULT_MODE
+    token = raw.strip().lower() if isinstance(raw, str) else ""
+    return token if token in _UNEXPECTED_STOP_MODES else _UNEXPECTED_STOP_DEFAULT_MODE
+
+
+def _is_synthetic_user_row(message: dict) -> bool:
+    """Nudge/scaffolding rows reuse the user role; none of them is the operator request."""
+    if message.get("flag") or message.get("display_kind"):
+        return True
+    return any(
+        value for key, value in message.items()
+        if key.endswith(("_synthetic", "_nudge"))
+    )
+
+
+def _latest_user_request(messages: Any) -> str:
+    """The operator's latest real request (synthetic nudge rows excluded), truncated."""
+    for message in reversed(list(messages or ())):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        if _is_synthetic_user_row(message):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = " ".join(
+                str(part.get("text") or "") for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        text = content.strip() if isinstance(content, str) else ""
+        if text:
+            return text[:_UNEXPECTED_STOP_REQUEST_CHARS]
+    return ""
+
+
+def _unexpected_stop_nudge_text(attempt: int) -> str:
+    """The retry nudge, rendered from the bundled prompt file (no transcript row)."""
+    template = _UNEXPECTED_STOP_PROMPT.read_text(encoding="utf-8-sig")
+    return (template.replace("{{retryCount}}", str(attempt))
+            .replace("{{maxRetries}}", str(_UNEXPECTED_STOP_MAX_NUDGES)))
+
+
+def _unexpected_stop_judged(final_response: str, messages: Any) -> bool:
+    """``True`` when the judge scores the text stop as unexpected; any failure is silence."""
+    from agent.judgment import JudgmentError, JudgmentRequest, judge, load_questions
+
+    state: dict[str, Any] = {"message": final_response}
+    request = _latest_user_request(messages)
+    if request:
+        state["request"] = request
+    try:
+        question = load_questions("unexpected-stop")["stopped"]
+        result = judge(
+            JudgmentRequest(state=state, questions={"stopped": question}),
+            purpose="unexpected-stop",
+            timeout_ms=_UNEXPECTED_STOP_JUDGE_TIMEOUT_MS,
+        )
+    except JudgmentError as exc:
+        logger.debug("unexpected-stop: classification failed: %s", exc)
+        return False
+    except Exception as exc:  # health: allow BLE001 -- a judged gate must not fail the turn
+        logger.debug("unexpected-stop: classification failed: %s", exc)
+        return False
+    probability = getattr(result.answers.get("stopped"), "noul", None)
+    if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+        return False
+    return probability >= _UNEXPECTED_STOP_THRESHOLD
+
+
+def _unexpected_stop_nudge(agent, final_msg, final_response, messages) -> Optional[str]:
+    """ADR-17 P5: a text answer that promises work it never starts gets one judged retry.
+
+    ``mechanical`` keeps the shape-based recovery only (the stall/ack guards in
+    ``finish_text_response``); ``smart`` also asks the judge about visible text. Interrupted
+    turns, tool-call turns, empty text, and the answer to an earlier nudge are never judged.
+    The counter is reset per user turn with the other stop-gate counters.
+    """
+    try:
+        if getattr(agent, "_interrupt_requested", False):
+            return None
+        if isinstance(final_msg, dict) and final_msg.get("tool_calls"):
+            return None
+        if not isinstance(final_response, str) or not final_response.strip():
+            return None
+        if int(getattr(agent, "_unexpected_stop_nudges", 0) or 0) >= _UNEXPECTED_STOP_MAX_NUDGES:
+            return None
+        if _unexpected_stop_mode() != "smart":
+            return None
+        if not _unexpected_stop_judged(final_response, messages):
+            return None
+        attempt = int(getattr(agent, "_unexpected_stop_nudges", 0) or 0) + 1
+        text = _unexpected_stop_nudge_text(attempt)
+    except Exception:
+        logger.debug("unexpected-stop check failed", exc_info=True)
+        return None
+    agent._unexpected_stop_nudges = attempt
+    return text
 
 
 def _verify_on_stop_nudge(agent) -> Optional[str]:
@@ -298,6 +421,18 @@ def apply_stop_gates(
             pending_verification_response=final_response,
             pending_verification_response_previewed=agent._interim_content_was_streamed(final_response or ""),
         )
+
+    _unexpected_nudge = _unexpected_stop_nudge(agent, final_msg, final_response, messages)
+    if _unexpected_nudge:
+        # The gate already bumped ``_unexpected_stop_nudges`` when it flagged the stop.
+        final_msg["finish_reason"] = "unexpected_stop"
+        _append_interim_answer(
+            agent, final_msg, messages, conversation_history, "unexpected-stop interim flush failed"
+        )
+        verdict = _continue(_unexpected_nudge, "_unexpected_stop_synthetic")
+        # Internal nudge: stay silent on the terminal, debug-log only.
+        logger.debug("unexpected-stop retry nudge issued (attempt %d)", agent._unexpected_stop_nudges)
+        return verdict
 
     _verify_nudge = _verify_on_stop_nudge(agent)
     if _verify_nudge:

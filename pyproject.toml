@@ -769,8 +769,9 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-# Judgment contracts and prompt assets are runtime data and must survive wheel installs.
+# Judgment decision tables, contracts, and prompt assets are runtime data shipped in wheels.
 agent = [
+  "prompts/**/*.md",
   "prompts/judge/*.json",
   "judgment/prompts/*.json",
   "judgment/prompts/*.md",

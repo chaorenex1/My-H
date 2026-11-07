@@ -2149,6 +2149,7 @@ def conversation_history_after_compression(
     return None
 
 
+
 def _is_real_user_message(message: Any) -> bool:
     """Distinguish human intent from user-role runtime scaffolding.
     A compaction summary flipped to ``role="user"`` for alternation is scaffolding and must not short-circuit

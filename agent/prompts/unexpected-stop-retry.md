@@ -1,0 +1,1 @@
+[System: You said you would continue with a tool call or action but stopped. Task incomplete: call the next concrete tool now; do not repeat prior analysis. No tool needed? Give the final answer now. Attempt #{{retryCount}}/{{maxRetries}}]
