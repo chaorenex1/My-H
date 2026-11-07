@@ -1275,25 +1275,15 @@ def interruptible_api_call(agent, api_kwargs: dict):
     return _NonStreamRequest(agent, api_kwargs).run()
 
 
-def _consume_ephemeral_reasoning_off(agent) -> bool:
-    """Consume the one-shot "answer without thinking" continuation flag.
-
-    Set by the length-continuation path when a request returned reasoning but NO
-    visible content (thinking ate the output cap); continuation turns never replay
-    prior reasoning, so thinking ON would re-burn the budget. When True the caller
-    overrides the wire reasoning_config with ``{"enabled": False, "effort": "none"}``
-    for exactly the next call. Prompt-cache cost is bounded to ONE cold prefix write
-    on config-sensitive providers (Anthropic, OpenAI) — far cheaper than four futile
-    full-budget continuations.
-    """
-    consumed = bool(getattr(agent, "_ephemeral_reasoning_off", False))
-    if consumed:
-        agent._ephemeral_reasoning_off = False
-    return consumed
+from agent.reasoning_overlay import (
+    auto_reasoning_overlay as _auto_reasoning_overlay,
+    consume_ephemeral_reasoning_off as _consume_ephemeral_reasoning_off,
+)
 
 
 def _reasoning_config_for_wire(agent):
-    """``agent.reasoning_config`` with the one-shot reasoning-off override applied.
+    """The auto-reasoning overlay else ``agent.reasoning_config``, with the one-shot
+    reasoning-off override applied.
 
     Once the route has answered a disable with "reasoning is mandatory"
     (``agent._reasoning_disable_rejected``), every disable — configured or
@@ -1301,7 +1291,7 @@ def _reasoning_config_for_wire(agent):
     changes: the request goes out without a reasoning config and the route
     applies its own default.
     """
-    cfg = agent.reasoning_config
+    cfg = _auto_reasoning_overlay(agent) or agent.reasoning_config
     ephemeral_off = _consume_ephemeral_reasoning_off(agent)
     if getattr(agent, "_reasoning_effort_rejected", False):
         # The route rejected the configured reasoning LEVEL itself (#100536: ``reasoning.effort:
@@ -1989,6 +1979,10 @@ def _update_fallback_context_compressor(agent) -> None:
 def _reresolve_fallback_reasoning_config(agent) -> None:
     """Per-model override > global reasoning_effort (YAML False = disabled); a config load
     failure keeps the current reasoning_config rather than killing the swap."""
+    # The fallback route changes the effort surface, so the per-turn auto overlay
+    # (ADR-17 P5) is stale even when the resolve below fails.
+    agent._auto_reasoning_config = None
+    agent._auto_reasoning_route = None
     try:
         # Re-resolve reasoning_config for the new fallback model (Closes #21256). Wrapped in try/except
         # because a config load failure must not kill the swap.
