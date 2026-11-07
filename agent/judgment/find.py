@@ -227,11 +227,11 @@ class _RunStats:
         self.failed = 0
         self.uncalibrated = False
 
-    def record(self, *, api: str = "", failed: bool = False) -> None:
+    def record(self, *, kind: str = "", failed: bool = False) -> None:
         self.requests += 1
         if failed:
             self.failed += 1
-        if api == "text":
+        if kind and kind != "native":
             self.uncalibrated = True
 
     def snapshot(self) -> dict[str, int]:
@@ -248,7 +248,7 @@ def _ask(judge: Judge, request: JudgmentRequest, *, purpose: str,
         stats.record(failed=True)
         return None, ""
     api = str(getattr(result, "api", ""))
-    stats.record(api=api)
+    stats.record(kind=str(getattr(result, "kind", "")))
     return result, api
 
 

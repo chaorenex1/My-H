@@ -11,6 +11,7 @@ from agent import ttsr_runtime
 from agent.rule_utils import parse_rule_text
 from agent.ttsr_runtime import (
     JUDGED_CONTENT_MAX_CHARS,
+    JUDGED_CONTENT_MAX_TOKENS,
     TtsrCoordinator,
     TtsrSettings,
     glob_matches,
@@ -346,6 +347,7 @@ class _FakeJudge:
         self.requests.append(request)
         probabilities = self._queue.pop(0) if len(self._queue) > 1 else self._queue[0]
         return JudgmentResult(
+            kind="online",
             api="text", provider="p", model="m",
             answers={qid: NoulAnswer(prob) for qid, prob in probabilities.items()},
             usage=CanonicalUsage(input_tokens=1, output_tokens=1),
@@ -415,6 +417,12 @@ def test_judge_failure_is_silent_and_truncates_content():
                                judge_factory=lambda **_kw: judge)
     coordinator.judge_completed_outputs([], [("reply", "y" * (JUDGED_CONTENT_MAX_CHARS + 10))], "stop")
     assert len(judge.requests[0].state["content"]) == JUDGED_CONTENT_MAX_CHARS
+
+
+def test_judged_content_budget_matches_the_omp_token_cap():
+    """The 32k-Jev budget is enforced as the ADR-sanctioned 24k-char stand-in."""
+    assert JUDGED_CONTENT_MAX_TOKENS == 32_000
+    assert JUDGED_CONTENT_MAX_CHARS == 24_000
 
 
 def test_judge_skips_aborted_and_error_finish_reasons():

@@ -16,8 +16,8 @@ import io
 import logging
 import math
 import sys
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from agent.judgment.types import (
     BoxEdges,
@@ -69,6 +69,49 @@ WORKERS_AI_LIMITS = ImageLimits(
     max_pixels=16_000_000,
 )
 OPENAI_DECISIONS_LIMITS = ImageLimits(max_count=128)
+
+
+#: ``judgment.models[].image_input`` bounds, keyed by their omp/camelCase spelling.
+_LIMIT_FIELDS = {
+    "maxcount": "max_count", "max_count": "max_count",
+    "maxbytes": "max_bytes", "max_bytes": "max_bytes",
+    "maxtotalbytes": "max_total_bytes", "max_total_bytes": "max_total_bytes",
+    "maxpixels": "max_pixels", "max_pixels": "max_pixels",
+    "minpixels": "min_pixels", "min_pixels": "min_pixels",
+    "minside": "min_side", "min_side": "min_side",
+    "maxside": "max_side", "max_side": "max_side",
+    "mimetypes": "mime_types", "mime_types": "mime_types",
+}
+
+
+def limits_from_mapping(mapping: Mapping[str, Any], base: ImageLimits | None = None) -> ImageLimits:
+    """Override a wire's ``ImageLimits`` with one model's catalog bounds.
+
+    Unknown keys are ignored (catalog entries may carry unrelated metadata); malformed values
+    fail loudly so a typo cannot silently widen a model's bounds.
+    """
+    limits = base or ImageLimits()
+    overrides: dict[str, Any] = {}
+    for raw_key, raw_value in mapping.items():
+        field = _LIMIT_FIELDS.get(str(raw_key).strip().lower().replace("-", "_"))
+        if field is None:
+            continue
+        if field == "mime_types":
+            if not isinstance(raw_value, (list, tuple)) or not all(
+                    isinstance(item, str) and item.strip() for item in raw_value):
+                raise JudgmentValidationError("image_input.mimeTypes must be a list of strings")
+            overrides[field] = tuple(item.strip().lower() for item in raw_value)
+            continue
+        if isinstance(raw_value, bool):
+            raise JudgmentValidationError(f"image_input.{raw_key} must be an integer")
+        try:
+            number = int(raw_value)
+        except (TypeError, ValueError):
+            raise JudgmentValidationError(f"image_input.{raw_key} must be an integer") from None
+        if number < 0:
+            raise JudgmentValidationError(f"image_input.{raw_key} must be non-negative")
+        overrides[field] = number
+    return replace(limits, **overrides)
 
 
 @dataclass(frozen=True)

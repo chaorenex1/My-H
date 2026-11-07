@@ -227,6 +227,8 @@ def test_cache_hit_makes_no_second_request(server, tmp_path):
     finally:
         cache.close()
     assert len(server.records) == 1
+    assert first.kind == "native"
+    assert second.kind == "native"
     assert first.cached_questions == 0
     assert second.cached_questions == 1
     assert second.usage.input_tokens == 0
@@ -649,3 +651,87 @@ def test_explicit_route_max_questions_beats_the_endpoint_default(server):
     )
     NativeJudge(route, JudgmentSettings(cache=False, audit=False)).judge(_multi_request(5))
     assert len(server.records) == 2
+
+
+# ── P4: requestModelId, usage ledger, partial shard usage ──────────────────
+
+
+def test_request_model_id_is_sent_and_cache_keys_on_the_config_id(server, tmp_path):
+    from dataclasses import replace
+
+    server.responses.append((200, _response(), {}))
+    cache = JudgmentCache(tmp_path / "judgment.db")
+    route = replace(_route(server), request_model_id="jev-remote-2026")
+    try:
+        result = NativeJudge(route, JudgmentSettings(), cache=cache).judge(_request())
+        assert server.records[0]["body"]["model"] == "jev-remote-2026"
+        assert route.cache_key == "typesafe/jev-test"
+        assert cache.lookup("typesafe/jev-test", {"content": "hello"}, _request().questions) == {
+            "q0": result.answers["q0"]}
+        rows = cache.recent_usage(limit=5)
+        assert len(rows) == 1
+        assert rows[0]["model"] == "jev-test"  # configured id, not the request id
+        assert rows[0]["api"] == "typesafe"
+        assert rows[0]["input_tokens"] == 12
+    finally:
+        cache.close()
+
+
+def test_usage_table_skips_cache_hits_and_honors_the_switch(server, tmp_path):
+    cache = JudgmentCache(tmp_path / "judgment.db")
+    route = _route(server)
+    server.responder = lambda record: (200, _response(), {})
+    try:
+        judge = NativeJudge(route, JudgmentSettings(), cache=cache)
+        judge.judge(_request())
+        judge.judge(_request())  # answer came from the cache
+        assert cache.usage_count() == 1
+
+        off = NativeJudge(route, JudgmentSettings(cache_usage=False), cache=cache)
+        off.judge(JudgmentRequest(
+            state={"content": "other"}, questions={"q0": NoulQuestion("Is it?")}))
+        assert cache.usage_count() == 1
+    finally:
+        cache.close()
+
+
+def test_failed_shard_reports_billed_usage_to_the_hook(server):
+    failed = threading.Event()
+
+    def responder(record):
+        ids = list(record["body"]["questions"])
+        if "q0" in ids:
+            failed.set()
+            return 400, {"error": "bad"}, {}
+        failed.wait(timeout=5)
+        return _echo_shard(record)
+
+    server.responder = responder
+    route = NativeRoute(
+        api="typesafe", provider="typesafe", model="jev-test",
+        base_url=f"http://127.0.0.1:{server.server_address[1]}",
+        api_key="test-key", timeout_ms=2000, max_questions=2,
+    )
+    reported: list[tuple[int, int, float | None]] = []
+    judge = NativeJudge(route, JudgmentSettings(cache=False, audit=False))
+    judge.on_partial_usage = lambda usage, cost: reported.append(
+        (usage.input_tokens, usage.output_tokens, cost))
+    with pytest.raises(JudgmentAPIError):
+        judge.judge(_multi_request(9))
+    assert reported
+    # Every completed shard answered through _echo_shard (10 in / 1 out each); the failed
+    # shard never reached a 2xx, so its tokens are absent.
+    assert reported[0][0] >= 30 and reported[0][0] % 10 == 0
+    assert reported[0][1] == reported[0][0] // 10
+
+
+def test_single_billed_shard_failure_reports_usage(server):
+    # A 200 whose answers fail validation is still billed; the hook sees that usage.
+    server.responses.append((200, {"answers": {}, "usage": {"input_tokens": 7}}, {}))
+    reported: list[tuple[int, int]] = []
+    judge = NativeJudge(_route(server), JudgmentSettings(cache=False, audit=False))
+    judge.on_partial_usage = lambda usage, cost: reported.append(
+        (usage.input_tokens, usage.output_tokens))
+    with pytest.raises(JudgmentResponseError):
+        judge.judge(_request())
+    assert reported == [(7, 0)]

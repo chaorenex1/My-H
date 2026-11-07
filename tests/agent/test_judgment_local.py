@@ -8,6 +8,7 @@ from agent.judgment.config import JudgmentSettings, LocalSettings
 from agent.judgment.local import LocalChatBackend
 from agent.judgment.types import (
     JudgmentAborted,
+    JudgmentParseError,
     JudgmentRequest,
     JudgmentUnavailable,
     NoulAnswer,
@@ -20,8 +21,7 @@ def _cfg(**aux) -> dict:
 
 
 def _settings(**local) -> JudgmentSettings:
-    return JudgmentSettings(
-        parse_retries=0, local=LocalSettings(**{"autostart": False, **local}))
+    return JudgmentSettings(local=LocalSettings(**{"autostart": False, **local}))
 
 
 def _response(text: str) -> SimpleNamespace:
@@ -58,10 +58,13 @@ def test_merged_prompt_and_local_provider(monkeypatch):
         "agent.auxiliary_local_runtime.bare_llamacpp_endpoint",
         lambda *args: ("http://127.0.0.1:9999", "local-key"))
     monkeypatch.setattr("agent.auxiliary_client.call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        "agent.models_dev.get_model_capabilities", lambda *args, **kwargs: None)
 
     result = LocalChatBackend(_settings(), _cfg()).judge(_request())
 
     assert isinstance(result.answers["q0"], NoulAnswer)
+    assert result.kind == "local"
     assert calls[0]["provider"] == "llamacpp"
     assert calls[0]["base_url"] == "http://127.0.0.1:9999"
     assert calls[0]["api_key"] == "local-key"
@@ -88,24 +91,41 @@ def test_merge_prompt_false_keeps_system_and_user_messages(monkeypatch):
     assert [message["role"] for message in calls[0]["messages"]] == ["system", "user"]
 
 
-def test_parse_retry_escalates_to_reasoning_budget(monkeypatch):
-    texts = iter(["garbage", "yes"])
-    budgets: list[int] = []
+def test_local_backend_does_not_retry_parse_failures(monkeypatch):
+    calls: list[dict] = []
 
     def fake_call_llm(**kwargs):
-        budgets.append(kwargs["max_tokens"])
-        return _response(next(texts))
+        calls.append(kwargs)
+        return _response("garbage")
 
     monkeypatch.setattr(
         "agent.auxiliary_local_runtime.bare_llamacpp_endpoint",
         lambda *args: ("http://127.0.0.1:9999", "k"))
     monkeypatch.setattr("agent.auxiliary_client.call_llm", fake_call_llm)
-    settings = JudgmentSettings(
-        parse_retries=1,
-        local=LocalSettings(answer_max_tokens=16, reasoning_max_tokens=1024))
-    LocalChatBackend(settings, _cfg()).judge(_request())
+    with pytest.raises(JudgmentParseError, match="no yes/no"):
+        LocalChatBackend(_settings(), _cfg()).judge(_request())
 
-    assert budgets == [16, 1024]
+    assert len(calls) == 1
+    assert calls[0]["fallback"] is False
+
+
+def test_local_budget_uses_reasoning_spec(monkeypatch):
+    budgets: list[int] = []
+
+    def fake_call_llm(**kwargs):
+        budgets.append(kwargs["max_tokens"])
+        return _response("yes")
+
+    monkeypatch.setattr(
+        "agent.auxiliary_local_runtime.bare_llamacpp_endpoint",
+        lambda *args: ("http://127.0.0.1:9999", "k"))
+    monkeypatch.setattr("agent.auxiliary_client.call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        "agent.models_dev.get_model_capabilities",
+        lambda *args, **kwargs: SimpleNamespace(supports_reasoning=True))
+    LocalChatBackend(_settings(), _cfg()).judge(_request())
+
+    assert budgets == [1024]
 
 
 def test_autostart_refuses_when_model_is_not_ready(monkeypatch):

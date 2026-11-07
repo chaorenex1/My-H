@@ -29,13 +29,33 @@ def build_judgment_parser(subparsers, *, cmd_judgment: Callable) -> None:
     source = ask.add_mutually_exclusive_group(required=True)
     source.add_argument("--state", help="Inline state text")
     source.add_argument("--state-file", help="JSON state file")
-    ask.add_argument("--questions-file", required=True, help="JSON questions file")
+    questions = ask.add_mutually_exclusive_group(required=True)
+    questions.add_argument(
+        "--questions", metavar="NAME|PATH",
+        help="Bundled question name (e.g. auto-graph) or a JSON questions file")
+    questions.add_argument(
+        "--questions-file", help="JSON questions file (legacy spelling)")
     ask.add_argument(
         "--image", action="append", default=[], metavar="PATH",
         help="Image for image/box questions (repeatable; the index is the flag order)")
+    ask.add_argument(
+        "--context", action="append", default=[], metavar="QID.KEY=VALUE",
+        help="Template context for one question's instructions (repeatable)")
+    ask.add_argument("--budget", type=float, default=None,
+                     help="Per-call spend cap in USD (overrides judgment.cost_gate)")
+    ask.add_argument("--timeout-ms", type=int, default=None,
+                     help="Abort the whole judgment after this many milliseconds")
     ask.add_argument("--purpose", default="cli", help="Audit label (default: cli)")
     add_json_flag(ask, "Emit machine-readable JSON")
     ask.set_defaults(func=cmd_judgment)
+
+    batch = actions.add_parser("batch", help="Run one question set over many states")
+    batch.add_argument(
+        "--file", required=True, metavar="PATH",
+        help="BatchRequest JSON: {items:[{key,state,images?}], questions|questions_file, ...}")
+    batch.add_argument("--purpose", default="cli", help="Audit label (default: cli)")
+    add_json_flag(batch, "Emit machine-readable JSON")
+    batch.set_defaults(func=cmd_judgment)
 
     doctor = actions.add_parser("doctor", help="Show routes, credentials, cache, and audit state")
     add_json_flag(doctor, "Emit machine-readable JSON")
@@ -62,17 +82,6 @@ def _questions_path(raw: str) -> Path:
         if nested.exists():
             return nested
     raise FileNotFoundError(f"questions file not found: {raw}")
-
-
-def _load_questions(raw: str) -> dict[str, Any]:
-    from agent.judgment.questions import questions_from_file
-
-    path = _questions_path(raw)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read questions file {path}: {exc}") from None
-    return dict(questions_from_file(payload))
 
 
 def _load_state(args) -> Any:
@@ -150,22 +159,57 @@ def _usage_cost(result: Any) -> float | None:
         return None
 
 
+def _context_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
+def _parse_contexts(values: list[str]) -> dict[str, dict[str, Any]]:
+    contexts: dict[str, dict[str, Any]] = {}
+    for raw in values:
+        key, separator, value = str(raw).partition("=")
+        if not separator or not key.strip():
+            raise ValueError("--context expects QID.KEY=VALUE (or QID={json})")
+        question_id, dot, field = key.strip().partition(".")
+        parsed = _context_value(value.strip())
+        if dot and field:
+            contexts.setdefault(question_id, {})[field] = parsed
+            continue
+        if not isinstance(parsed, dict):
+            raise ValueError(f"--context {key} must be QID.KEY=VALUE or QID={{json}}")
+        contexts[question_id] = parsed
+    return contexts
+
+
+def _question_source(args) -> str:
+    if args.questions is not None:
+        return str(args.questions)
+    return str(_questions_path(args.questions_file))
+
+
 def _cmd_ask(args) -> int:
     from agent.judgment import (
         JudgmentError,
-        JudgmentRequest,
         JudgmentUnavailable,
         JudgmentValidationError,
         answer_to_json,
-        resolve_judge,
     )
+    from agent.judgment.service import judge as judge_service
 
     try:
-        questions = _load_questions(args.questions_file)
-        state = _load_state(args)
-        request = JudgmentRequest(state=state, questions=questions, images=_load_images(args))
-        result = resolve_judge(purpose=args.purpose).judge(
-            request, purpose=args.purpose)
+        payload = {
+            "state": _load_state(args),
+            "questions_file": _question_source(args),
+            "images": _load_images(args),
+        }
+        contexts = _parse_contexts(getattr(args, "context", []) or [])
+        if contexts:
+            payload["contexts"] = contexts
+        result = judge_service(
+            payload, purpose=args.purpose, budget_usd=getattr(args, "budget", None),
+            timeout_ms=getattr(args, "timeout_ms", None))
     except (ValueError, JudgmentValidationError, FileNotFoundError) as exc:
         if getattr(args, "json", False):
             print(json.dumps({"success": False, "error": str(exc)}))
@@ -213,6 +257,58 @@ def _cmd_ask(args) -> int:
           f"output={result.usage.output_tokens} cost={cost_text}")
     print(f"cache: {result.cached_questions}/{len(result.answers)} hit")
     return 0
+
+
+def _cmd_batch(args) -> int:
+    from agent.judgment import JudgmentError, JudgmentUnavailable, JudgmentValidationError
+    from agent.judgment.service import batch_to_json, judge_batch
+
+    path = Path(str(args.file)).expanduser()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("batch file must contain a JSON object")
+        payload.setdefault("purpose", getattr(args, "purpose", "") or "cli")
+        result = judge_batch(payload)
+    except (OSError, ValueError, JudgmentValidationError) as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"success": False, "error": str(exc)}))
+        else:
+            print(f"Error: {exc}")
+        return 2
+    except JudgmentUnavailable as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"success": False, "error": str(exc)}))
+        else:
+            print(f"Judgment unavailable: {exc}")
+        return 1
+    except JudgmentError as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"success": False, "error": str(exc)}))
+        else:
+            print(f"Judgment failed: {exc}")
+        return 1
+
+    ok_count = sum(1 for item in result.results if item.ok)
+    if getattr(args, "json", False):
+        payload = {"success": result.min_ok_met, "ok_count": ok_count}
+        payload.update(batch_to_json(result))
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if result.min_ok_met else 1
+
+    for item in result.results:
+        if item.ok and item.result is not None:
+            answers = ", ".join(
+                f"{question_id}={_format_answer(answer)}"
+                for question_id, answer in item.result.answers.items())
+            print(f"{item.key}: {item.result.api} {item.result.model} {answers}")
+        else:
+            error = item.error
+            detail = f"{error.type}: {error.message}" if error else "unknown failure"
+            print(f"{item.key}: failed ({detail})")
+    status = "met" if result.min_ok_met else "not met"
+    print(f"min_ok: {status} ({ok_count}/{len(result.results)} ok)")
+    return 0 if result.min_ok_met else 1
 
 
 def _text_images_capability(settings: Any) -> bool:
@@ -263,6 +359,7 @@ def _cmd_doctor(args) -> int:
 
     payload = {
         "mode": settings.mode,
+        "chain": list(settings.chain),
         "text_after_native": settings.text_after_native,
         "routes": routes,
         "text": {
@@ -277,11 +374,18 @@ def _cmd_doctor(args) -> int:
             "reachable_with_native": bool(routes) and any(row["available"] for row in routes),
         },
         "images": settings.images,
+        "image_assets": {
+            "allow_local": settings.assets.allow_local,
+            "allow_remote": settings.assets.allow_remote,
+            "max_bytes": settings.assets.max_bytes,
+        },
         "cache": {
             "path": str(cache.db_path) if cache is not None else str(home / "judgment.db"),
             "available": bool(cache and cache.available),
             "reason": cache.disabled_reason if cache is not None else "store unavailable",
             "max_states": settings.cache_max_states,
+            "usage": bool(settings.cache_usage),
+            "usage_rows": cache.usage_count() if cache is not None else 0,
         },
         "audit": {
             "enabled": settings.audit,
@@ -301,8 +405,9 @@ def _cmd_doctor(args) -> int:
         return 0
 
     print(f"mode: {payload['mode']}  (text_after_native={payload['text_after_native']})")
+    print(f"chain: {' -> '.join(payload['chain']) or 'none'}")
     if not routes:
-        print("native routes: none configured (judgment.native is empty)")
+        print("native routes: none configured")
     else:
         print("native routes:")
         for row in routes:
@@ -334,7 +439,8 @@ def _cmd_doctor(args) -> int:
     audit_view: dict[str, Any] = audit if isinstance(audit, dict) else {}
     reason = str(cache_view.get("reason") or "")
     print(f"cache: {cache_view.get('path')} "
-          f"({'available' if cache_view.get('available') else 'unavailable: ' + reason})")
+          f"({'available' if cache_view.get('available') else 'unavailable: ' + reason})  "
+          f"usage_rows={cache_view.get('usage_rows', 0)}")
     print(f"audit: {'on' if audit_view.get('enabled') else 'off'}  "
           f"runs={audit_view.get('runs')}")
     print(f"eval: {payload['eval']['path']}  {payload['eval']['bytes']} bytes")
@@ -388,6 +494,8 @@ def cmd_judgment(args) -> int:
     action = getattr(args, "judgment_action", None) or "doctor"
     if action == "ask":
         return _cmd_ask(args)
+    if action == "batch":
+        return _cmd_batch(args)
     if action == "log":
         return _cmd_log(args)
     return _cmd_doctor(args)

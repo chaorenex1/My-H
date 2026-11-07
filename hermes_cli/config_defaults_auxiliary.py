@@ -68,6 +68,9 @@ def auxiliary_defaults() -> dict:
         # omp role vocabulary, addressable but not yet consumed by a built-in workload (see
         # hermes_cli/aux_slots.py): a plugin or future feature can pin them, the Models hub can
         # assign them, and ``auto`` keeps them on the main model so nothing changes by default.
+        # ``tiny`` is the judgment chain's cheap lane (ADR-17 default tail); ``default`` is the
+        # main-model fallback at the end of that chain.
+        "tiny": {**_aux(30), "prefer_fast_model": True},  # judgment's cheap lane
         "smol": _aux(60),    # omp "fast lane"
         "slow": _aux(180),   # omp "strong/thinking lane"
         "plan": _aux(600),   # omp planning role (/plan itself still runs on the main agent)
@@ -99,6 +102,9 @@ def auxiliary_defaults() -> dict:
             "extra_body": {},
             "reasoning_effort": "",
             "language": "",
+            # Judge whether the title still fits every N operator prompts (ADR-17 P5).
+            # 0 = off: drift checks cost a paid judgment per interval.
+            "refresh_after_prompts": 0,
         },
         # One-shot git commit message drafts (agent/oneshot.py PROMPT_TEMPLATES["commit_message"]).
         "commit_message": _aux(60),
@@ -115,8 +121,12 @@ def auxiliary_defaults() -> dict:
         "goal_judge": _aux(60),          # /goal satisfaction + contract drafting; JSON calls
         # Typed side-channel judgments (ADR-11). Text/one-hot fallback only; native routes are
         # configured separately under the top-level `judgment:` section.
-        "judge": {**_aux(30), "reasoning_effort": "none", "max_tokens": 4096, "images": False},
+        # The text budget and reasoning override live under ``judgment.text`` (ADR-17 D3/D8).
+        "judge": {**_aux(30), "images": False},
         "group_router": _aux(20),        # Group Chat routing "auto": who answers; fast/cheap model OK
+        # Main-model fallback at the end of the judgment chain (ADR-17 D4): provider "auto"
+        # and an empty model mean the session's main model.
+        "default": _aux(60),
         # Curator skill-usage review can take minutes on reasoning models (umbrellas over hundreds
         # of skills); route cheaper via `hermes model` → auxiliary → Curator.
         "curator": _aux(600),

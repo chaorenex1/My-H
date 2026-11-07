@@ -390,7 +390,7 @@ def test_chain_reports_no_compatible_candidate(monkeypatch):
     class _TextOnly:
         supports_images = False
 
-        def __init__(self, settings, config=None):
+        def __init__(self, settings, config=None, *, task="judge"):
             pass
 
         def judge(self, request, **kwargs):  # pragma: no cover - never reached
@@ -437,6 +437,7 @@ def test_chain_skips_a_route_whose_image_cap_is_exceeded(monkeypatch):
         def judge(self, request, **kwargs):
             calls.append(self.route.model)
             return JudgmentResult(
+                kind="native",
                 api=self.route.api, provider=self.route.provider, model=self.route.model,
                 answers={"q0": NoulAnswer(0.5)})
 
@@ -458,3 +459,108 @@ def test_chain_skips_a_route_whose_image_cap_is_exceeded(monkeypatch):
     assert constructed == ["workers", "jev"]
     assert calls == ["jev"]
     assert result.model == "jev"
+
+
+# ── P4: path assets and per-model bounds ──────────────────────────────────
+
+
+def test_path_assets_read_local_files_and_reject_remote_urls(tmp_path, monkeypatch):
+    from agent.judgment.types import image_bytes, validate_image
+
+    root = tmp_path / "root"
+    root.mkdir()
+    inside = root / "shot.png"
+    inside.write_bytes(base64.b64decode(_png(64, 64)))
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(base64.b64decode(_png(64, 64)))
+    monkeypatch.chdir(root)
+
+    image = JudgmentImage(path="shot.png", mime_type="image/png")
+    assert image_bytes(image) == inside.read_bytes()
+    validate_image(image)
+    body = WIRES["typesafe"].encode(
+        JudgmentRequest(
+            state="x", questions={"q0": NoulQuestion("Is it?")}, images=(image,)),
+        "jev-test")
+    assert len(body["assets"]) == 1
+    assert next(iter(body["assets"].values()))["type"] == "image"
+
+    with pytest.raises(JudgmentValidationError, match="never fetch remote URLs"):
+        image_bytes(JudgmentImage(path="https://example.com/x.png", mime_type="image/png"))
+    with pytest.raises(JudgmentValidationError, match="outside the working directory"):
+        image_bytes(JudgmentImage(path=str(outside), mime_type="image/png"))
+    with pytest.raises(JudgmentValidationError, match="either data or path"):
+        image_bytes(JudgmentImage(
+            data=_png(8, 8), path="shot.png", mime_type="image/png"))
+    with pytest.raises(JudgmentValidationError, match="the limit is 8"):
+        image_bytes(image, max_bytes=8)
+    with pytest.raises(JudgmentValidationError, match="path assets are disabled"):
+        validate_image(image, allow_local=False)
+
+
+def test_limits_from_mapping_overrides_only_declared_bounds():
+    from agent.judgment.images import limits_from_mapping
+
+    limits = limits_from_mapping(
+        {"maxCount": 1, "maxBytes": 4096, "minSide": 10, "maxSide": 64,
+         "maxPixels": 4096, "mimeTypes": ["image/webp"]},
+        JEV_LIMITS)
+    assert limits.max_count == 1
+    assert limits.max_bytes == 4096
+    assert limits.min_side == 10
+    assert limits.max_side == 64
+    assert limits.max_pixels == 4096
+    assert limits.mime_types == ("image/webp",)
+    assert limits.fit is True  # the wire's fitting policy is not a model knob
+    with pytest.raises(JudgmentValidationError, match="maxBytes"):
+        limits_from_mapping({"maxBytes": "huge"}, JEV_LIMITS)
+
+
+def test_chain_applies_catalog_image_bounds(monkeypatch):
+    from types import SimpleNamespace
+
+    from agent.judgment.chain import ChainJudge
+    from agent.judgment.config import load_judgment_settings
+    from agent.judgment.types import JudgmentResult, NoulAnswer
+
+    limits_seen: list[Any] = []
+
+    class FakeNative:
+        def __init__(self, route, settings, cache=None):
+            self.route = route
+            self.label = route.label
+            self.supports_images = True
+            self.supports_boxes = False
+            self.wire = SimpleNamespace(images=JEV_LIMITS)
+
+        def judge(self, request, **kwargs):
+            limits_seen.append(self.route.image_limits)
+            return JudgmentResult(
+                kind="native", api=self.route.api, provider=self.route.provider,
+                model=self.route.model, answers={"q0": NoulAnswer(0.5)})
+
+    monkeypatch.setattr(chain_module, "NativeJudge", FakeNative)
+    monkeypatch.setattr(
+        chain_module, "get_env_value_prefer_dotenv",
+        lambda name: "typesafe-key" if name == "TYPESAFE_API_KEY" else "")
+    config = _cfg(
+        models=[{"id": "typesafe/bounded", "kind": "native", "api": "typesafe",
+                 "provider": "typesafe", "model": "bounded",
+                 "image_input": {"maxCount": 1, "maxSide": 64}}],
+        chain=["native:typesafe/bounded"])
+    judge = ChainJudge(load_judgment_settings(config), config)
+
+    assert limits_seen == []
+    request = JudgmentRequest(
+        state="x", questions={"q0": NoulQuestion("Is it?")},
+        images=(_image(800, 800),))
+    judge.judge(request)
+    assert limits_seen[0].max_count == 1
+    assert limits_seen[0].max_side == 64
+    assert limits_seen[0].fit is True
+
+    too_many = JudgmentRequest(
+        state="x", questions={"q0": NoulQuestion("Is it?")},
+        images=(_image(), _image()))
+    with pytest.raises(JudgmentUnavailable, match="no compatible judge candidate"):
+        judge.judge(too_many)

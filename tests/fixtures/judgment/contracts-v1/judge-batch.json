@@ -1,15 +1,17 @@
 {
   "request": {
     "items": [
-      {"state": "first", "questions": {"urgent": {"instructions": "Urgent?"}}},
-      {"state": "second", "questions": {"urgent": {"instructions": "Urgent?"}}}
+      {"key": "first", "state": "first"},
+      {"key": "second", "state": "second"}
     ],
+    "questions": {"urgent": {"instructions": "Urgent?"}},
     "min_ok": 1,
     "max_concurrency": 2
   },
   "result": {
     "results": [
       {
+        "key": "first",
         "ok": true,
         "result": {
           "kind": "local",
@@ -22,7 +24,11 @@
           "cached_questions": 0
         }
       },
-      {"ok": false, "error": {"type": "JudgmentUnavailable", "message": "no candidate answered"}}
+      {
+        "key": "second",
+        "ok": false,
+        "error": {"type": "JudgmentUnavailable", "message": "no candidate answered"}
+      }
     ],
     "min_ok_met": true
   }

@@ -81,7 +81,7 @@ def load_decision(name: str = "find") -> DecisionTable:
     """The packaged decision table; a missing file is an explicit JudgmentError."""
     path = PROMPT_DIR / f"{name}.json"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError) as exc:
         raise JudgmentError(f"judgment decision table {name}.json is unreadable: {exc}") from None
     return parse_decision(data)

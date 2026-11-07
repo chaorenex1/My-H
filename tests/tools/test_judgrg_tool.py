@@ -44,7 +44,8 @@ class IntentJudge:
                     1.0)
             else:
                 answers[question_id] = NoulAnswer(0.5)
-        return JudgmentResult(api=self.api, provider="typesafe", model="m", answers=answers)
+        kind = "online" if self.api != "typesafe" else "native"
+        return JudgmentResult(kind=kind, api=self.api, provider="typesafe", model="m", answers=answers)
 
 
 @pytest.fixture
@@ -313,6 +314,7 @@ def test_unexpected_answer_falls_back_to_a_guess():
     class OddJudge(IntentJudge):
         def judge(self, request, *, cancel_event=None, purpose=""):
             return JudgmentResult(
+                kind="native",
                 api="typesafe", provider="typesafe", model="m",
                 answers={"intent": NoulAnswer(0.9)})
 

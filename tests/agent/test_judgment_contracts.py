@@ -15,7 +15,8 @@ from agent.judgment.types import (
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_FIXTURES = _ROOT / "tests/fixtures/judgment/omp-18.14.0"
+_OMP_FIXTURES = _ROOT / "tests/fixtures/judgment/omp-18.14.0"
+_CONTRACT_FIXTURES = _ROOT / "tests/fixtures/judgment/contracts-v1"
 _SCHEMA_PATH = _ROOT / "agent/judgment/schemas/judgment-v1.schema.json"
 
 
@@ -52,28 +53,41 @@ def _schema_validator(name: str):
 
 
 def test_omp_question_file_fixture_replays_question_inference():
-    fixture = _json(_FIXTURES / "question-inference.json")
+    fixture = _json(_OMP_FIXTURES / "question-inference.json")
     questions = questions_from_file(fixture["input"])
 
     assert {key: _question_wire(value) for key, value in questions.items()} == fixture["expected"]
 
 
 def test_judge_and_batch_contract_fixtures_validate():
-    _schema_validator("JudgeRequest").validate(_json(_FIXTURES / "judge-request.json"))
-    _schema_validator("JudgeResult").validate(_json(_FIXTURES / "judge-result.json"))
-    batch = _json(_FIXTURES / "judge-batch.json")
+    jsonschema = pytest.importorskip("jsonschema")
+    _schema_validator("JudgeRequest").validate(_json(_CONTRACT_FIXTURES / "judge-request.json"))
+    _schema_validator("JudgeResult").validate(_json(_CONTRACT_FIXTURES / "judge-result.json"))
+    batch = _json(_CONTRACT_FIXTURES / "judge-batch.json")
     _schema_validator("BatchRequest").validate(batch["request"])
     _schema_validator("BatchResult").validate(batch["result"])
+    result = _json(_CONTRACT_FIXTURES / "judge-result.json")
+    without_kind = {key: value for key, value in result.items() if key != "kind"}
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator("JudgeResult").validate(without_kind)
+    invalid_kind = {**result, "kind": "text"}
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator("JudgeResult").validate(invalid_kind)
 
-
-def test_judge_contract_rejects_ambiguous_question_source_and_unsupported_batch_width():
+def test_judge_contract_rejects_invalid_requests_and_batch_width():
     jsonschema = pytest.importorskip("jsonschema")
-    request = _json(_FIXTURES / "judge-request.json")
+    request = _json(_CONTRACT_FIXTURES / "judge-request.json")
     ambiguous = {**request, "questions_file": "auto-graph"}
     with pytest.raises(jsonschema.ValidationError):
         _schema_validator("JudgeRequest").validate(ambiguous)
+    invalid_state = {**request, "state": 7}
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator("JudgeRequest").validate(invalid_state)
+    blank_instruction = {**request, "questions": {"q": {"instructions": "  "}}}
+    with pytest.raises(jsonschema.ValidationError):
+        _schema_validator("JudgeRequest").validate(blank_instruction)
 
-    batch = _json(_FIXTURES / "judge-batch.json")["request"]
+    batch = _json(_CONTRACT_FIXTURES / "judge-batch.json")["request"]
     over_limit = {**batch, "max_concurrency": 5}
     with pytest.raises(jsonschema.ValidationError):
         _schema_validator("BatchRequest").validate(over_limit)

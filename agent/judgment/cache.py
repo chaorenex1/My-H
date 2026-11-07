@@ -21,6 +21,7 @@ from hermes_constants import get_hermes_home, hermes_home_key
 
 from agent.judgment.types import (
     Answer,
+    BoxQuestion,
     JudgmentImage,
     JudgmentValidationError,
     Question,
@@ -29,6 +30,7 @@ from agent.judgment.types import (
     image_bytes,
     question_type,
 )
+from agent.usage_pricing import CanonicalUsage
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,24 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_runs_purpose ON runs(purpose, created_at);
+
+-- ADR-17 D5: one row per billed native HTTP attempt. Text/local judgments bill the
+-- session ledger only; cache hits write no row.
+CREATE TABLE IF NOT EXISTS usage (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at         INTEGER NOT NULL,
+  api                TEXT NOT NULL,
+  provider           TEXT NOT NULL,
+  model              TEXT NOT NULL,
+  input_tokens       INTEGER NOT NULL,
+  output_tokens      INTEGER NOT NULL,
+  cache_read_tokens  INTEGER NOT NULL,
+  cache_write_tokens INTEGER NOT NULL,
+  reasoning_tokens   INTEGER NOT NULL,
+  cost_usd           REAL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_model ON usage(provider, model, created_at);
 """
 
 
@@ -128,7 +148,7 @@ def state_identity(
 
 
 def _criteria_key(question: Question) -> str:
-    if question_type(question) == "box":
+    if isinstance(question, BoxQuestion):
         # Two box questions can share instructions and differ only by target image.
         return canonical_json({"image": question.image})
     criteria = getattr(question, "criteria", None)
@@ -262,6 +282,69 @@ class JudgmentCache:
                         )
         except sqlite3.Error as exc:
             logger.warning("judgment cache write failed: %s", exc)
+
+    # ── native usage ───────────────────────────────────────────────────────
+
+    def record_usage(
+        self, *, api: str, provider: str, model: str, usage: CanonicalUsage,
+        cost_usd: float | None = None,
+    ) -> None:
+        """One row per billed native HTTP attempt; cache hits and text/local never write."""
+        if not self.available:
+            return
+        try:
+            with self._lock:
+                db = self._db
+                if db is None:
+                    return
+                with db:
+                    db.execute(
+                        "INSERT INTO usage (created_at, api, provider, model, input_tokens, "
+                        " output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, "
+                        " cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            int(time.time()), str(api or ""), str(provider or ""),
+                            str(model or ""), int(usage.input_tokens),
+                            int(usage.output_tokens), int(usage.cache_read_tokens),
+                            int(usage.cache_write_tokens), int(usage.reasoning_tokens),
+                            None if cost_usd is None else float(cost_usd),
+                        ),
+                    )
+        except sqlite3.Error as exc:
+            logger.warning("judgment usage write failed: %s", exc)
+
+    def recent_usage(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Newest billed native attempts first (P5 panel/doctor read this)."""
+        if not self.available:
+            return []
+        try:
+            with self._lock:
+                db = self._db
+                if db is None:
+                    return []
+                rows = db.execute(
+                    "SELECT created_at, api, provider, model, input_tokens, output_tokens, "
+                    "cache_read_tokens, cache_write_tokens, reasoning_tokens, cost_usd "
+                    "FROM usage ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (max(1, int(limit)),),
+                ).fetchall()
+        except sqlite3.Error:
+            return []
+        keys = ("created_at", "api", "provider", "model", "input_tokens", "output_tokens",
+                "cache_read_tokens", "cache_write_tokens", "reasoning_tokens", "cost_usd")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def usage_count(self) -> int:
+        if not self.available:
+            return 0
+        try:
+            with self._lock:
+                db = self._db
+                if db is None:
+                    return 0
+                return int(db.execute("SELECT COUNT(*) FROM usage").fetchone()[0])
+        except sqlite3.Error:
+            return 0
 
     # ── run audit ──────────────────────────────────────────────────────────
 

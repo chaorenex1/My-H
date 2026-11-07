@@ -20,16 +20,17 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, TypeAlias
 
 from agent.judgment.cache import JudgmentCache
 from agent.judgment.config import JudgmentSettings
-from agent.judgment.images import FittedImage, WHOLE_IMAGE, fit_images, unfit_box
+from agent.judgment.images import FittedImage, ImageLimits, WHOLE_IMAGE, fit_images, unfit_box
 from agent.judgment.types import (
     Answer,
     BoxAnswer,
     BoxQuestion,
     JudgmentAborted,
+    JudgmentError,
     JudgmentAccountRejected,
     JudgmentAPIError,
     JudgmentRequest,
@@ -75,9 +76,17 @@ class _AbortSignal:
             time.sleep(min(0.05, remaining))
 
 
+#: A caller cancel event, this call's shard-failure signal, or both combined.
+CancelSignal: TypeAlias = "threading.Event | _AbortSignal | None"
+
+
 @dataclass(frozen=True)
 class NativeRoute:
-    """One configured native candidate, credentials already resolved."""
+    """One configured native candidate, credentials already resolved.
+
+    ``model`` is the configured id used by the cache and ledger; ``request_model_id`` is what
+    the wire asks the endpoint for (ADR-17 D5), falling back to ``model`` when unset.
+    """
 
     api: str
     provider: str
@@ -86,14 +95,22 @@ class NativeRoute:
     api_key: str
     timeout_ms: int = 10_000
     max_questions: int = 0
+    request_model_id: str = ""
+    #: Catalog ``image_input`` bounds; ``None`` inherits the wire's limits.
+    image_limits: ImageLimits | None = None
 
     @property
     def label(self) -> str:
         return f"{self.api}:{self.provider}/{self.model}"
 
     @property
+    def request_model(self) -> str:
+        return self.request_model_id or self.model
+
+    @property
     def cache_key(self) -> str:
-        return f"{self.api}:{self.provider}/{self.model}"
+        # omp keys the answer cache by provider/model, never by wire dialect.
+        return f"{self.provider}/{self.model}"
 
 
 def redact_state_for_egress(state: Any) -> Any:
@@ -132,7 +149,7 @@ def _backoff_seconds(attempt: int, headers: Any) -> float:
     return min(BACKOFF_BASE_S * (2 ** attempt), BACKOFF_MAX_S)
 
 
-def _sleep_or_abort(seconds: float, cancel_event: threading.Event | None) -> None:
+def _sleep_or_abort(seconds: float, cancel_event: CancelSignal) -> None:
     if cancel_event is not None:
         if cancel_event.wait(seconds):
             raise JudgmentAborted("judgment aborted")
@@ -182,8 +199,12 @@ class NativeJudge:
         self.cache = cache
         self.wire: Wire = WIRES[route.api]
         self.label = route.label
-        self.supports_images = self.wire.images is not None and settings.images
+        # Catalog ``image_input`` bounds override the wire's; ``None`` keeps the wire's.
+        self.image_limits = route.image_limits if route.image_limits is not None else self.wire.images
+        self.supports_images = self.image_limits is not None and settings.images
         self.supports_boxes = self.supports_images and self.wire.boxes
+        #: Chain hook: billed usage from shards that failed after a sibling raised.
+        self.on_partial_usage: Callable[[CanonicalUsage, float | None], None] | None = None
 
     def judge(
         self,
@@ -191,11 +212,14 @@ class NativeJudge:
         *,
         cancel_event: threading.Event | None = None,
         purpose: str = "",
+        budget_usd: float | None = None,
     ) -> JudgmentResult:
         validate_request(
-            request, allow_images=self.supports_images, allow_box=self.supports_boxes)
+            request, allow_images=self.supports_images, allow_box=self.supports_boxes,
+            image_max_bytes=self.settings.assets.max_bytes,
+            allow_local_images=self.settings.assets.allow_local)
         state = redact_state_for_egress(request.state) if self.settings.redact_state else request.state
-        fitted = fit_images(request.images, self.wire.images) if request.images else ()
+        fitted = fit_images(request.images, self.image_limits) if request.images else ()
         images = tuple(item.image for item in fitted)
         cached = (
             self.cache.lookup(
@@ -209,11 +233,12 @@ class NativeJudge:
         }
         if not pending:
             return JudgmentResult(
+                kind="native",
                 api=self.route.api, provider=self.route.provider, model=self.route.model,
                 answers=cached, cached_questions=len(cached), cost_usd=0.0)
 
         answers, usage, cost, model = self._judge_questions(
-            state, pending, images, cancel_event)
+            state, pending, images, cancel_event, self.on_partial_usage)
         answers = _source_answers(pending, answers, fitted)
         if self.cache is not None:
             self.cache.record(
@@ -223,6 +248,7 @@ class NativeJudge:
         merged = dict(cached)
         merged.update(answers)
         return JudgmentResult(
+            kind="native",
             api=self.route.api,
             provider=self.route.provider,
             model=model or self.route.model,
@@ -244,15 +270,24 @@ class NativeJudge:
     def _judge_questions(
         self, state: Any, questions: Mapping[str, Any], images: tuple[Any, ...],
         cancel_event: threading.Event | None,
+        on_partial_usage: Callable[[CanonicalUsage, float | None], None] | None = None,
     ) -> tuple[dict[str, Any], CanonicalUsage, float | None, str]:
         """Answer every pending question, sharding when the endpoint caps questions.
 
         Any shard failure stops the remaining shards; shards that already answered stay billed
         (their ledger rows are written per shard) but nothing is cached for a partial result.
+        Their aggregate usage is reported through ``on_partial_usage`` so the caller's cost gate
+        sees spend that has no result to price.
         """
         shards = self._shards(questions)
         if len(shards) == 1:
-            return self._judge_shard(state, shards[0], images, cancel_event)
+            try:
+                return self._judge_shard(state, shards[0], images, cancel_event)
+            except JudgmentError as exc:
+                usage = getattr(exc, "usage", None)
+                if on_partial_usage is not None and usage is not None:
+                    self._report_partial(on_partial_usage, usage)
+                raise
 
         shard_cancel = threading.Event()
         signal = _AbortSignal(cancel_event, shard_cancel) if cancel_event is not None else shard_cancel
@@ -283,37 +318,54 @@ class NativeJudge:
             for future in futures:
                 future.result()
 
-        if errors:
-            raise errors[0]
         merged_answers: dict[str, Any] = {}
-        input_tokens = output_tokens = 0
+        input_tokens = output_tokens = requests = 0
         costs: list[float] = []
         model = ""
+        succeeded = 0
         for result in results:
             if result is None:  # pragma: no cover - every shard either answered or raised
                 continue
             shard_answers, shard_usage, shard_cost, shard_model = result
+            succeeded += 1
             merged_answers.update(shard_answers)
             input_tokens += shard_usage.input_tokens
             output_tokens += shard_usage.output_tokens
+            requests += shard_usage.request_count
             if shard_cost is not None:
                 costs.append(shard_cost)
-            model = shard_model or model
+            if shard_model and not model:
+                model = shard_model
+        partial_usage = CanonicalUsage(
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            request_count=requests)
+        if errors:
+            if on_partial_usage is not None and succeeded:
+                self._report_partial(
+                    on_partial_usage, partial_usage,
+                    sum(costs) if len(costs) == succeeded else None)
+            raise errors[0]
         total_cost = sum(costs) if len(costs) == len(shards) else None
-        return (
-            merged_answers,
-            CanonicalUsage(input_tokens=input_tokens, output_tokens=output_tokens),
-            total_cost,
-            model,
-        )
+        return merged_answers, partial_usage, total_cost, model
+
+    def _report_partial(
+        self, callback: Callable[[CanonicalUsage, float | None], None],
+        usage: CanonicalUsage, cost: float | None = None,
+    ) -> None:
+        """Report billed usage from a failed judgment; a callback bug never masks the failure."""
+        try:
+            callback(usage, cost if cost is not None else _cost_usd(self.route, usage))
+        except Exception:  # health: allow BLE001 -- accounting is best-effort on the failure path
+            logger.debug("judgment partial usage callback failed (non-fatal)", exc_info=True)
 
     def _judge_shard(
         self, state: Any, questions: Mapping[str, Any], images: tuple[Any, ...],
-        cancel_event: threading.Event | None,
+        cancel_event: CancelSignal,
     ) -> tuple[dict[str, Any], CanonicalUsage, float | None, str]:
         fresh_request = JudgmentRequest(state=state, questions=dict(questions), images=images)
         try:
-            body = json.dumps(self.wire.encode(fresh_request, self.route.model), ensure_ascii=False)
+            body = json.dumps(
+                self.wire.encode(fresh_request, self.route.request_model), ensure_ascii=False)
         except (TypeError, ValueError) as exc:
             raise JudgmentValidationError(
                 f"judgment state/questions are not JSON-serializable: {exc}") from None
@@ -325,16 +377,23 @@ class NativeJudge:
             cost = _cost_usd(self.route, usage)
         # A 2xx response is billed even when its answers later fail validation.
         self._record_ledger(usage, cost)
-        answers: dict[str, Any] = {}
-        for question_id, question in questions.items():
-            raw = decoded.answers.get(question_id)
-            if raw is None:
-                if question_id in decoded.refused:
+        self._record_usage(usage, cost)
+        try:
+            answers: dict[str, Any] = {}
+            for question_id, question in questions.items():
+                raw = decoded.answers.get(question_id)
+                if raw is None:
+                    if question_id in decoded.refused:
+                        raise JudgmentResponseError(
+                            f"{self.label} refused to answer question {question_id!r}")
                     raise JudgmentResponseError(
-                        f"{self.label} refused to answer question {question_id!r}")
-                raise JudgmentResponseError(
-                    f"{self.label} response is missing an answer for question {question_id!r}")
-            answers[question_id] = coerce_wire_answer(question_id, question, raw)
+                        f"{self.label} response is missing an answer for question {question_id!r}")
+                answers[question_id] = coerce_wire_answer(question_id, question, raw)
+        except JudgmentError as exc:
+            # The HTTP attempt was billed; keep its usage on the failure so a failed shard
+            # still reaches the caller's cost gate.
+            exc.usage = usage
+            raise
         return answers, usage, cost, decoded.model
 
     def _headers(self, *, has_images: bool = False) -> dict[str, str]:
@@ -347,9 +406,9 @@ class NativeJudge:
             headers.update(self.wire.image_headers)
         return headers
 
-    def _post(self, body: str, cancel_event: threading.Event | None,
+    def _post(self, body: str, cancel_event: CancelSignal,
               *, has_images: bool = False) -> Any:
-        url = self.wire.target(self.route.base_url, self.route.model)
+        url = self.wire.target(self.route.base_url, self.route.request_model)
         timeout_s = max(0.1, self.route.timeout_ms / 1000.0)
         last_transport: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
@@ -407,6 +466,20 @@ class NativeJudge:
         except OSError:
             raw = b""
         return redact_for_egress(raw.decode("utf-8", "replace"))
+
+    def _record_usage(self, usage: CanonicalUsage, cost: float | None) -> None:
+        """One ``usage`` row per billed native HTTP attempt (ADR-17 D5); best-effort."""
+        if self.cache is None or not self.settings.cache_usage:
+            return
+        if not (usage.input_tokens or usage.output_tokens or usage.cache_read_tokens
+                or usage.cache_write_tokens or usage.reasoning_tokens):
+            return
+        try:
+            self.cache.record_usage(
+                api=self.route.api, provider=self.route.provider, model=self.route.model,
+                usage=usage, cost_usd=cost)
+        except Exception:  # health: allow BLE001 -- the usage table must never fail a judgment
+            logger.debug("judgment usage row recording failed (non-fatal)", exc_info=True)
 
     def _record_ledger(self, usage: CanonicalUsage, cost: float | None) -> None:
         if not (usage.input_tokens or usage.output_tokens):

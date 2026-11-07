@@ -30,8 +30,10 @@ logger = logging.getLogger(__name__)
 
 #: A single file digest above this size is skipped, never truncated (ADR-6 D4).
 MAX_DIGEST_BYTES = 1_048_576
-#: Jev's ~33k branch limit leaves room for the request template; ~2 chars/token on dense code.
-JUDGED_CONTENT_MAX_CHARS = 56_000
+#: Jev rejects a branch past ~33k tokens; 32k is the omp budget. Hermes has no Jev
+#: tokenizer yet, so a conservative 24k-character bound stands in for it (ADR-17 P5).
+JUDGED_CONTENT_MAX_TOKENS = 32_000
+JUDGED_CONTENT_MAX_CHARS = 24_000
 JUDGED_RULE_THRESHOLD = 0.7
 JUDGE_MODES = ("auto", "on", "off")
 INTERRUPT_MODES = ("always", "prose-only", "tool-only", "never")

@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- ADR-17 P3/P4: ``tool_choice`` threading and judgment route metadata at existing auxiliary call sites; the added lines are keyword-only parameters at existing chokepoints
 """Shared auxiliary client router for side tasks (compression, search, vision, ...).
 
 Text auto chain: main provider+model → OpenRouter → Nous Portal → custom endpoint →
@@ -841,8 +842,9 @@ _API_KEY_PROVIDER_AUX_MODELS_FALLBACK: dict[str, str] = {
 # Legacy alias for callers not yet using _get_aux_model_for_provider().
 _API_KEY_PROVIDER_AUX_MODELS: dict[str, str] = _API_KEY_PROVIDER_AUX_MODELS_FALLBACK
 
-# Tasks that may opt into ``auxiliary.<task>.prefer_fast_model``.
-_FAST_MODEL_TASKS: frozenset = frozenset({"title_generation"})
+# Tasks that may opt into ``auxiliary.<task>.prefer_fast_model``. The judgment chain's
+# ``tiny`` role is a fast-lane classifier by definition (ADR-17 D4).
+_FAST_MODEL_TASKS: frozenset = frozenset({"title_generation", "tiny"})
 
 
 def _task_prefers_fast_model(task: Optional[str]) -> bool:
@@ -2603,12 +2605,16 @@ def _set_relay_auxiliary_route(provider: str | None, model: str | None, api_mode
 
 
 def _record_route_info(
-    route_info: Optional[dict[str, str]], provider: Optional[str], model: Optional[str]
+    route_info: Optional[dict[str, str]], provider: Optional[str], model: Optional[str],
+    api_mode: Optional[str] = None,
 ) -> None:
     """Expose the concrete route selected for one auxiliary call."""
-    if route_info is not None:
-        route_info["provider"] = provider or "auto"
-        route_info["model"] = model or "default"
+    if route_info is None:
+        return
+    route_info["provider"] = provider or "auto"
+    route_info["model"] = model or "default"
+    if api_mode:
+        route_info["api_mode"] = str(api_mode)
 
 
 def _relay_auxiliary_metadata(
@@ -3591,6 +3597,7 @@ def _prepare_same_provider_retry(
     max_tokens: Optional[int], tools: Optional[list], effective_timeout: float,
     effective_extra_body: dict, reasoning_config: Optional[dict], async_mode: bool,
     extra_headers: Optional[dict[str, str]] = None, repairs: tuple = (),
+    tool_choice: dict | str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Rebuild (client, request kwargs) for a same-provider retry after credential recovery. ``repairs``: the
     parameter rungs' strips the failed request already carried, re-applied so a stripped field stays stripped."""
@@ -3614,7 +3621,7 @@ def _prepare_same_provider_retry(
         effective_provider or resolved_provider, retry_model or final_model, messages,
         temperature=temperature, max_tokens=max_tokens, tools=tools, timeout=effective_timeout,
         extra_body=effective_extra_body, reasoning_config=reasoning_config,
-        base_url=retry_base or resolved_base_url, task=task,
+        base_url=retry_base or resolved_base_url, task=task, tool_choice=tool_choice,
     )
     # Preserve per-request attribution headers (a profile's ``request_headers``) across the rebuilt-client
     # retry: dropping them would let a recovery retry silently lose capability gating (#60293).
@@ -3822,6 +3829,7 @@ def _fallback_request_kwargs(
     tools: Optional[list], temperature: Optional[float], max_tokens: Optional[int],
     effective_timeout: float, effective_extra_body: dict, reasoning_config: Optional[dict],
     fallback_entry: dict, task_config: dict, apply_fast_lane: bool,
+    tool_choice: dict | str | None = None,
 ) -> dict[str, Any]:
     """Build request kwargs for one fallback destination (cache-section replan + fast-lane cap)."""
     fallback_max_tokens, fallback_extra_body = max_tokens, effective_extra_body
@@ -3836,7 +3844,8 @@ def _fallback_request_kwargs(
     fb_kwargs = _build_call_kwargs(
         destination.provider, destination.model, fallback_messages,
         temperature=temperature, max_tokens=fallback_max_tokens, tools=fallback_tools, timeout=effective_timeout,
-        extra_body=fallback_extra_body, reasoning_config=reasoning_config, base_url=destination.base_url, task=task)
+        extra_body=fallback_extra_body, reasoning_config=reasoning_config, base_url=destination.base_url, task=task,
+        tool_choice=tool_choice)
     return fb_kwargs
 
 
@@ -3952,6 +3961,7 @@ def _call_fallback_candidate_sync(
     fb_client: Any, fb_model: Optional[str], fb_label: str, *, task: Optional[str], messages: list,
     temperature: Optional[float], max_tokens: Optional[int], tools: Optional[list],
     effective_timeout: float, effective_extra_body: dict, reasoning_config: Optional[dict],
+    tool_choice: dict | str | None = None,
 ) -> Optional[Any]:
     """Call one fallback candidate with stale-credential recovery (``_fallback_candidate_ladder``).
 
@@ -3963,7 +3973,7 @@ def _call_fallback_candidate_sync(
         fb_client, fb_model, fb_label, task=task, effective_timeout=effective_timeout,
         apply_fast_lane=True, messages=messages, tools=tools, temperature=temperature,
         max_tokens=max_tokens, effective_extra_body=effective_extra_body,
-        reasoning_config=reasoning_config,
+        reasoning_config=reasoning_config, tool_choice=tool_choice,
     )
     provider = _candidate_classification_provider(fb_client, fb_model, fb_label, task)
 
@@ -3994,13 +4004,14 @@ async def _call_fallback_candidate_async(
     fb_client: Any, fb_model: Optional[str], fb_label: str, *, task: Optional[str], messages: list,
     temperature: Optional[float], max_tokens: Optional[int], tools: Optional[list],
     effective_timeout: float, effective_extra_body: dict, reasoning_config: Optional[dict], classify_as: str,
+    tool_choice: dict | str | None = None,
 ) -> Optional[Any]:
     """Async mirror of :func:`_call_fallback_candidate_sync` (no fast-lane cap on this wire)."""
     destination, fb_kwargs, rebuild = _plan_fallback_candidate(
         fb_client, fb_model, fb_label, task=task, effective_timeout=effective_timeout,
         apply_fast_lane=False, messages=messages, tools=tools, temperature=temperature,
         max_tokens=max_tokens, effective_extra_body=effective_extra_body,
-        reasoning_config=reasoning_config,
+        reasoning_config=reasoning_config, tool_choice=tool_choice,
     )
     provider = classify_as
 
@@ -6566,6 +6577,7 @@ def _build_call_kwargs(
     extra_body: Optional[dict] = None, reasoning_config: Optional[dict] = None,
     base_url: Optional[str] = None, task: Optional[str] = None,
     no_progress_timeout: Optional[float] = None,
+    tool_choice: dict | str | None = None,
 ) -> dict:
     """Build kwargs for .chat.completions.create() with model/provider adjustments.
     ``no_progress_timeout`` is a Codex-Responses-only extra (consumed by
@@ -6592,6 +6604,8 @@ def _build_call_kwargs(
         kwargs.update(auxiliary_max_tokens_param(max_tokens, model=model))  # picks max_completion_tokens where needed
     if tools:
         kwargs["tools"] = _dedupe_tool_names(tools, provider, model)
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
     # Provider profiles are the source of truth for reasoning wire shapes (top-level, nested body,
     # or extra_body.reasoning); providers without a reasoning-aware profile keep the generic
     # ``extra_body.reasoning`` fallback. Clamp Hermes-internal levels (``ultra``) to the
@@ -7251,6 +7265,7 @@ def _resolve_call_client(
     api_key: Optional[str], resolved_provider: str, resolved_model: Optional[str],
     resolved_base_url: Optional[str], resolved_api_key: Optional[str],
     resolved_api_mode: Optional[str], main_runtime: Optional[dict[str, Any]], async_mode: bool,
+    fallback: bool = True,
 ) -> _ResolvedAuxRoute:
     """Resolve the client for one aux call: vision chain, or cached text client with the
     explicit-provider fallback_chain / auto-chain rescue; RuntimeError when nothing is configured."""
@@ -7261,7 +7276,7 @@ def _resolve_call_client(
             model=resolved_model or model, base_url=resolved_base_url or base_url,
             api_key=resolved_api_key or api_key, async_mode=async_mode, main_runtime=main_runtime,
         )
-        if client is None and resolved_provider != "auto" and not resolved_base_url:
+        if client is None and resolved_provider != "auto" and not resolved_base_url and fallback:
             logger.warning("Vision provider %s unavailable, falling back to auto vision backends",
                            resolved_provider)
             effective_provider, client, final_model = resolve_vision_provider_client(
@@ -7280,21 +7295,23 @@ def _resolve_call_client(
             # raising (fallback entries may use OAuth / credential-pool auth).
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                fb_client, fb_model, fb_label = _try_configured_fallback_for_unavailable_client(
-                    task, _explicit)
-                if fb_client is None:
+                if fallback:
+                    fb_client, fb_model, fb_label = _try_configured_fallback_for_unavailable_client(
+                        task, _explicit)
+                    if fb_client is not None:
+                        client, final_model = fb_client, fb_model
+                        if async_mode:
+                            client, final_model = _to_async_client(
+                                fb_client, fb_model or "", is_vision=(task == "vision"))
+                        resolved_provider = fb_label or resolved_provider
+                        effective_provider = resolved_provider
+                if client is None:
                     nous_detail = nous_credential_failure_detail() if _explicit == "nous" else None
                     raise AuxiliaryClientUnavailable(
                         nous_detail or missing_provider_credentials_message(_explicit))
-                client, final_model = fb_client, fb_model
-                if async_mode:
-                    client, final_model = _to_async_client(
-                        fb_client, fb_model or "", is_vision=(task == "vision"))
-                resolved_provider = fb_label or resolved_provider
-                effective_provider = resolved_provider
             # Auto/custom with no credentials: walk the full auto chain (not just OpenRouter).
             # model=None so each provider uses its own default.
-            if client is None and not resolved_base_url:
+            if client is None and not resolved_base_url and fallback:
                 logger.info("Auxiliary %s: provider %s unavailable, trying auto-detection chain",
                             task or "call", resolved_provider)
                 client, final_model = _get_cached_client(
@@ -7328,6 +7345,7 @@ def _prepare_aux_request(
     timeout: Optional[float], extra_body: Optional[dict], reasoning_config: Optional[dict],
     extra_headers: Optional[dict[str, str]], api_mode: Optional[str],
     route_info: Optional[dict[str, str]], async_mode: bool,
+    tool_choice: dict | str | None = None, fallback: bool = True,
 ) -> _PreparedAuxRequest:
     """Shared head of call_llm/async_call_llm: resolve route + client, publish it, build request kwargs.
     Sync-only: compression fast lane, per-request ``extra_headers``, and ``base_info`` falling
@@ -7343,6 +7361,7 @@ def _prepare_aux_request(
         resolved_provider=resolved_provider, resolved_model=resolved_model,
         resolved_base_url=resolved_base_url, resolved_api_key=resolved_api_key,
         resolved_api_mode=resolved_api_mode, main_runtime=main_runtime, async_mode=async_mode,
+        fallback=fallback,
     )
     effective_timeout = _effective_aux_timeout(task, timeout)
     # Codex-Responses-only: real SDK clients reject an unrecognized ``no_progress_timeout``
@@ -7361,7 +7380,8 @@ def _prepare_aux_request(
             extra_body=effective_extra_body,
         )
     _set_relay_auxiliary_route(request_provider, final_model, resolved_api_mode)
-    _record_route_info(route_info, _fallback_provider_from_label(request_provider), final_model)
+    _record_route_info(route_info, _fallback_provider_from_label(request_provider), final_model,
+                       resolved_api_mode or "chat_completions")
     if async_mode:
         base_info = str(getattr(client, "base_url", "") or "")
     else:
@@ -7374,7 +7394,8 @@ def _prepare_aux_request(
     # auto-detected routes (api.moonshot.ai vs api.kimi.com/coding).
     kwargs = _build_call_kwargs(
         request_provider, final_model, messages, temperature=temperature, max_tokens=max_tokens,
-        tools=tools, timeout=effective_timeout, extra_body=effective_extra_body,
+        tools=tools, tool_choice=tool_choice, timeout=effective_timeout,
+        extra_body=effective_extra_body,
         reasoning_config=reasoning_config, base_url=base_info or resolved_base_url, task=task,
         no_progress_timeout=no_progress_timeout)
     if extra_headers:
@@ -7903,10 +7924,11 @@ def call_llm(
     task: str | None = None, *, provider: str | None = None, model: str | None = None, base_url: str | None = None,
     api_key: str | None = None, main_runtime: Optional[dict[str, Any]] = None, messages: list,
     temperature: Optional[float] = None, max_tokens: int | None = None, tools: list | None = None,
+    tool_choice: dict | str | None = None,
     timeout: float | None = None, extra_body: dict | None = None, reasoning_config: Optional[dict] = None,
     extra_headers: Optional[dict[str, str]] = None, api_mode: str | None = None, stream: bool = False,
     stream_options: dict | None = None, route_info: Optional[dict[str, str]] = None,
-    latency_info: Optional[dict[str, int]] = None,
+    latency_info: Optional[dict[str, int]] = None, fallback: bool = True,
 ) -> Any:
     """Run an auxiliary LLM request, applying the configured task limit."""
     queue_started_at = time.monotonic()
@@ -7933,9 +7955,10 @@ def call_llm(
             response = _call_llm_impl(
                 task=task, provider=provider, model=model, base_url=base_url, api_key=api_key,
                 main_runtime=main_runtime, messages=messages, temperature=temperature,
-                max_tokens=max_tokens, tools=tools, timeout=timeout, extra_body=extra_body,
-                reasoning_config=reasoning_config, extra_headers=extra_headers, api_mode=api_mode,
-                stream=stream, stream_options=stream_options, route_info=route_info,
+                max_tokens=max_tokens, tools=tools, tool_choice=tool_choice, timeout=timeout,
+                extra_body=extra_body, reasoning_config=reasoning_config,
+                extra_headers=extra_headers, api_mode=api_mode, stream=stream,
+                stream_options=stream_options, route_info=route_info, fallback=fallback,
             )
         if stream and semaphore is not None:
             stream_semaphore = semaphore
@@ -7968,7 +7991,8 @@ def _plan_aux_call(
     messages: list, temperature: Optional[float], max_tokens: Optional[int], tools: Optional[list],
     timeout: Optional[float], extra_body: Optional[dict], reasoning_config: Optional[dict],
     extra_headers: Optional[dict[str, str]], api_mode: Optional[str],
-    route_info: Optional[dict[str, str]],
+    route_info: Optional[dict[str, str]], tool_choice: dict | str | None = None,
+    fallback: bool = True,
 ) -> tuple[_PreparedAuxRequest, dict[str, Any], dict[str, Any]]:
     """Shared head of both call impls: prepare the request and bundle the kwargs the recovery
     drivers pass to ``_retry_same_provider_*`` / ``_call_fallback_candidate_*``. One immutable
@@ -7981,10 +8005,11 @@ def _plan_aux_call(
         max_tokens=max_tokens, tools=tools, timeout=timeout, extra_body=extra_body,
         reasoning_config=reasoning_config, extra_headers=extra_headers,
         api_mode=api_mode, route_info=route_info, async_mode=async_mode,
+        tool_choice=tool_choice, fallback=fallback,
     )
     candidate_kwargs = dict(
         task=task, messages=messages, temperature=temperature, max_tokens=max_tokens,
-        tools=tools, effective_timeout=req.effective_timeout,
+        tools=tools, tool_choice=tool_choice, effective_timeout=req.effective_timeout,
         effective_extra_body=req.effective_extra_body, reasoning_config=reasoning_config,
     )
     retry_kwargs = dict(
@@ -8044,21 +8069,26 @@ def _call_llm_impl(
     task: str | None = None, *, provider: str | None = None, model: str | None = None, base_url: str | None = None,
     api_key: str | None = None, main_runtime: Optional[dict[str, Any]] = None, messages: list,
     temperature: Optional[float] = None, max_tokens: int | None = None, tools: list | None = None,
+    tool_choice: dict | str | None = None,
     timeout: float | None = None, extra_body: dict | None = None, reasoning_config: Optional[dict] = None,
     extra_headers: Optional[dict[str, str]] = None, api_mode: str | None = None, stream: bool = False,
     stream_options: dict | None = None, route_info: Optional[dict[str, str]] = None,
+    fallback: bool = True,
 ) -> Any:
     """Centralized synchronous LLM call: resolve provider/model, auth, kwargs, fallbacks.
     task: aux task whose provider:model comes from config (ignored if provider set); api_mode
     overrides task config; timeout=None reads auxiliary.{task}.timeout; extra_headers override
     client defaults. stream=True returns the raw SDK stream (caller consumes/falls back)
-    instead of a validated response. RuntimeError if no provider is configured."""
+    instead of a validated response. fallback=False keeps the fixed route: an unavailable
+    client or a failed call raises instead of walking credential/auto/fallback ladders.
+    RuntimeError if no provider is configured."""
     req, retry_kwargs, candidate_kwargs = _plan_aux_call(
         task, async_mode=False, provider=provider, model=model, base_url=base_url,
         api_key=api_key, main_runtime=main_runtime, messages=messages,
         temperature=temperature, max_tokens=max_tokens, tools=tools, timeout=timeout,
         extra_body=extra_body, reasoning_config=reasoning_config,
         extra_headers=extra_headers, api_mode=api_mode, route_info=route_info,
+        tool_choice=tool_choice, fallback=fallback,
     )
     client, kwargs, request_provider = req.client, req.kwargs, req.request_provider
     # Streaming path (MoA aggregator): return the raw SDK stream, skipping validation and

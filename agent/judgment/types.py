@@ -13,8 +13,9 @@ import binascii
 import re
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Protocol, Sequence, TypeAlias, runtime_checkable
+from typing import Any, Literal, Mapping, Protocol, Sequence, TypeAlias, runtime_checkable
 
 from agent.usage_pricing import CanonicalUsage
 
@@ -23,7 +24,14 @@ JudgmentState: TypeAlias = str | dict[str, JsonValue] | list[JsonValue]
 
 
 class JudgmentError(Exception):
-    """Base class for every judgment failure."""
+    """Base class for every judgment failure.
+
+    ``usage`` carries the billed usage of attempts that already reached a provider when a
+    backend fails (a parse retry budget is still billed); the chain records it against the
+    cost gate. Native failures account per shard in the session ledger instead.
+    """
+
+    usage: CanonicalUsage | None = None
 
 
 class JudgmentValidationError(JudgmentError):
@@ -42,6 +50,10 @@ class JudgmentParseError(JudgmentError):
 
 class JudgmentUnavailable(JudgmentError):
     """No candidate could answer: no credential, no server, or every candidate failed."""
+
+
+class JudgmentBudgetExceeded(JudgmentError):
+    """The configured per-call or per-session judgment cap refuses the next attempt."""
 
 
 class JudgmentAborted(JudgmentError):
@@ -73,18 +85,75 @@ class JudgmentTransportError(JudgmentError):
     """A native request failed in transport; the candidate is unavailable, not the caller's fault."""
 
 
+#: Largest local asset a request may reference (ADR-17 D8 ``images.assets.max_bytes``).
+MAX_IMAGE_ASSET_BYTES = 16 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class JudgmentImage:
-    """An image sent alongside the state for image-capable candidates (ADR-11 P4)."""
+    """An image sent alongside the state for image-capable candidates (ADR-17 P4).
 
-    data: str  # base64, without a data: prefix
-    mime_type: str
+    Exactly one of ``data`` (base64, no data: prefix) or ``path`` (a local file under the
+    working directory or ``$HERMES_HOME``) identifies the bytes. Remote URLs are never
+    fetched: they would turn a judgment request into an SSRF primitive.
+    """
+
+    data: str = ""
+    mime_type: str = ""
+    path: str = ""
     detail: str | None = None
 
 
 #: RFC 6838 restricted name after ``image/``; ``#`` never survives a data URL.
 _IMAGE_MIME = re.compile(r"^image/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$", re.IGNORECASE)
 _IMAGE_DETAILS = frozenset({"auto", "low", "high", "original"})
+_URL_LIKE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _local_asset_roots() -> tuple[Path, ...]:
+    from hermes_constants import get_hermes_home
+
+    roots: list[Path] = []
+    for root in (Path.cwd(), get_hermes_home()):
+        try:
+            roots.append(Path(root).resolve())
+        except OSError:
+            continue
+    return tuple(roots)
+
+
+def _read_local_asset(raw_path: str, max_bytes: int) -> bytes:
+    """Read a path-backed asset, confined to cwd / ``$HERMES_HOME`` and the byte cap."""
+    text = str(raw_path or "").strip()
+    if not text:
+        raise JudgmentValidationError("judgment image path is empty")
+    if _URL_LIKE.match(text):
+        raise JudgmentValidationError(
+            "judgment images never fetch remote URLs; download the file and pass its path")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise JudgmentValidationError(f"cannot read judgment image {text!r}: {exc}") from None
+    if not resolved.is_file():
+        raise JudgmentValidationError(f"judgment image path is not a file: {text!r}")
+    roots = _local_asset_roots()
+    if roots and not any(resolved == root or root in resolved.parents for root in roots):
+        raise JudgmentValidationError(
+            f"judgment image {text!r} is outside the working directory and $HERMES_HOME")
+    try:
+        size = resolved.stat().st_size
+    except OSError as exc:
+        raise JudgmentValidationError(f"cannot stat judgment image {text!r}: {exc}") from None
+    if max_bytes and size > max_bytes:
+        raise JudgmentValidationError(
+            f"judgment image {text!r} is {size} bytes; the limit is {max_bytes}")
+    try:
+        return resolved.read_bytes()
+    except OSError as exc:
+        raise JudgmentValidationError(f"cannot read judgment image {text!r}: {exc}") from None
 
 
 def normalized_image_mime(mime_type: Any) -> str:
@@ -95,9 +164,17 @@ def normalized_image_mime(mime_type: Any) -> str:
     return mime
 
 
-def image_bytes(image: JudgmentImage) -> bytes:
-    """Decoded bytes of ``image``; the base64 is validated, padded or not."""
+def image_bytes(image: JudgmentImage, *, max_bytes: int = MAX_IMAGE_ASSET_BYTES) -> bytes:
+    """Resolve ``image`` to bytes: inline base64, or a local path under cwd / ``$HERMES_HOME``."""
+    if not isinstance(image, JudgmentImage):
+        raise JudgmentValidationError(
+            f"judgment image must be a JudgmentImage (got {type(image).__name__})")
     data = "".join(str(image.data or "").split())
+    path = str(image.path or "").strip()
+    if data and path:
+        raise JudgmentValidationError("judgment image takes either data or path, not both")
+    if path:
+        return _read_local_asset(path, max_bytes)
     if not data or len(data) % 4 == 1:
         raise JudgmentValidationError("invalid base64 image data")
     try:
@@ -106,6 +183,9 @@ def image_bytes(image: JudgmentImage) -> bytes:
         raise JudgmentValidationError("invalid base64 image data") from None
     if not raw:
         raise JudgmentValidationError("invalid base64 image data")
+    if max_bytes and len(raw) > max_bytes:
+        raise JudgmentValidationError(
+            f"judgment image is {len(raw)} bytes; the limit is {max_bytes}")
     return raw
 
 
@@ -115,13 +195,18 @@ def image_data_url(image: JudgmentImage) -> str:
     return f"data:{mime};base64,{base64.b64encode(image_bytes(image)).decode('ascii')}"
 
 
-def validate_image(image: JudgmentImage, index: int = 0) -> None:
+def validate_image(image: JudgmentImage, index: int = 0, *,
+                   max_bytes: int = MAX_IMAGE_ASSET_BYTES,
+                   allow_local: bool = True) -> None:
     """Validate one request image before any candidate sees it."""
     if not isinstance(image, JudgmentImage):
         raise JudgmentValidationError(
             f"judgment image {index} must be a JudgmentImage (got {type(image).__name__})")
+    if str(image.path or "").strip() and not allow_local:
+        raise JudgmentValidationError(
+            "judgment path assets are disabled (judgment.images.assets.allow_local=false)")
     normalized_image_mime(image.mime_type)
-    image_bytes(image)
+    image_bytes(image, max_bytes=max_bytes)
     if image.detail is not None and image.detail not in _IMAGE_DETAILS:
         raise JudgmentValidationError(
             f"judgment image {index} has invalid detail {image.detail!r}; "
@@ -215,6 +300,7 @@ class JudgmentRequest:
 
 @dataclass(frozen=True)
 class JudgmentResult:
+    kind: Literal["native", "local", "online"]
     api: str
     provider: str
     model: str
@@ -237,6 +323,7 @@ class Judge(Protocol):
         *,
         cancel_event: threading.Event | None = None,
         purpose: str = "",
+        budget_usd: float | None = None,
     ) -> JudgmentResult: ...
 
 
@@ -276,6 +363,7 @@ def _assert_json_value(value: Any, depth: int = 0) -> None:
 
 def validate_request(
     request: JudgmentRequest, *, allow_images: bool = False, allow_box: bool = False,
+    image_max_bytes: int = MAX_IMAGE_ASSET_BYTES, allow_local_images: bool = True,
 ) -> None:
     """Reject malformed requests before any candidate is resolved or billed."""
     if not isinstance(request.state, (str, dict, list)):
@@ -289,7 +377,8 @@ def validate_request(
             raise JudgmentValidationError(
                 "image judgment is not enabled (judgment.images=false or the candidate is text-only)")
         for index, image in enumerate(images):
-            validate_image(image, index)
+            validate_image(
+                image, index, max_bytes=image_max_bytes, allow_local=allow_local_images)
     for question_id, question in request.questions.items():
         if not isinstance(question_id, str) or not question_id.strip():
             raise JudgmentValidationError("judgment question ids must be non-empty strings")

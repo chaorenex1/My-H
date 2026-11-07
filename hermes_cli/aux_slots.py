@@ -9,11 +9,13 @@ pinned to ``DEFAULT_CONFIG["auxiliary"]``'s task order by ``tests/hermes_cli/tes
 # the plugin reservation list all come from AUX_TASK_META.
 AUX_TASK_META: dict[str, tuple[str, str]] = {
     "vision": ("Vision", "image/screenshot analysis"),
-    # omp's fast/strong/planning/job-widget role vocabulary. These four ship as addressable
+    # omp's fast/strong/planning/job-widget role vocabulary. These slots ship as addressable
     # ``auxiliary.<task>`` routes so the Models hub and plugins can pin them (``call_llm(task=...)``
-    # reads any task key), but no built-in workload consumes them yet: Hermes' ``/plan`` runs on the
+    # reads any task key). ``tiny`` and ``default`` back the judgment chain (ADR-17 D4); ``smol``,
+    # ``slow``, ``plan`` and ``widget`` have no built-in workload yet: Hermes' ``/plan`` runs on the
     # main agent, and nothing writes background-job widget specs. Remove a key here once its
     # intended consumer either lands or is dropped.
+    "tiny": ("Tiny (fast role)", "omp tiny lane · judgment + quick classification"),
     "smol": ("Smol (fast role)", "omp fast-lane role · no built-in workload yet"),
     "slow": ("Slow (thinking role)", "omp strong-lane role · no built-in workload yet"),
     "plan": ("Plan role", "omp planning role · /plan still runs on the main model"),
@@ -34,6 +36,7 @@ AUX_TASK_META: dict[str, tuple[str, str]] = {
     "goal_judge": ("Goal judge", "/goal satisfaction checks"),
     "judge": ("Judge", "typed side-channel judgments"),
     "group_router": ("Group router", "who answers in auto-routed Group Chats"),
+    "default": ("Default role", "main-model fallback · judgment chain tail"),
     "curator": ("Curator", "skill-usage review pass"),
     "monitor": ("Monitor", "important-mail scoring"),
     "widget": ("Widget role", "omp job-widget role · no built-in workload yet"),
@@ -64,14 +67,16 @@ IMPORTED_ROLE_IDS: tuple[str, ...] = tuple(IMPORTED_ROLE_META)
 #: so the shell never keeps its own copy. An unlisted role falls back to its uppercased label.
 OMP_ROLE_TAGS: dict[str, str] = {
     "vision": "VISION",
+    "tiny": "TINY",
     "smol": "SMOL",
     "slow": "SLOW",
     "plan": "PLAN",
     "widget": "WIDGET",
-    "title_generation": "TINY",
+    "title_generation": "TITLE",
     "background_review": "MEMORY",
     "goal_judge": "JUDGE",
     "judge": "JUDGE",
+    "default": "DEFAULT",
     "commit_message": "COMMIT",
     "task": "TASK",
     "advisor": "ADVISOR",

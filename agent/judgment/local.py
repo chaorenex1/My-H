@@ -4,14 +4,15 @@ No downloader, no embedded engine: the endpoint is whatever
 ``agent.auxiliary_local_runtime.bare_llamacpp_endpoint`` resolves for this
 profile. A stopped server means ``JudgmentUnavailable`` — never a silent cloud
 fallback. Small models get one merged user turn (system + state), no state
-guard, and a tiny output budget that escalates on a parse retry.
+guard, no parse retries (ADR-17 D4), and a fixed output budget chosen by whether
+the model reasons (16 tokens, or 1024 for a thinking model).
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Mapping, cast
+from typing import Any, Literal, Mapping, cast
 
 from agent.judgment.chat import ChatTextBackend
 from agent.judgment.config import JudgmentSettings, LOCAL_ALIASES
@@ -24,10 +25,11 @@ class LocalChatBackend(ChatTextBackend):
     """Chat backend for ``auxiliary.judge.provider: llamacpp|llama.cpp|local``."""
 
     guard_state = False
+    result_kind: Literal["native", "local", "online"] = "local"
 
     def __init__(self, settings: JudgmentSettings,
-                 config: Mapping[str, Any] | None = None) -> None:
-        super().__init__(settings, config)
+                 config: Mapping[str, Any] | None = None, **kwargs: Any) -> None:
+        super().__init__(settings, config, **kwargs)
         self.supports_images = False  # D13: local text judgment is text-only
         self._endpoint_base = ""
         self._endpoint_key = ""
@@ -40,6 +42,9 @@ class LocalChatBackend(ChatTextBackend):
     def judge(self, request, **kwargs):
         self._endpoint_base, self._endpoint_key = self._resolve_endpoint()
         return super().judge(request, **kwargs)
+
+    def _parse_retries(self) -> int:
+        return max(0, int(self.settings.local.parse_retries))
 
     def _resolve_endpoint(self) -> tuple[str, str]:
         from agent.auxiliary_local_runtime import bare_llamacpp_endpoint
@@ -91,7 +96,8 @@ class LocalChatBackend(ChatTextBackend):
             raise JudgmentUnavailable(f"local model {self.model!r} is not ready")
 
     def _complete(self, system: str, user: str, cancel_event: threading.Event | None,
-                  attempt: int = 0, questions: int = 1, _images: Any = ()) -> Any:
+                  *, retry: bool = False,
+                  images: Any = ()) -> tuple[Any, str]:
         from agent.auxiliary_client import aux_interrupt_protection, call_llm
 
         if cancel_event is not None and cancel_event.is_set():
@@ -109,7 +115,8 @@ class LocalChatBackend(ChatTextBackend):
             "messages": messages,
             "temperature": 0,
             "timeout": self.timeout,
-            "max_tokens": self._max_tokens_for(attempt, questions),
+            "max_tokens": self._max_tokens_for(),
+            "fallback": False,
         }
         if self.model:
             kwargs["model"] = self.model
@@ -117,18 +124,28 @@ class LocalChatBackend(ChatTextBackend):
             kwargs["base_url"] = self._endpoint_base
         if self._endpoint_key:
             kwargs["api_key"] = self._endpoint_key
+        route_info: dict[str, str] = {}
+        kwargs["route_info"] = route_info
         try:
             with aux_interrupt_protection(cancel_event=cancel_event):
-                return call_llm(**kwargs)
+                response = call_llm(**kwargs)
         except JudgmentError:
             raise
         except Exception as exc:
             logger.debug("local judgment call failed", exc_info=True)
             raise JudgmentUnavailable(f"local judgment call failed: {exc}") from None
+        return response, route_info.get("api_mode") or "chat_completions"
 
-    def _max_tokens_for(self, attempt: int, questions: int) -> int:
-        if attempt > 0:
-            return max(1, self.settings.local.reasoning_max_tokens)
-        if questions > 1:
-            return max(1, self.settings.local.answer_max_tokens + 8 * questions)
-        return max(1, self.settings.local.answer_max_tokens)
+    def _max_tokens_for(self) -> int:
+        """omp parity: a reasoning tiny model needs the thinking preamble budget, else 16."""
+        reasoning = False
+        if self.model:
+            try:
+                from agent.models_dev import get_model_capabilities
+
+                caps = get_model_capabilities(self.alias, self.model, allow_network=False)
+                reasoning = caps is not None and caps.supports_reasoning is True
+            except Exception:  # health: allow BLE001 -- capability lookup is advisory here
+                reasoning = False
+        return max(1, self.settings.local.reasoning_max_tokens if reasoning
+                   else self.settings.local.answer_max_tokens)

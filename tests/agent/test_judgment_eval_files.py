@@ -30,6 +30,7 @@ class FakeJudge:
 
     def judge(self, request, *, cancel_event=None, purpose=""):
         return JudgmentResult(
+            kind="native",
             api="typesafe", provider="typesafe", model="jev-test",
             answers={"q0": NoulAnswer(0.82)},
             usage=CanonicalUsage(input_tokens=5, output_tokens=1))

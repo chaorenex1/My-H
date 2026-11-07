@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from agent.judgment import chat as chat_module
 from agent.judgment.chat import ChatTextBackend
-from agent.judgment.config import JudgmentSettings
+from agent.judgment.config import JudgmentSettings, TextSettings
 from agent.judgment.text import (
     parse_choice_reply,
     parse_noul_reply,
@@ -27,11 +28,19 @@ from agent.judgment.types import (
 )
 
 
-def _response(text: str, model: str = "judge-model") -> SimpleNamespace:
+def _response(text: str, model: str = "judge-model", *, finish_reason: str = "stop",
+              tool_answer: str | None = None, prompt_tokens: int = 12,
+              completion_tokens: int = 3) -> SimpleNamespace:
+    tool_calls = None
+    if tool_answer is not None:
+        tool_calls = [SimpleNamespace(function=SimpleNamespace(
+            name="submit_judgment", arguments=json.dumps({"answer": tool_answer})))]
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+        choices=[SimpleNamespace(
+            message=SimpleNamespace(content=text, tool_calls=tool_calls),
+            finish_reason=finish_reason)],
         model=model,
-        usage={"prompt_tokens": 12, "completion_tokens": 3},
+        usage={"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
     )
 
 
@@ -108,7 +117,7 @@ def test_parse_text_answers_fails_on_missing_line():
         parse_text_answers("q0: yes", request)
 
 
-def test_chat_backend_calls_judge_task_with_temperature_zero(monkeypatch):
+def test_chat_backend_calls_judge_task_without_tools_or_fallback(monkeypatch):
     calls: list[dict] = []
 
     def fake_call_llm(**kwargs):
@@ -116,31 +125,54 @@ def test_chat_backend_calls_judge_task_with_temperature_zero(monkeypatch):
         return _response("yes")
 
     monkeypatch.setattr(chat_module, "call_llm", fake_call_llm)
-    backend = ChatTextBackend(JudgmentSettings(parse_retries=0), {
+    backend = ChatTextBackend(JudgmentSettings(), {
         "auxiliary": {"judge": {"provider": "auto", "model": "", "max_tokens": 4096}},
     })
     result = backend.judge(JudgmentRequest(
         state="x", questions={"q0": NoulQuestion("Is it?")}))
 
     assert isinstance(result.answers["q0"], NoulAnswer)
+    assert result.kind == "online"
     assert result.answers["q0"].noul == 1.0
+    assert result.api == "chat_completions"
     assert calls[0]["task"] == "judge"
     assert calls[0]["temperature"] == 0
     assert calls[0]["max_tokens"] == 4096
+    assert calls[0]["fallback"] is False
+    assert calls[0]["reasoning_config"] == {"enabled": False}
+    assert "tools" not in calls[0] and "tool_choice" not in calls[0]
     assert calls[0]["messages"][0]["role"] == "system"
     assert calls[0]["messages"][1]["role"] == "user"
 
 
-def test_chat_backend_retries_parse_failures_then_succeeds(monkeypatch):
-    replies = iter(["not an answer", "xhigh"])
+def test_text_settings_override_max_tokens_and_reasoning(monkeypatch):
     calls: list[dict] = []
 
     def fake_call_llm(**kwargs):
         calls.append(kwargs)
-        return _response(next(replies))
+        return _response("yes")
 
     monkeypatch.setattr(chat_module, "call_llm", fake_call_llm)
-    backend = ChatTextBackend(JudgmentSettings(parse_retries=2), {})
+    backend = ChatTextBackend(
+        JudgmentSettings(text=TextSettings(max_tokens=2048, disable_reasoning=False)), {})
+    backend.judge(JudgmentRequest(state="x", questions={"q0": NoulQuestion("Is it?")}))
+
+    assert calls[0]["max_tokens"] == 2048
+    assert "reasoning_config" not in calls[0]
+
+
+def test_chat_backend_retries_with_forced_submit_judgment_tool(monkeypatch):
+    replies = iter(["not an answer", ""])
+    calls: list[dict] = []
+
+    def fake_call_llm(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _response(next(replies))
+        return _response("", tool_answer="xhigh")
+
+    monkeypatch.setattr(chat_module, "call_llm", fake_call_llm)
+    backend = ChatTextBackend(JudgmentSettings(text=TextSettings(parse_retries=2)), {})
     result = backend.judge(JudgmentRequest(
         state="x",
         questions={"q0": ChoiceQuestion("Pick", {"high": "h", "xhigh": "xh"})}))
@@ -149,6 +181,9 @@ def test_chat_backend_retries_parse_failures_then_succeeds(monkeypatch):
     assert result.answers["q0"].choice == "xhigh"
     assert len(calls) == 2
     assert "Classification retry:" in calls[1]["messages"][0]["content"]
+    assert calls[1]["tools"][0]["function"]["name"] == "submit_judgment"
+    assert calls[1]["tool_choice"] == {
+        "type": "function", "function": {"name": "submit_judgment"}}
 
 
 def test_chat_backend_raises_after_parse_retry_budget(monkeypatch):
@@ -159,11 +194,41 @@ def test_chat_backend_raises_after_parse_retry_budget(monkeypatch):
         return _response("garbage")
 
     monkeypatch.setattr(chat_module, "call_llm", fake_call_llm)
-    backend = ChatTextBackend(JudgmentSettings(parse_retries=2), {})
+    backend = ChatTextBackend(JudgmentSettings(text=TextSettings(parse_retries=2)), {})
     with pytest.raises(JudgmentParseError):
         backend.judge(JudgmentRequest(
             state="x", questions={"q0": NoulQuestion("Is it?")}))
     assert len(calls) == 3
+
+
+def test_chat_backend_aggregates_every_attempt_usage(monkeypatch):
+    responses = iter([
+        _response("garbage", prompt_tokens=10, completion_tokens=2),
+        _response("yes", prompt_tokens=20, completion_tokens=3),
+    ])
+    monkeypatch.setattr(chat_module, "call_llm", lambda **kwargs: next(responses))
+    result = ChatTextBackend(
+        JudgmentSettings(text=TextSettings(parse_retries=1)), {}).judge(
+        JudgmentRequest(state="x", questions={"q0": NoulQuestion("Is it?")}))
+
+    assert result.usage.input_tokens == 30
+    assert result.usage.output_tokens == 5
+    assert result.usage.request_count == 2
+
+
+@pytest.mark.parametrize("finish_reason,error", [
+    ("aborted", chat_module.JudgmentAborted),
+    ("error", chat_module.JudgmentUnavailable),
+])
+def test_chat_backend_rejects_aborted_or_error_stop_reason(
+        monkeypatch, finish_reason, error):
+    monkeypatch.setattr(
+        chat_module, "call_llm",
+        lambda **kwargs: _response("yes", finish_reason=finish_reason))
+    backend = ChatTextBackend(JudgmentSettings(), {})
+    with pytest.raises(error):
+        backend.judge(JudgmentRequest(
+            state="x", questions={"q0": NoulQuestion("Is it?")}))
 
 
 def test_chat_backend_rejects_images_before_calling(monkeypatch):
@@ -177,26 +242,26 @@ def test_chat_backend_rejects_images_before_calling(monkeypatch):
             images=(JudgmentImage("AAAA", "image/png"),)))
 
 
-def test_response_text_falls_back_to_reasoning_when_content_is_empty():
+def test_response_text_joins_text_blocks_and_ignores_reasoning():
     from agent.judgment.chat import response_text
 
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(
-            content="", reasoning="the answer is yes"))],
+            content=[{"type": "text", "text": "the answer"},
+                     {"type": "thinking", "text": "hmm"},
+                     {"type": "text", "text": "is yes"}],
+            reasoning="the answer is yes"))],
         model="thinking-model",
     )
     assert response_text(response) == "the answer is yes"
 
 
-def test_response_text_strips_inline_think_blocks():
+def test_response_text_appends_tool_answer_only_on_retry():
     from agent.judgment.chat import response_text
 
-    response = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(
-            content="<think>no, wait</think>yes"))],
-        model="thinking-model",
-    )
-    assert response_text(response) == "yes"
+    response = _response("preamble", tool_answer="yes")
+    assert response_text(response) == "preamble"
+    assert response_text(response, retry=True) == "preamble yes"
 
 
 def test_chat_backend_never_records_usage_itself(monkeypatch):
@@ -204,7 +269,8 @@ def test_chat_backend_never_records_usage_itself(monkeypatch):
     monkeypatch.setattr(
         "agent.aux_accounting.record_aux_usage",
         lambda *args, **kwargs: pytest.fail("text backend must not double-record"))
-    result = ChatTextBackend(JudgmentSettings(parse_retries=0), {}).judge(
+    result = ChatTextBackend(
+        JudgmentSettings(text=TextSettings(parse_retries=0)), {}).judge(
         JudgmentRequest(state="x", questions={"q0": NoulQuestion("Is it?")}))
     answer = result.answers["q0"]
     assert isinstance(answer, NoulAnswer)

@@ -1,6 +1,6 @@
-"""Typed side-channel judgments (ADR-11 P1–P4).
+"""Typed side-channel judgments (ADR-17; ADR-11 legacy surface).
 
-Public surface: :func:`resolve_judge` builds the configured native/text chain,
+Public surface: :func:`resolve_judge` builds the configured catalog/chain,
 and :class:`JudgmentRequest` / :class:`JudgmentResult` carry the typed contract.
 Nothing here appends transcript rows, edits the system prompt, or starts a turn.
 """
@@ -10,6 +10,17 @@ from agent.judgment.chain import (
     doctor_routes,
     has_native_judge,
     resolve_judge,
+)
+from agent.judgment.questions import load_questions, render_question
+from agent.judgment.service import (
+    BatchItem,
+    BatchItemError,
+    BatchItemResult,
+    BatchResult,
+    batch_to_json,
+    judge,
+    judge_batch,
+    result_to_json,
 )
 from agent.judgment.types import (
     Answer,
@@ -22,6 +33,7 @@ from agent.judgment.types import (
     JudgmentAborted,
     JudgmentAccountRejected,
     JudgmentAPIError,
+    JudgmentBudgetExceeded,
     JudgmentError,
     JudgmentImage,
     JudgmentParseError,
@@ -43,6 +55,10 @@ from agent.judgment.types import (
 
 __all__ = [
     "Answer",
+    "BatchItem",
+    "BatchItemError",
+    "BatchItemResult",
+    "BatchResult",
     "BoxAnswer",
     "BoxEdges",
     "BoxQuestion",
@@ -53,6 +69,7 @@ __all__ = [
     "JudgmentAPIError",
     "JudgmentAborted",
     "JudgmentAccountRejected",
+    "JudgmentBudgetExceeded",
     "JudgmentError",
     "JudgmentImage",
     "JudgmentParseError",
@@ -70,7 +87,13 @@ __all__ = [
     "ScoreAnswer",
     "ScoreQuestion",
     "answer_to_json",
+    "batch_to_json",
     "doctor_routes",
     "has_native_judge",
+    "judge",
+    "judge_batch",
+    "load_questions",
+    "render_question",
     "resolve_judge",
+    "result_to_json",
 ]

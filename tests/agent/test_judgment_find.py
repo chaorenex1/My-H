@@ -28,6 +28,7 @@ class ChoiceJudge:
               purpose: str = "") -> JudgmentResult:
         labels = list(request.questions["intent"].criteria)
         return JudgmentResult(
+            kind="native",
             api=self.api, provider="typesafe", model="m",
             answers={"intent": ChoiceAnswer(self.choice, {label: 0.25 for label in labels}, 0.5)})
 
@@ -176,6 +177,23 @@ def test_choose_intent_uses_the_choice_and_reports_failure():
     stats = find._RunStats()
     assert find.choose_intent(DownJudge(), "class Foo", stats) is None
     assert stats.snapshot() == {"requests": 1, "failed": 1}
+
+
+def test_online_or_local_answers_mark_the_run_uncalibrated():
+    class TextJudge(ChoiceJudge):
+        def judge(self, request, *, cancel_event=None, purpose=""):
+            result = super().judge(request)
+            return JudgmentResult(
+                kind="online", api="chat_completions", provider=result.provider,
+                model=result.model, answers=result.answers)
+
+    stats = find._RunStats()
+    assert find.choose_intent(TextJudge(), "class Foo", stats) == "literal"
+    assert stats.uncalibrated is True
+
+    stats = find._RunStats()
+    assert find.choose_intent(ChoiceJudge(), "class Foo", stats) == "literal"
+    assert stats.uncalibrated is False
 
 
 def test_intent_request_offers_the_json_criteria():

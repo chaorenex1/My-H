@@ -25,6 +25,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _result() -> JudgmentResult:
     return JudgmentResult(
+        kind="native",
         api="typesafe", provider="typesafe", model="jev-test",
         answers={"q0": NoulAnswer(0.82)},
         usage=CanonicalUsage(input_tokens=420, output_tokens=2),
@@ -76,6 +77,7 @@ def test_ask_prints_the_wire_reported_cost(monkeypatch, tmp_path, capsys):
     questions = tmp_path / "questions.json"
     questions.write_text(json.dumps({"q0": {"instructions": "Is it?"}}), encoding="utf-8")
     result = JudgmentResult(
+        kind="native",
         api="typesafe", provider="typesafe", model="jev-test",
         answers={"q0": NoulAnswer(0.82)},
         usage=CanonicalUsage(input_tokens=420, output_tokens=2),
@@ -103,6 +105,24 @@ def test_ask_returns_2_for_invalid_question_file(tmp_path, capsys):
         "judgment", "ask", "--state", "hello", "--questions-file", str(questions)])
     assert args.func(args) == 2
     assert "at least two" in capsys.readouterr().out
+
+
+
+def test_ask_rejects_empty_criteria_before_resolving_a_judge(monkeypatch, tmp_path, capsys):
+    questions = tmp_path / "questions.json"
+    questions.write_text(
+        json.dumps({"row": {"instructions": "Which row?", "criteria": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agent.judgment.resolve_judge",
+        lambda **kwargs: pytest.fail("empty criteria must fail during question loading"),
+    )
+    args = _parser().parse_args([
+        "judgment", "ask", "--state", "hello", "--questions-file", str(questions)])
+
+    assert args.func(args) == 2
+    assert "caller-supplied labels" in capsys.readouterr().out
 
 
 def test_ask_returns_1_when_unavailable(monkeypatch, tmp_path, capsys):
@@ -186,7 +206,11 @@ def test_doctor_reports_defaults_without_network(capsys):
     assert args.func(args) == 0
     output = capsys.readouterr().out
     assert "mode: auto" in output
-    assert "native routes: none configured" in output
+    # ADR-17 D8: the default chain names two native models; with no credential they
+    # appear as unavailable routes rather than disappearing.
+    assert "typesafe:typesafe/jev-1.14.0" in output
+    assert "openrouter-decisions:openrouter/typesafe/jev-1.14" in output
+    assert "no credential" in output
     assert "images: enabled" in output
     assert "cache:" in output and "audit:" in output
 
@@ -196,7 +220,9 @@ def test_doctor_json(capsys):
     assert args.func(args) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "auto"
-    assert payload["routes"] == []
+    assert [route["id"] for route in payload["routes"]] == [
+        "typesafe/jev-1.14", "openrouter/typesafe-jev-1.14"]
+    assert all(not route["available"] for route in payload["routes"])
     assert payload["tools"]["enabled"] == "auto"
     assert payload["images"] is True
 
@@ -209,33 +235,145 @@ def test_auxiliary_judge_slot_and_env_keys_are_registered():
 
     aux = cast(dict[str, Any], DEFAULT_CONFIG["auxiliary"])
     judge = cast(dict[str, Any], aux["judge"])
-    assert judge["max_tokens"] == 4096
-    assert judge["reasoning_effort"] == "none"
+    # ADR-17 D3/D8: the text budget and reasoning override moved to judgment.text;
+    # reasoning_effort keeps the shared aux-slot default ("" = unset).
+    assert "max_tokens" not in judge
+    assert judge["reasoning_effort"] == ""
     assert judge["images"] is False
     assert list(AUX_TASK_META).index("judge") == list(AUX_TASK_META).index("goal_judge") + 1
     assert OMP_ROLE_TAGS["judge"] == "JUDGE"
+    # ADR-17 D4: `tiny` is the chain's cheap lane, not a third main-model identity.
+    assert aux["tiny"]["prefer_fast_model"] is True
+    from agent.auxiliary_client import _FAST_MODEL_TASKS
+
+    assert "tiny" in _FAST_MODEL_TASKS
+    assert "default" in AUX_TASK_META
     for key in ("TYPESAFE_API_KEY", "TYPESAFE_BASE_URL",
                 "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"):
         assert key in OPTIONAL_ENV_VARS
     assert DEFAULT_CONFIG["judgment"] == {
         "mode": "auto",
         "text_after_native": False,
-        "cache": True,
-        "cache_max_states": 50_000,
-        "audit": True,
-        "audit_max_runs": 20_000,
+        # ADR-17 D4/D8: catalog + chain + per-call/session spend caps.
+        "chain": [
+            "native:typesafe/jev-1.14",
+            "native:openrouter/typesafe-jev-1.14",
+            "tiny",
+            "smol",
+            "default",
+        ],
+        "models": [
+            {"id": "typesafe/jev-1.14", "kind": "native", "api": "typesafe",
+             "provider": "typesafe", "model": "jev-1.14.0"},
+            {"id": "openrouter/typesafe-jev-1.14", "kind": "native",
+             "api": "openrouter-decisions", "provider": "openrouter",
+             "model": "typesafe/jev-1.14"},
+        ],
+        "cost_gate": {"max_usd_per_call": 0.05, "max_usd_per_session": 0.50},
+        # ADR-17 D5/P4: native answer cache + billed-attempt usage ledger.
+        "cache": {"enabled": True, "max_states": 50_000, "usage": True},
+        "audit": {"enabled": True, "max_runs": 20_000},
         "eval_debug": False,
         "eval_max_bytes": 52_428_800,
         "timeout_ms": 10_000,
-        "parse_retries": 2,
         "redact_state": True,
-        "images": True,
+        # ADR-17 D5/P4: path assets stay under cwd/$HERMES_HOME; remote URLs are never fetched.
+        "images": {
+            "enabled": True,
+            "assets": {"allow_local": True, "allow_remote": False, "max_bytes": 16_777_216},
+        },
         "tools": {"enabled": "auto"},
+        "text": {
+            "parse_retries": 2,
+            "max_tokens": 4096,
+            "disable_reasoning": True,
+        },
         "local": {
             "autostart": False,
             "merge_prompt": True,
+            "parse_retries": 0,
             "answer_max_tokens": 16,
             "reasoning_max_tokens": 1024,
         },
         "native": [],
     }
+
+
+# ── P4: --questions/--context and `judgment batch` ────────────────────────
+
+
+def test_ask_accepts_a_bundled_or_path_question_name_and_contexts(monkeypatch, tmp_path, capsys):
+    questions = tmp_path / "templated.json"
+    questions.write_text(json.dumps({
+        "q0": {"instructions": "Which {{column}}?",
+               "criteria": {"true": None, "false": None}}}), encoding="utf-8")
+    seen: list[str] = []
+
+    class FakeJudge:
+        def judge(self, request, *, cancel_event=None, purpose="", **kwargs):
+            seen.append(request.questions["q0"].instructions)
+            return _result()
+
+    monkeypatch.setattr("agent.judgment.resolve_judge", lambda purpose="", config=None: FakeJudge())
+    args = _parser().parse_args([
+        "judgment", "ask", "--state", "hello", "--questions", str(questions),
+        "--context", "q0.column=status"])
+    assert args.func(args) == 0
+    assert seen == ["Which status?"]
+    assert "Error" not in capsys.readouterr().out
+
+
+def test_batch_file_runs_items_and_reports_min_ok(monkeypatch, tmp_path, capsys):
+    payload = tmp_path / "batch.json"
+    payload.write_text(json.dumps({
+        "items": [{"key": "a", "state": "ok"}, {"key": "b", "state": "bad"}],
+        "questions": {"q0": {"instructions": "Is it?"}},
+        "min_ok": 1,
+    }), encoding="utf-8")
+
+    class FakeJudge:
+        def judge(self, request, *, cancel_event=None, purpose="", **kwargs):
+            if request.state == "bad":
+                raise JudgmentUnavailable("nope")
+            return _result()
+
+    monkeypatch.setattr("agent.judgment.resolve_judge", lambda purpose="", config=None: FakeJudge())
+    args = _parser().parse_args(["judgment", "batch", "--file", str(payload)])
+    assert args.func(args) == 0
+    output = capsys.readouterr().out
+    assert "a: typesafe jev-test q0=noul 0.82" in output
+    assert "b: failed (JudgmentUnavailable: nope)" in output
+    assert "min_ok: met (1/2 ok)" in output
+
+    args = _parser().parse_args(["judgment", "batch", "--file", str(payload), "--json"])
+    assert args.func(args) == 0
+    view = json.loads(capsys.readouterr().out)
+    assert view["success"] is True and view["min_ok_met"] is True
+    assert [entry["key"] for entry in view["results"]] == ["a", "b"]
+
+
+def test_batch_file_min_ok_not_met_exits_1(monkeypatch, tmp_path, capsys):
+    payload = tmp_path / "batch.json"
+    payload.write_text(json.dumps({
+        "items": [{"key": "a", "state": "bad"}],
+        "questions": {"q0": {"instructions": "Is it?"}},
+        "min_ok": 1,
+    }), encoding="utf-8")
+
+    class FakeJudge:
+        def judge(self, request, **kwargs):
+            raise JudgmentUnavailable("nope")
+
+    monkeypatch.setattr("agent.judgment.resolve_judge", lambda purpose="", config=None: FakeJudge())
+    args = _parser().parse_args(["judgment", "batch", "--file", str(payload)])
+    assert args.func(args) == 1
+    assert "min_ok: not met" in capsys.readouterr().out
+
+
+def test_batch_file_validation_error_exits_2(tmp_path, capsys):
+    payload = tmp_path / "batch.json"
+    payload.write_text(json.dumps({"items": [], "questions": {}, "min_ok": 0}),
+                       encoding="utf-8")
+    args = _parser().parse_args(["judgment", "batch", "--file", str(payload)])
+    assert args.func(args) == 2
+    assert "items" in capsys.readouterr().out
