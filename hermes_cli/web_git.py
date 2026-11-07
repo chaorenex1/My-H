@@ -45,6 +45,17 @@ def _run(argv: list[str], cwd: str, timeout: int, env: dict) -> subprocess.Compl
         return None
 
 
+def _run_input(argv: list[str], cwd: str, stdin: bytes) -> subprocess.CompletedProcess[bytes] | None:
+    """Non-interactive subprocess fed ``stdin`` as bytes (text mode would rewrite line endings)."""
+    try:
+        return subprocess.run(
+            argv, cwd=cwd, capture_output=True, timeout=_GIT_TIMEOUT, input=stdin,
+            env=noninteractive_git_env(), check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _git(cwd: str, args: list[str], *, timeout: int = _GIT_TIMEOUT) -> tuple[int, str, str]:
     """(returncode, stdout, stderr) of ``git`` in ``cwd``; never raises on non-zero exit."""
     proc = _run(["git", *harden_git_argv(args)], cwd, timeout, noninteractive_git_env())
@@ -334,6 +345,33 @@ def file_diff_vs_head(cwd: str, file_path: str) -> str:
 
 def review_stage(cwd: str, file_path: str | None) -> dict:
     _git_ok(cwd, ["add", "--", file_path] if file_path else ["add", "-A"])
+    return {"ok": True}
+
+
+def stage_index_patch(cwd: str, patch: str) -> dict:
+    """Apply a unified diff to the index only (``git apply --cached``); never the worktree.
+
+    ``--recount`` lets a patch whose hunk headers were rebuilt from a larger diff
+    apply without recomputing line counts. An empty patch is a no-op.
+    """
+    if not patch.strip():
+        return {"ok": True}
+    proc = _run_input(
+        ["git", *harden_git_argv(["apply", "--cached", "--recount", "-"])],
+        cwd, patch.encode("utf-8"))
+    if proc is None:
+        raise RuntimeError("git apply --cached failed to start")
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(err or "git apply --cached failed")
+    return {"ok": True}
+
+
+def stage_index_paths(cwd: str, paths: list[str]) -> dict:
+    """Stage whole files into the index (``git add``); the worktree is only read."""
+    if not paths:
+        return {"ok": True}
+    _git_ok(cwd, ["add", "--", *paths])
     return {"ok": True}
 
 

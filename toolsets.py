@@ -35,9 +35,9 @@ _HERMES_CORE_TOOLS = [
     "computer_use",
     # Code graph: read-only queries + evidence-constrained updates (ADR-8).
     "code_intel", "code_graph_update",
-    # Judgment-routed search over the workspace (ADR-11 D14); service-gated by
-    # judgment.tools.enabled.
-    "judgrg",
+    # Judgment-routed search over the workspace (ADR-11 D14) and judge-driven
+    # selective staging (ADR-17 D7); both hide without a usable judge route.
+    "judgrg", "git_stage",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -111,9 +111,10 @@ TOOLSETS = {
         "Judgment-routed, read-only search over the workspace: a restricted choice "
         "question classifies the request's intent (literal/symbol/call/type/config/"
         "todo/pattern/unknown implementation/cross-language) and runs ripgrep, "
-        "ast-grep, or rg-then-ast-grep. Requires a native judgment route unless "
+        "ast-grep, or rg-then-ast-grep. Also judge-driven selective git staging "
+        "(index only, never commits). Requires a native judgment route unless "
         "judgment.tools.enabled is 'on'.",
-        ["judgrg"],
+        ["judgrg", "git_stage"],
     ),
     "terminal": _ts("Terminal/command execution and process management tools", ["terminal", "process_manage"]),
     "skills": _ts(

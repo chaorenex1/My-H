@@ -301,6 +301,7 @@ from hermes_cli.subcommands.usage import build_usage_parser
 from hermes_cli.subcommands.monitoring import build_monitoring_parser
 from hermes_cli.subcommands.rules import build_rules_parser
 from hermes_cli.subcommands.judgment import build_judgment_parser, cmd_judgment
+from hermes_cli.subcommands.git import build_git_parser, cmd_git
 from hermes_cli.subcommands.skills import build_skills_parser
 from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
@@ -808,9 +809,7 @@ from hermes_cli.main_install_repair import (  # frozen updater surface: update_c
     _venv_scripts_dir,
 )
 from hermes_cli.omp_launch import cmd_omp
-from hermes_cli.main_desktop import (
-    cmd_gui,
-)
+from hermes_cli.main_desktop import cmd_gui
 from hermes_cli.main_desktop import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _desktop_build_needed,
     _desktop_dist_exists,
@@ -819,9 +818,7 @@ from hermes_cli.main_desktop import (  # frozen updater surface: update_cmd*.py 
     _install_rebuilt_desktop_app,
     _installed_desktop_apps,
 )
-from hermes_cli.main_web_build import (
-    _sweep_stale_bytecode_if_checkout_changed,
-)
+from hermes_cli.main_web_build import _sweep_stale_bytecode_if_checkout_changed
 from hermes_cli.main_web_build import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _build_web_ui,
     _nixos_build_env,
@@ -3228,6 +3225,7 @@ def _build_cli_parser():
     build_skills_parser(subparsers, cmd_skills=cmd_skills)
     build_rules_parser(subparsers, cmd_rules=cmd_rules)
     build_judgment_parser(subparsers, cmd_judgment=cmd_judgment)
+    build_git_parser(subparsers, cmd_git=cmd_git)
     build_bundles_parser(subparsers)
     build_plugins_parser(subparsers, cmd_plugins=cmd_plugins)
 
