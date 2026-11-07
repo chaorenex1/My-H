@@ -25,9 +25,25 @@ logger = logging.getLogger("tools.code_execution_tool")
 _TERMINAL_BLOCKED_PARAMS = {"background", "pty", "notify", "notify_on_complete", "watch_patterns", "heartbeat", "persist_on_release"}
 
 
-def _default_dispatch(task_id):
+def _host_op(name: str):
+    """The judgment host op for ``name``; ``__`` names are reserved for host ops (ADR-17 D6)."""
+    if not name.startswith("__"):
+        return None
+    from agent.judgment.rpc import host_op
+
+    return host_op(name)
+
+
+def _default_dispatch(task_id, *, allow_host_ops: bool = False):
     from model_tools import handle_function_call
-    return lambda tool_name, tool_args: handle_function_call(tool_name, tool_args, task_id=task_id)
+
+    def dispatch(tool_name, tool_args):
+        if allow_host_ops:
+            op = _host_op(tool_name)
+            if op is not None:
+                return op(tool_args)
+        return handle_function_call(tool_name, tool_args, task_id=task_id)
+    return dispatch
 
 
 def _private_dirs_cmd(root: str, *subdirs: str) -> str:
@@ -86,15 +102,24 @@ def _rpc_token_ok(request: dict, rpc_token: str) -> bool:
 
 def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_counter: list,
                         max_tool_calls: int, dispatch, tool_call_log: list, call_start: float,
-                        where: str) -> str:
+                        where: str, allow_host_ops: bool = False) -> str:
     """Enforce allow-list + budget, then dispatch one authenticated request. Only a dispatched
     call consumes budget and is logged; refusals are free."""
     tool_name = request.get("tool", "")
     tool_args = request.get("args", {})
-    if tool_name not in allowed_tools:
+    reserved_host_op = isinstance(tool_name, str) and tool_name.startswith("__")
+    if reserved_host_op:
+        # Host ops share the transport but not the model's tool surface (ADR-17 D6); a remote
+        # filesystem sandbox is not local authority (ADR-17 D9).
+        if not allow_host_ops:
+            return tool_error(
+                f"Host op '{tool_name}' is only available to the local execute_code sandbox.")
+        if _host_op(tool_name) is None:
+            return tool_error(f"Unknown host op '{tool_name}'.")
+    elif tool_name not in allowed_tools:
         return tool_error(f"Tool '{tool_name}' is not available in execute_code. "
                           f"Available: {', '.join(sorted(allowed_tools))}")
-    if tool_call_counter[0] >= max_tool_calls:
+    if not reserved_host_op and tool_call_counter[0] >= max_tool_calls:
         return tool_error(f"Tool call limit reached ({max_tool_calls}). "
                           "No more tool calls allowed in this execution.")
     if tool_name == "terminal" and isinstance(tool_args, dict):
@@ -107,7 +132,8 @@ def _handle_rpc_request(request: dict, *, allowed_tools: frozenset, tool_call_co
     except Exception as exc:
         logger.error("Tool call failed in %s: %s", where, exc, exc_info=True)
         result = tool_error(str(exc))
-    tool_call_counter[0] += 1
+    if not reserved_host_op:
+        tool_call_counter[0] += 1
     entry = {"tool": tool_name, "args_preview": str(tool_args)[:80],
              "duration": round(time.monotonic() - call_start, 2)}
     error = _result_error(result)
@@ -145,7 +171,7 @@ def _rpc_server_loop(server_sock: socket.socket, task_id: str, tool_call_log: li
     carries the cell's context); session kernels rebind each call to the CURRENT cell's authority.
     """
     if dispatch is None:
-        dispatch = _default_dispatch(task_id)
+        dispatch = _default_dispatch(task_id, allow_host_ops=True)
     conn = None
     try:
         server_sock.settimeout(0.05)
@@ -181,7 +207,7 @@ def _rpc_server_loop(server_sock: socket.socket, task_id: str, tool_call_log: li
                     resp = _handle_rpc_request(
                         request, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
                         max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
-                        call_start=call_start, where="sandbox",
+                        call_start=call_start, where="sandbox", allow_host_ops=True,
                     ) if _rpc_token_ok(request, rpc_token) else tool_error("Unauthorized RPC request")
                 conn.sendall((resp + "\n").encode())
     except TimeoutError:
@@ -241,7 +267,7 @@ def _rpc_poll_loop(env, rpc_dir: str, task_id: str, tool_call_log: list, tool_ca
                 tool_result = _handle_rpc_request(
                     request, allowed_tools=allowed_tools, tool_call_counter=tool_call_counter,
                     max_tool_calls=max_tool_calls, dispatch=dispatch, tool_call_log=tool_call_log,
-                    call_start=call_start, where="remote sandbox",
+                    call_start=call_start, where="remote sandbox", allow_host_ops=False,
                 )
                 # Atomic (tmp + rename) and owner-only; results carry tool output
                 # on a shared-host backend.

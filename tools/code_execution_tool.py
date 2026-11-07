@@ -143,6 +143,34 @@ _TOOL_STUBS = {
         '{"command": command, "timeout": timeout, "workdir": workdir}'),
 }
 
+# Host ops (ADR-17 D6): not model tools, so they are absent from SANDBOX_ALLOWED_TOOLS but
+# usable from a local execute_code script. ``__`` names are reserved and never hit the tool
+# registry; a remote filesystem sandbox rejects them (local authority only).
+_HOST_OP_STUBS = {
+    "judge": '''def judge(state, *, questions=None, questions_file=None, contexts=None, labels=None,
+          images=None, purpose=None, budget_usd=None, timeout_ms=None):
+    """Answer one typed question set about `state` (ADR-17). Returns the v1 result object
+    {answers, kind, api, provider, model, usage, cost_usd, cached_questions}; a failed
+    judgment returns {"error": {"type", "message"}}. Never becomes a transcript row."""
+    payload = {"state": state, "questions": questions, "questions_file": questions_file,
+               "contexts": contexts, "labels": labels, "images": images,
+               "purpose": purpose, "budget_usd": budget_usd, "timeout_ms": timeout_ms}
+    return _call("__judge__", {k: v for k, v in payload.items() if v is not None})
+''',
+    "judge_batch": '''def judge_batch(items, *, questions=None, questions_file=None, contexts=None,
+                labels=None, min_ok=None, max_concurrency=None, purpose=None,
+                budget_usd=None, timeout_ms=None):
+    """Answer one question set over many states with host-owned bounded fan-out (ADR-17).
+    Returns {results: [{key, ok, result|error}], min_ok_met}; a failed item is reported,
+    never raised. Questions are shared by the whole run."""
+    payload = {"items": items, "questions": questions, "questions_file": questions_file,
+               "contexts": contexts, "labels": labels, "min_ok": min_ok,
+               "max_concurrency": max_concurrency, "purpose": purpose,
+               "budget_usd": budget_usd, "timeout_ms": timeout_ms}
+    return _call("__judge_batch__", {k: v for k, v in payload.items() if v is not None})
+''',
+}
+
 
 def _missing_hermes_tools_import_hint(m, enabled_tools) -> str:
     missing = m.group(1)
@@ -196,10 +224,12 @@ def generate_hermes_tools_module(enabled_tools: list[str],
     """Source of the hermes_tools.py stub module for SANDBOX_ALLOWED_TOOLS ∩ *enabled_tools*.
     ``transport``: ``"uds"`` (local socket client) or ``"file"`` (file RPC, remote backends)."""
     header = _FILE_TRANSPORT_HEADER if transport == "file" else _UDS_TRANSPORT_HEADER
-    return header + "\n".join(
+    stubs = "\n".join(
         f"def {name}({sig}):\n    {doc}\n    return _call({name!r}, {args_expr})\n"
         for name, (sig, doc, args_expr) in sorted(_TOOL_STUBS.items()) if name in set(enabled_tools)
     )
+    host_ops = "".join(_HOST_OP_STUBS[name] + "\n" for name in sorted(_HOST_OP_STUBS))
+    return header + stubs + "\n" + host_ops
 
 
 # ---- Shared helpers section (embedded in both transport headers) ----------

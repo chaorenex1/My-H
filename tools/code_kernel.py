@@ -230,6 +230,12 @@ class CellAuthority:
         return self.ctx.run(self._invoke, tool_name, tool_args)
 
     def _invoke(self, tool_name: str, tool_args: dict) -> str:
+        if isinstance(tool_name, str) and tool_name.startswith("__"):
+            from agent.judgment.rpc import host_op
+
+            op = host_op(tool_name)
+            if op is not None:
+                return op(tool_args)
         from model_tools import handle_function_call
         previous = None
         if self._callbacks:
