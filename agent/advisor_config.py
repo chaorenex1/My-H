@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-import yaml
+import hermes_yaml as yaml
 
 from hermes_constants import get_hermes_home
 
