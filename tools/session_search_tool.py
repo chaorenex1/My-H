@@ -705,8 +705,10 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
                             include_compacted=include_compacted)
     if shape == "search" and (not query or not isinstance(query, str) or not query.strip()):
         return tool_error("search requires a query", success=False)
-    limit = _clamp_int(limit, 3, 1, 10)
-    if shape == "browse" or not query or not isinstance(query, str) or not query.strip():
+    browse = shape == "browse" or not query or not isinstance(query, str) or not query.strip()
+    # Browse lists enough recent sessions to pick from; discovery returns a few ranked hits.
+    limit = _clamp_int(limit, 10 if browse else 3, 1, 10)
+    if browse:
         return _list_recent_sessions(db, limit, current_session_id, link_profile=profile)
     sort_norm = sort.strip().lower() if isinstance(sort, str) else None
     try:
@@ -722,7 +724,7 @@ def _dispatch(query, role_filter, limit, db, current_session_id, session_id,
         match=match, source=source, include_inactive=include_inactive)
 
 
-def session_search(query: str = "", role_filter: str | None = None, limit: int = 3, db=None,
+def session_search(query: str = "", role_filter: str | None = None, limit: int | None = None, db=None,
                    current_session_id: str | None = None, session_id: str | None = None, around_message_id: int | None = None,
                    window: int = 5, sort: str | None = None, profile: str | None = None, detail: str = "adaptive",
                    after: str | None = None, before: str | None = None, exclude_session_ids: Optional[list[str]] = None,
@@ -864,11 +866,11 @@ SESSION_SEARCH_SCHEMA = {
             "limit": {
                 "type": "integer",
                 "description": (
-                    "Discovery shape only. Max sessions to return (default 3, max 10). "
-                    "Bump to 5–10 when the topic likely spans several sessions and you "
-                    "want to pick the right one to scroll into."
+                    "Max sessions to return. Discovery defaults to 3; browse/no-args "
+                    "defaults to 10. Max 10. Bump discovery to 5–10 when the topic "
+                    "likely spans several sessions and you want to pick the right one "
+                    "to scroll into."
                 ),
-                "default": 3,
             },
             "sort": {
                 "type": "string",
@@ -972,7 +974,7 @@ registry.register(
     toolset="session_search",
     schema=SESSION_SEARCH_SCHEMA,
     handler=lambda args, **kw: session_search(
-        query=args.get("query") or "", limit=args.get("limit", 3), window=args.get("window", 5),
+        query=args.get("query") or "", limit=args.get("limit"), window=args.get("window", 5),
         detail=args.get("detail", "adaptive"), db=kw.get("db"), current_session_id=kw.get("current_session_id"),
         **{k: args.get(k) for k in ("role_filter", "session_id", "around_message_id", "sort", "profile",
                                     "after", "before", "exclude_session_ids", "mode", "match", "source",
