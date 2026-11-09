@@ -409,7 +409,7 @@ hookWidgetBelow`；`chatContainer` 在其上，todo/subagent 属于 `statusConta
 | Reaction | 对前一块的 emoji 徽章（回复以 emoji 开头时提取） | `reaction.ts`、`tui.reactions` |
 | 工具执行 | 通用工具调用卡片（参数/结果/状态） | `tool-execution.ts` |
 | Bash 执行 | 用户 `!` 命令与流式输出 | `bash-execution.ts` |
-| Eval 执行 | omp 原生 eval 卡；本仓库由 `execute_code` 的模型面复用（单 cell，ADR-4 D12），用户 `$` 入口不存在 | `eval-execution.ts` |
+| Eval 执行 | omp 原生 eval 卡；本仓库由 `execute_code` 的模型面复用完整数据模型（多 cell、live partial、title、async、views/images、meta，ADR-4 D12），用户 `$` 入口不存在 | `eval-execution.ts` |
 | Read 工具组 | 连续 read 调用合并成组 | `read-tool-group.ts` |
 | 图片/SVG/figure | 内联图片、SVG 代码块、Mermaid/figure 渲染 | `svg-figure.ts`、`fence-figure.ts`、`image.ts` |
 | 表格图表 | 数值表下的 auto-graph（`tui.autoGraph`） | `table-chart.ts` |
@@ -449,9 +449,9 @@ Todo 提醒的旧判断以 ADR-2 为准。
 | Served model 标记 | ADR-10 P3：`message.complete.served_model`/`requested_model` 取自 turn result（`agent/served_model.py`）；`session.info.fallback_model` 仍是回退模型，不是 served | 客户端把 `served_model` 写入 `AssistantMessage.upstreamModel`，`ServedModelTracker.check` 触发；缺失保持 undefined | 已接 |
 | 被剥离的工具调用 | 网关 display 投影（`tui_gateway/session_history._history_to_messages`）按批次 uid 配对；闭合批次有缺结果时插入 `role:"custom"` + `custom_type:"stripped-tool-calls"` + `details.count`，落在该批次最后一条 tool 行之后；`running` 会话不结算尾部批次 | `#customBlock` 挂 `StrippedToolCallsPlaceholder`；`rowToAgentMessage` 规整 `details.count` | 已接 |
 | Reaction | 文本派生（回复以 emoji 开头）与网关无关，照旧；显式 `message.reaction{row_id, reactions, role}`（`tools/react_to_message_tool.py`，local-viewer 经 `gateway/local_desktop_ui.py` 发布）与 `reaction{kind}`（白名单）；快照行不带 reactions | `pickReactionTarget`/`splitReaction` 已接文本派生；`message.reaction`/`reaction` 未处理，工具反应不画、resume 不还原 | 部分 |
-| 工具执行 | 实时 `tool.start{args, context, labels}`/`tool.progress`/`tool.complete{result, summary, inline_diff, todos}`；快照 tool 行有 `name`/`args`/`labels`/`content`/`is_error`（ADR-10 P2：`content` 由 `include_tool_content` 三态控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影） | `handleNotification` → `tool_execution_start/update/end`；`projectToolResult`；`rowToAgentMessage` 读 `content`/`args`/`labels`/`is_error`/`row_id`，resume 卡与 live 同形；`execute_code` 经 `TOOL_RENDER_NAMES` 映射到 `eval` 渲染器（ADR-4 D12），画单 cell 原生卡 | 部分 |
+| 工具执行 | 实时 `tool.start{args, context, labels, title, cell_titles}`/`tool.progress`/`tool.output`/`tool.title`/`tool.complete{result, summary, inline_diff, todos, display, card_title, cell_titles}`；快照 tool 行有 `name`/`args`/`labels`/`content`/`is_error`/`details`（ADR-10 P2：`content` 由 `include_tool_content` 三态控制，`is_error` 从 `display_metadata.tool_result_metadata` 投影；`details` 带 eval 的 `display`/`card_title`/`cell_titles`） | `handleNotification` → `tool_execution_start/update/end` + `tool_title`；`projectToolResult`/`executeCodeDetails`；`rowToAgentMessage` 读 `content`/`args`/`labels`/`is_error`/`details`/`row_id`，resume 卡与 live 同形；`execute_code` 经 `TOOL_RENDER_NAMES` 映射到 `eval` 渲染器（ADR-4 D12），画完整原生卡（多 cell/live partial/title/async/truncation） | 已接（local） |
 | Bash 执行 | 本机 `#executeBashCommand` → `AgentSession.executeBash`（`BashController`），不经网关；结果只写本机 `SessionManager` | `BashExecutionComponent` 本机渲染；网关会话看不到该命令与输出，resume 后消失 | 部分 |
-| Eval 执行 | 无入口：`omp-ui/src` 没有 `$` 解析/本机 eval runner（`EvalRunner`/`evalExec`/`isEvalRunning` 零命中），网关也没有 `eval.*` 方法（ADR-4：不移植用户面 `$`） | `EvalExecutionComponent` 只剩 vendored 的 `pythonExecution` 分支（`ROW_PROJECTORS.python_execution` 为 `undefined`），用户面无 producer；模型面 `execute_code` 复用 eval 渲染器画单 cell 原生卡（ADR-4 D12） | 无 producer |
+| Eval 执行 | 无入口：`omp-ui/src` 没有 `$` 解析/本机 eval runner（`EvalRunner`/`evalExec`/`isEvalRunning` 零命中），网关也没有 `eval.*` 方法（ADR-4：不移植用户面 `$`） | `EvalExecutionComponent` 只剩 vendored 的 `pythonExecution` 分支（`ROW_PROJECTORS.python_execution` 为 `undefined`），用户面无 producer；模型面 `execute_code` 复用 eval 渲染器的完整数据模型（多 cell/live partial/title/async/views/images/meta，ADR-4 D12–D15） | 无 producer（用户面）；模型面已接（local） |
 | Read 工具组 | `tool.start`/`tool.complete` 带工具名；Hermes 的工具名是 `read_file`（`tools/file_tools.py`），参数是 `path` | `readArgsCollapseIntoGroup`/`toolRenderName` 只认 `read` + `path`。ADR-10 P2 后 `AgentSession.getToolByName` 给 render key（`read_file`→`read`），live 与 resume 都用它选 renderer，卡片标题保留 wire 名 | 部分 |
 | 图片/SVG/figure | 正文 fence（SVG/Mermaid/figure）是客户端渲染，已接；工具结果图片在实时 `tool.complete.result.content`；ADR-10 P2 后快照 tool 行在 `include_tool_content:"full"` 时带 display-safe 文本 + 内联图片块（超大 data URL 回落 `[image]`）；用户图片快照仍是 `@image:`/`[image]` 文本 | `AssistantMessageComponent`、`ToolExecutionComponent`、`image.ts`；resume 的工具图片已还原，内联用户图仍走文本引用 | 部分 |
 | 表格图表 | 无（纯客户端；不由网关供数） | `table-chart.ts` 已存在，但 `omp-ui/src` 未调用 `setTableCharts`，pi-tui 默认 `chartMode="off"`；ADR-12 P2 接线 | 部分 |
@@ -992,9 +992,9 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 Skill 调用、Reaction、Transcript 选择器、`include_tools`、Todo 提醒的旧判断；ADR-3（Background TAN）见
 `docs/adr/ADR-3-background-tan.md`，取代 §2.3.2.1 中 Background TAN / `background.complete` 的旧判断；
 ADR-4（`execute_code` 的 JS 后端与原生 eval 卡）见 `docs/adr/ADR-4-eval-execution.md`：只移植模型面
-（`execute_code(language)` + Bun JS kernel + 单 cell eval 卡），明确不移植用户面 `$`/`$$` eval（omp-ui 无入口），
-§2.3.2.1 第 454 行按此改为「无 producer」；D12 让 `execute_code` 复用 omp 原生 eval 卡（单 cell），
-用户面入口仍无；ADR-5（Recap 与压缩摘要）见
+（`execute_code(language, cells, title, timeout, background)` + Bun JS kernel + 完整 eval 卡），明确不移植
+用户面 `$`/`$$` eval（omp-ui 无入口）；D12–D15 让 `execute_code` 复用 omp 原生 eval 卡的完整数据模型
+（多 cell、live partial、title、async、views/images、`meta.truncation`），用户面入口仍无；ADR-5（Recap 与压缩摘要）见
 `docs/adr/ADR-5-recap-and-compaction.md`，取代 §2.3.2.1 中
 「压缩摘要」「Recap」两行的 `无 producer` 判断（默认快照不变，新投影按 `include_compaction` 显式请求）；
 P1（盖章 / merged 投影 / `compaction.summary` 事件 / 客户端 opt-in）、P2（`collapseCompacted` 渲染期省略）、
