@@ -66,6 +66,18 @@ _DESTRUCTIVE_PATTERNS = re.compile(
 # Output redirects that overwrite files (> but not >>)
 _REDIRECT_OVERWRITE = re.compile(r'[^>]>[^>]|^>[^>]')
 
+def _persisted_model_result(tool_name: str, result: Any) -> Any:
+    """Drop display-only fields from the model-facing copy of a tool result (ADR-4 D11.1).
+
+    ``execute_code`` carries views/images for the live card and the durable row; the model
+    copy must not spend context on base64. Every other tool result is returned unchanged.
+    """
+    if tool_name == "execute_code" and isinstance(result, str):
+        from tools.code_execution_tool import strip_execute_code_display
+        return strip_execute_code_display(result)
+    return result
+
+
 def _context_pruned_argument_paths(tool_name: str, args: Any) -> list[str]:
     """Paths whose values contain model-visible context-compression artifacts.
 

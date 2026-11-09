@@ -17,7 +17,7 @@ cross-cell enforcement.
 
 
 def _code_execution(mode: str = "project", kernel_idle_timeout: int = 1800,
-                    max_session_kernels: int = 4) -> dict:
+                    max_session_kernels: int = 4, max_cells: int = 16) -> dict:
     """One ``code_execution`` config block (see ``DEFAULT_CONFIG['code_execution']``)."""
     return {"mode": mode, "kernel_idle_timeout": kernel_idle_timeout,
-            "max_session_kernels": max_session_kernels}
+            "max_session_kernels": max_session_kernels, "max_cells": max_cells}

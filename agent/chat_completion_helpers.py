@@ -3008,7 +3008,8 @@ class _StreamingCall(StreamingWaitMonitor):
         reasoning_details: list = []  # OpenRouter replay data (signatures, encrypted blocks)
         pending_text_parts: list[str] = []
         from agent.chat_completion_helpers_tool_calls import _ToolCallAccumulator
-        tool_calls = _ToolCallAccumulator()
+        from tools.eval_speculation import observe_partial
+        tool_calls = _ToolCallAccumulator(on_delta=observe_partial)
         tool_calls_acc = tool_calls.acc
         from agent.reasoning_carriers import StreamCarriers
         carriers = StreamCarriers()

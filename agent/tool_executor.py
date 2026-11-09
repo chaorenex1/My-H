@@ -55,6 +55,7 @@ from agent.tool_dispatch_helpers import (
     _multimodal_text_summary,
     _append_subdir_hint_to_multimodal,
     _context_pruned_argument_paths,
+    _persisted_model_result,
     _plan_tool_batch_segments,
     make_tool_result_message,
 )
@@ -726,9 +727,9 @@ def _dispatch_authorized_once(
     from agent.terminal_approval_batch import prepare_current_terminal
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
-    from agent.tool_progress_relay import bound_tool_progress
+    from agent.tool_progress_relay import bound_tool_relay
     from tools.connectors.data_use import collect_data_use
-    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
+    with bound_tool_relay(agent, ref.name, ref.call_id), collect_data_use() as data_use:
         try:
             return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
         finally:
@@ -1104,7 +1105,8 @@ def _commit_tool_result(
     _status_suffix = " (error)" if is_error else ""
     agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}")
 
-    persisted_result = function_result
+    # ADR-4 D11.1: display-only fields ride the live event and display_metadata, never the model copy.
+    persisted_result = _persisted_model_result(function_name, function_result)
     if _is_multimodal_tool_result(persisted_result):
         persisted_result = _persist_multimodal_text_parts(
             persisted_result, function_name, tool_call_id, get_active_env(effective_task_id), budget,

@@ -47,27 +47,45 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
 DEFAULT_TIMEOUT = 300        # 5 minutes
 DEFAULT_MAX_TOOL_CALLS = 50
+DEFAULT_MAX_CELLS = 16
+MAX_CELLS = 256              # hard ceiling: a model-supplied max_cells can't make one call huge
 MAX_STDOUT_BYTES = 50_000    # 50 KB
 MAX_STDERR_BYTES = 10_000    # 10 KB
 # Hard ceiling on the spilled file (as web_tools' MAX_STORED_TEXT_CHARS): a runaway print loop must not fill the disk.
 MAX_SPILLED_STDOUT_BYTES = 5_000_000
 
 
+def _line_count(text: str) -> int:
+    """Newline-delimited line count (a final unterminated line counts). ADR-4 D15."""
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
 def _truncate_stdout_text(stdout_text: str) -> tuple[str, dict[str, Any]]:
     """Cap stdout by bytes (40% head / 60% tail) with explicit truncation metadata: byte counts
     ride alongside the textual marker because a client layer can miss or re-truncate it. The
-    omitted middle is spilled to cache/exec and the result carries the path (recover-don't-rerun)."""
+    omitted middle is spilled to cache/exec and the result carries the path (recover-don't-rerun).
+    ``stdout_lines_total``/``stdout_lines_shown`` are additive (ADR-4 D15) so the native card can
+    draw an accurate truncation warning; ``stdout_lines_shown`` counts the represented fragments."""
     stdout_bytes = stdout_text.encode("utf-8", errors="replace")
     total = len(stdout_bytes)
     captured = min(total, MAX_STDOUT_BYTES)
+    total_lines = _line_count(stdout_text)
     metadata: dict[str, Any] = {"stdout_truncated": total > captured, "stdout_bytes_captured": captured,
-                                "stdout_bytes_total": total, "stdout_bytes_omitted": total - captured}
+                                "stdout_bytes_total": total, "stdout_bytes_omitted": total - captured,
+                                "stdout_lines_total": total_lines,
+                                "stdout_lines_shown": total_lines}
     if total <= MAX_STDOUT_BYTES:
         return stdout_bytes.decode("utf-8", errors="replace"), metadata
     head_bytes, tail_bytes = head_tail_split(MAX_STDOUT_BYTES)
-    text = (stdout_bytes[:head_bytes].decode("utf-8", errors="replace")
-            + truncation_notice(total - captured, total, unit="bytes")
-            + stdout_bytes[-tail_bytes:].decode("utf-8", errors="replace"))
+    head_text = stdout_bytes[:head_bytes].decode("utf-8", errors="replace")
+    tail_text = stdout_bytes[-tail_bytes:].decode("utf-8", errors="replace")
+    text = head_text + truncation_notice(total - captured, total, unit="bytes") + tail_text
+    # Head and tail can be two fragments of the same long line, so clamp the represented count;
+    # truncation itself is conveyed by the byte fields (truncatedBy="bytes"), not line arithmetic.
+    represented = _line_count(head_text) + _line_count(tail_text)
+    metadata["stdout_lines_shown"] = min(represented, total_lines)
     metadata["warning"] = ("execute_code stdout was truncated; the script did run, but only "
                            "the captured head/tail output is included. Re-run only with "
                            "narrower output if the omitted data is required.")
@@ -78,6 +96,26 @@ def _truncate_stdout_text(stdout_text: str) -> tuple[str, dict[str, Any]]:
                                f"script did run. FULL output saved to {spill_path} — page it "
                                f'with read_file(path="{spill_path}", offset=...) instead of re-running.')
     return text, metadata
+
+
+def strip_execute_code_display(result: str) -> str:
+    """Drop the additive ``display`` block from the MODEL-facing result.
+
+    The live UI reads it from ``tool.complete.result`` and the persisted row carries it in
+    ``display_metadata``; leaving base64 images/views in the model copy would spend context
+    and can push the result past the tool's result cap. Only ``execute_code`` JSON objects
+    with a ``display`` key are rewritten; every other result is returned unchanged.
+    """
+    if not isinstance(result, str) or not result.startswith("{") or '"display"' not in result:
+        return result
+    try:
+        body = json.loads(result)
+    except (TypeError, ValueError):
+        return result
+    if not isinstance(body, dict) or "display" not in body:
+        return result
+    body.pop("display", None)
+    return json.dumps(body, ensure_ascii=False)
 
 
 def _spill_full_stdout(stdout_text: str) -> Optional[str]:
@@ -147,6 +185,222 @@ _TOOL_STUBS = {
 # usable from a local execute_code script. ``__`` names are reserved and never hit the tool
 # registry; a remote filesystem sandbox rejects them (local authority only).
 _HOST_OP_STUBS = {
+    "display": '''def display(value=None, *, kind=None, text=None, view=None, images=None):
+    """Show a value on the eval card: prints its text for the model and records a view
+    (json by default, markdown/table on request) plus optional images. Returns `value`."""
+    if images is None and isinstance(value, dict) and "data" in value and ("mimeType" in value or "mime_type" in value):
+        images, value = [value], None
+    if view is None and value is not None:
+        if kind == "markdown":
+            view = {"kind": "markdown", "text": str(value)}
+        elif kind == "table" and isinstance(value, list):
+            rows = [list(row.values()) if isinstance(row, dict) else list(row) for row in value]
+            head = list(value[0]) if value and isinstance(value[0], dict) else list(range(len(rows[0]) if rows else 0))
+            view = {"kind": "table", "columns": [{"head": str(col)} for col in head],
+                    "rows": [[str(cell) for cell in row] for row in rows]}
+        else:
+            try:
+                safe_value = json.loads(json.dumps(value, default=str))
+            except (TypeError, ValueError):
+                safe_value = str(value)
+            view = {"kind": "json", "value": safe_value}
+    if text is None:
+        text = value if isinstance(value, str) else json.dumps(value, indent=2, default=str, ensure_ascii=False)
+    if text:
+        print(text)
+    payload = {"images": images or []}
+    if view is not None and text:
+        payload["views"] = [{"text": text, "view": view}]
+    _call("__display__", payload)
+    return value
+''',
+    "status": '''def status(op, **fields):
+    """Record one status event on the eval card (`op` names the operation)."""
+    return _call("__status__", {"op": str(op), **fields})
+''',
+    "out": '''def out(text):
+    """Send text to the current turn's reply surface (out://). No transcript row; fails
+    outside an active turn."""
+    return _call("__out__", {"text": str(text)})
+''',
+    "completion": '''class CompletionHandle:
+    """Background one-shot auxiliary completion."""
+    kind = "completion"
+
+    def __init__(self, id):
+        self.id = id
+
+    def __repr__(self):
+        return f"<completion {self.id}>"
+
+    def status(self):
+        snap = _call("__status__", {"item": {"kind": self.kind, "id": self.id}})
+        return snap.get("status", "failed") if isinstance(snap, dict) else "failed"
+
+    def done(self):
+        return self.status() != "running"
+
+    def wait(self, timeout=None):
+        args = {"items": [{"kind": self.kind, "id": self.id}]}
+        if timeout is not None:
+            args["timeoutMs"] = max(0, float(timeout) * 1000)
+        snap = (_call("__wait__", args).get("items") or [{}])[0]
+        if snap.get("status") == "running":
+            raise TimeoutError(f"completion {self.id} is still running")
+        if snap.get("status") in ("failed", "cancelled"):
+            raise RuntimeError(snap.get("error") or f"completion {self.id} failed")
+        return snap.get("text", "")
+
+    def cancel(self):
+        result = _call("__cancel__", {"item": {"kind": self.kind, "id": self.id}})
+        return bool(result.get("cancelled")) if isinstance(result, dict) else False
+
+    def __await__(self):
+        import asyncio
+        return asyncio.to_thread(self.wait).__await__()
+
+
+def completion(prompt, *, model="default", system=None, schema=None):
+    """Start a stateless auxiliary completion and return its handle."""
+    args = {"prompt": prompt, "model": model}
+    if system is not None:
+        args["system"] = system
+    if schema is not None:
+        args["schema"] = schema
+    result = _call("__completion__", args)
+    if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+        raise RuntimeError("completion() did not return a handle")
+    return CompletionHandle(result["id"])
+''',
+    "agent": '''class AgentHandle:
+    """Background subagent handle (named agent or delegated child)."""
+    kind = "agent"
+
+    def __init__(self, id, agent=None):
+        self.id = id
+        self.agent = agent
+        self.handle = f"agent://{id}"
+
+    def __repr__(self):
+        return f"<agent {self.id} ({self.agent})>"
+
+    def status(self):
+        snap = _call("__status__", {"item": {"kind": self.kind, "id": self.id}})
+        return snap.get("status", "failed") if isinstance(snap, dict) else "failed"
+
+    def done(self):
+        return self.status() != "running"
+
+    def wait(self, timeout=None):
+        args = {"items": [{"kind": self.kind, "id": self.id}]}
+        if timeout is not None:
+            args["timeoutMs"] = max(0, float(timeout) * 1000)
+        snap = (_call("__wait__", args).get("items") or [{}])[0]
+        if snap.get("status") == "running":
+            raise TimeoutError(f"agent {self.id} is still running")
+        if snap.get("status") in ("failed", "cancelled"):
+            raise RuntimeError(snap.get("error") or f"agent {self.id} failed")
+        return snap.get("text") if "text" in snap else snap.get("result")
+
+    def send(self, message):
+        return _call("__send__", {"id": self.id, "message": str(message)})
+
+    def cancel(self):
+        result = _call("__cancel__", {"item": {"kind": self.kind, "id": self.id}})
+        return bool(result.get("cancelled")) if isinstance(result, dict) else False
+
+    def __await__(self):
+        import asyncio
+        return asyncio.to_thread(self.wait).__await__()
+
+
+def wait(handles, timeout=None, *, raise_errors=True):
+    """Wait for agent/completion handles in input order."""
+    items = [handles] if isinstance(handles, (AgentHandle, CompletionHandle)) else list(handles)
+    args = {"items": [{"kind": h.kind, "id": h.id} for h in items]}
+    if timeout is not None:
+        args["timeoutMs"] = max(0, float(timeout) * 1000)
+    snapshots = _call("__wait__", args).get("items") or []
+    results = []
+    for handle, snap in zip(items, snapshots):
+        status = snap.get("status")
+        if status == "running":
+            value = TimeoutError(f"{handle.kind} {handle.id} is still running")
+        elif status in ("failed", "cancelled"):
+            value = RuntimeError(snap.get("error") or f"{handle.kind} {handle.id} failed")
+        else:
+            value = snap.get("text") if "text" in snap else snap.get("result")
+        results.append(value)
+    if raise_errors:
+        for value in results:
+            if isinstance(value, Exception):
+                raise value
+    return results
+
+
+def agent(prompt, *, agent=None, label=None, context=None, tools=None):
+    """Start a background subagent and return its handle."""
+    args = {"prompt": prompt}
+    if agent is not None:
+        args["agent"] = agent
+    if label is not None:
+        args["label"] = label
+    if context is not None:
+        args["context"] = context
+    if tools is not None:
+        args["tools"] = list(tools)
+    result = _call("__agent__", args)
+    if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+        raise RuntimeError((result or {}).get("error") or "agent() did not return a handle")
+    return AgentHandle(result["id"], result.get("agent"))
+
+
+class WorkPool:
+    """Pool of background subagents fed through the host workpool bridge."""
+    kind = "workpool"
+
+    def __init__(self, name, agent, limit):
+        self.name = name
+        self.agent = agent
+        self.limit = limit
+
+    def push(self, *items):
+        if not all(isinstance(item, str) for item in items):
+            raise TypeError("WorkPool.push() expects string items")
+        result = _call("__workpool__", {"op": "push", "name": self.name, "items": list(items)})
+        return result.get("ids", []) if isinstance(result, dict) else []
+
+    def status(self):
+        return _call("__workpool__", {"op": "status", "name": self.name})
+
+    def peek(self):
+        return _call("__workpool__", {"op": "peek", "name": self.name})
+
+    def close(self):
+        return _call("__workpool__", {"op": "close", "name": self.name})
+
+    def __repr__(self):
+        return f"<workpool {self.name} ({self.agent})>"
+
+
+def workpool(agent=None, *, name=None, context=None, tools=None, limit=None):
+    """Create a pool of background subagents."""
+    args = {"op": "create"}
+    if agent is not None:
+        args["agent"] = agent
+    if name is not None:
+        args["name"] = name
+    if context is not None:
+        args["context"] = context
+    if tools is not None:
+        args["tools"] = list(tools)
+    if limit is not None:
+        args["limit"] = int(limit)
+    result = _call("__workpool__", args)
+    if not isinstance(result, dict) or not isinstance(result.get("name"), str):
+        raise RuntimeError("workpool() did not return a pool")
+    return WorkPool(result["name"], result.get("agent"), result.get("limit"))
+''',
     "judge": '''def judge(state, *, questions=None, questions_file=None, contexts=None, labels=None,
           images=None, purpose=None, budget_usd=None, timeout_ms=None):
     """Answer one typed question set about `state` (ADR-17). Returns the v1 result object
@@ -622,6 +876,174 @@ def _sandbox_tools_for(enabled_tools: Optional[list[str]]) -> frozenset:
     return frozenset(SANDBOX_ALLOWED_TOOLS & set(enabled_tools or ())) or SANDBOX_ALLOWED_TOOLS
 
 
+# ---- Cell surface: language, cells, timeout, JS capability (ADR-4 D8) ----
+
+_LANGUAGE_ALIASES = {"py": "py", "python": "py", "js": "js", "javascript": "js"}
+
+
+def _normalize_language(value: Any, *, default: str = "py") -> Optional[str]:
+    """Canonical ``py``/``js`` for a model-supplied language; ``None`` when unsupported."""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        return None
+    return _LANGUAGE_ALIASES.get(value.strip().lower())
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _positive_number(value: Any, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _max_cells() -> int:
+    """``code_execution.max_cells`` (default 16), hard-capped so config can't make a call unbounded."""
+    return min(_positive_int(_load_config().get("max_cells"), DEFAULT_MAX_CELLS), MAX_CELLS)
+
+
+def _bun_binary() -> Optional[str]:
+    """PM's locked Bun binary (never PATH/~/.bun); ``None`` when it is not installed."""
+    try:
+        from pm.install import installed_package
+        package = installed_package("bun")
+    except Exception:
+        logger.debug("PM Bun lookup failed", exc_info=True)
+        return None
+    if package is None or package.binary is None:
+        return None
+    try:
+        if not package.binary.is_file():
+            return None
+    except OSError:
+        return None
+    return str(package.binary)
+
+
+def _js_kernel_available() -> bool:
+    """True when this build ships the Bun kernel module (ADR-4 P2)."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec("tools.eval_js_kernel") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def js_backend_available() -> bool:
+    """JS cells need PM's Bun binary and the JS kernel module in this build."""
+    return _bun_binary() is not None and _js_kernel_available()
+
+
+def _facts_signature(path) -> tuple:
+    try:
+        stat = path.stat()
+        return (str(path), stat.st_mtime_ns, stat.st_size)
+    except Exception:
+        logger.debug("PM facts stat failed for %s", path, exc_info=True)
+        return (str(path), None, None)
+
+
+def js_capability_fingerprint() -> tuple:
+    """Cheap memo-key component for the tool-definitions cache.
+
+    ``hermes pm install bun`` rewrites PM's facts.json without touching config.yaml, so a
+    long-lived gateway must still see the ``js`` enum on its next session (ADR-4 D8/acceptance 7).
+    Two stats + the static kernel-module bit per key, not the full package lookup; the store
+    paths resolve per active home/profile, never through a process-wide cache.
+    """
+    try:
+        from pm import paths
+        candidates = (paths.facts_path(), paths.writable_store_root() / "facts.json")
+    except Exception:
+        logger.debug("PM facts path probe failed", exc_info=True)
+        candidates = ()
+    return (tuple(_facts_signature(path) for path in candidates), _js_kernel_available())
+
+
+def _run_js_cell(code: str, *, task_id: str, child_cwd: str, sandbox_tools: frozenset,
+                 timeout: float, max_tool_calls: int, reset: bool, is_interrupted,
+                 on_stream=None, cell_index: int = 0) -> str:
+    """Dispatch one JS cell to the Bun session kernel (ADR-4 P2 owns the runner)."""
+    from tools.eval_js_kernel import run_js_cell
+    return run_js_cell(code, task_id=task_id, child_cwd=child_cwd, sandbox_tools=sandbox_tools,
+                       timeout=timeout, max_tool_calls=max_tool_calls, reset=reset,
+                       is_interrupted=is_interrupted, on_stream=on_stream, cell_index=cell_index)
+
+
+def _run_local_cell(code: str, language: str, *, task_id: str, mode: str, child_python: str,
+                    child_cwd: str, sandbox_tools: frozenset, timeout: float, max_tool_calls: int,
+                    reset: bool, is_interrupted, on_stream=None, cell_index: int = 0) -> str:
+    if language == "js":
+        return _run_js_cell(code, task_id=task_id, child_cwd=child_cwd, sandbox_tools=sandbox_tools,
+                            timeout=timeout, max_tool_calls=max_tool_calls, reset=reset,
+                            is_interrupted=is_interrupted, on_stream=on_stream,
+                            cell_index=cell_index)
+    from tools.code_kernel import execute_in_session_kernel
+    return execute_in_session_kernel(
+        code, task_id=task_id, mode=mode, child_python=child_python, child_cwd=child_cwd,
+        sandbox_tools=sandbox_tools, timeout=timeout, max_tool_calls=max_tool_calls,
+        reset=reset, is_interrupted=is_interrupted, on_stream=on_stream, cell_index=cell_index,
+    )
+
+
+def _cell_entry(index: int, cell: dict, raw: str, cell_start: float) -> dict:
+    """One ``cells[]`` item: the cell's identity plus the kernel result's keys unchanged."""
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        parsed = {"status": "error", "error": "execute_code produced an unreadable cell result.",
+                  "output": str(raw)}
+    if not isinstance(parsed, dict):
+        parsed = {"status": "error", "output": str(parsed)}
+    parsed.setdefault("duration_seconds", round(time.monotonic() - cell_start, 2))
+    entry = {"index": index, "code": cell["code"], "language": cell["language"]}
+    if cell.get("title") is not None:
+        entry["title"] = cell["title"]
+    entry.update(parsed)
+    return entry
+
+
+def _multi_cell_result(cells: list[dict], *, exec_start: float, title: Optional[str] = None) -> str:
+    """Aggregate per-cell results: timeout/interrupted outrank error, which outranks success."""
+    statuses = [cell.get("status") for cell in cells]
+    if "interrupted" in statuses:
+        status = "interrupted"
+    elif "timeout" in statuses:
+        status = "timeout"
+    elif any(item != "success" for item in statuses):
+        status = "error"
+    else:
+        status = "success"
+    output = "\n\n".join(
+        cell["output"] for cell in cells
+        if isinstance(cell.get("output"), str) and cell["output"]
+    )
+    result: dict[str, Any] = {
+        "status": status, "output": output, "cells": cells,
+        "duration_seconds": round(time.monotonic() - exec_start, 2),
+        "tool_calls_made": sum(int(cell.get("tool_calls_made") or 0) for cell in cells),
+    }
+    byte_fields = ("stdout_bytes_captured", "stdout_bytes_total", "stdout_bytes_omitted",
+                   "stdout_lines_total", "stdout_lines_shown")
+    if any(field in cell for cell in cells for field in byte_fields):
+        for field in byte_fields:
+            result[field] = sum(int(cell.get(field) or 0) for cell in cells)
+        result["stdout_truncated"] = any(bool(cell.get("stdout_truncated")) for cell in cells)
+    if title is not None:
+        result["title"] = title
+    return json.dumps(result, ensure_ascii=False)
+
+
+
 def _run_remote_per_call(env, env_type: str, code: str, effective_task_id: str,
                          sandbox_tools: frozenset, *, timeout: int, max_tool_calls: int,
                          exec_start: float) -> str:
@@ -688,14 +1110,18 @@ def _run_remote_per_call(env, env_type: str, code: str, effective_task_id: str,
 
 
 def _execute_remote(code: str, task_id: Optional[str], enabled_tools: Optional[list[str]],
-                    reset: bool = False) -> str:
+                    reset: bool = False, *, timeout: Optional[float] = None) -> str:
     """Run code on the remote terminal backend: the owner's persistent remote session kernel
     (tools/code_kernel_remote.py) first, else the per-call script ship — the fail-open route when
-    a kernel cannot be spawned and the only route for hosts that cannot sustain a background process."""
+    a kernel cannot be spawned and the only route for hosts that cannot sustain a background process.
+    ``timeout`` overrides ``code_execution.timeout`` for this call (capped by it)."""
     from tools.terminal_tool import _resolve_container_task_id
     from tools.terminal_tool_lifecycle import _call_in_flight
     _cfg = _load_config()
-    timeout, max_tool_calls = _cfg.get("timeout", DEFAULT_TIMEOUT), _cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
+    cap_value = _positive_number(_cfg.get("timeout"), float(DEFAULT_TIMEOUT))
+    cap = int(cap_value) if float(cap_value).is_integer() else cap_value
+    timeout = cap if timeout is None else min(timeout, cap)
+    max_tool_calls = _positive_int(_cfg.get("max_tool_calls"), DEFAULT_MAX_TOOL_CALLS)
     sandbox_tools, effective_task_id = _sandbox_tools_for(enabled_tools), task_id or "default"
     env, env_type = _get_or_create_env(effective_task_id)
     with _call_in_flight(_resolve_container_task_id(effective_task_id)):
@@ -734,17 +1160,311 @@ def _execute_remote(code: str, task_id: Optional[str], enabled_tools: Optional[l
 # ---- Main entry point ----
 
 
+def _prepare_cell_call(*, code: Any, cells: Any, language: Any, title: Any, timeout: Any,
+                       cfg: dict) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Validate the D8 input surface; returns ``(spec, error_json)``. ``spec["cells"]`` is always
+    a list (a single ``code`` becomes one cell), so dispatch has one shape."""
+    if code is not None and cells is not None:
+        return None, tool_error("Provide exactly one of 'code' (a single cell) or 'cells' "
+                                "(a list of cells), not both.")
+    if title is not None and not isinstance(title, str):
+        return None, tool_error("'title' must be a string.")
+    if cells is not None:
+        if isinstance(cells, (str, bytes)) or not isinstance(cells, list):
+            return None, tool_error("'cells' must be a list of {code, language?, title?} objects.")
+        if not cells:
+            return None, tool_error("'cells' must contain at least one cell.")
+        max_cells = min(_positive_int(cfg.get("max_cells"), DEFAULT_MAX_CELLS), MAX_CELLS)
+        if len(cells) > max_cells:
+            return None, tool_error(f"execute_code accepts at most {max_cells} cells per call "
+                                    f"(got {len(cells)}).")
+        normalized: list[dict[str, Any]] = []
+        for index, raw in enumerate(cells):
+            if not isinstance(raw, dict):
+                return None, tool_error(f"cells[{index}] must be an object with a 'code' string.")
+            cell_code = raw.get("code")
+            if not isinstance(cell_code, str) or not cell_code.strip():
+                return None, tool_error(f"cells[{index}].code must be a non-empty string.")
+            cell_language = _normalize_language(
+                raw.get("language") if raw.get("language") is not None else language
+            )
+            if cell_language is None:
+                return None, tool_error(f"cells[{index}] has unsupported language "
+                                        f"{raw.get('language')!r}; use 'py' or 'js'.")
+            cell_title = raw.get("title")
+            if cell_title is not None and not isinstance(cell_title, str):
+                return None, tool_error(f"cells[{index}].title must be a string.")
+            normalized.append({"code": cell_code, "language": cell_language, "title": cell_title})
+        # `cells` is the multi-cell surface even with one item: its title/language must survive
+        # in the aggregate shape (a single `code` is the only single-cell form).
+        single = False
+    else:
+        single_language = _normalize_language(language)
+        if single_language is None:
+            return None, tool_error(f"Unsupported language {language!r}; use 'py' or 'js'.")
+        if code is None:
+            hint = "JavaScript" if single_language == "js" else "Python"
+            return None, tool_error("No code provided. execute_code requires a non-empty 'code' "
+                                    f"parameter containing {hint} source. To run shell commands, "
+                                    "use terminal(command=...) instead.")
+        if not isinstance(code, str):
+            hint = "JavaScript" if single_language == "js" else "Python"
+            return None, tool_error(f"execute_code received a {type(code).__name__} in 'code', but it "
+                                    f"requires {hint} source as a string. Retry as execute_code(code=\"...\").")
+        if not code.strip():
+            hint = "JavaScript" if single_language == "js" else "Python"
+            return None, tool_error("No code provided. execute_code requires a non-empty 'code' "
+                                    f"parameter containing {hint} source. To run shell commands, "
+                                    "use terminal(command=...) instead.")
+        normalized = [{"code": code, "language": single_language, "title": None}]
+        single = True
+    cap_value = _positive_number(cfg.get("timeout"), float(DEFAULT_TIMEOUT))
+    cap = int(cap_value) if float(cap_value).is_integer() else cap_value
+    if timeout is None:
+        effective_timeout = cap
+    else:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            return None, tool_error("'timeout' must be a number of seconds.")
+        if timeout <= 0:
+            return None, tool_error("'timeout' must be greater than zero seconds.")
+        effective_timeout = min(timeout, cap)
+    return {
+        "cells": normalized,
+        "single": single,
+        "languages": {cell["language"] for cell in normalized},
+        "title": title,
+        "timeout": effective_timeout,
+        # Single-cell results only echo these when the model supplied them; generated display
+        # titles never enter the model-visible result (ADR-4 D13).
+        "explicit_language": language is not None,
+        "explicit_title": title is not None,
+    }, None
+
+
+def _preflight_cell_call(spec: dict, *, env_config: dict) -> Optional[str]:
+    """JS capability, gateway-lifecycle hard gate, then the approval gate — all before any spawn.
+    Every cell is guarded with its own language; nothing runs when one cell is refused."""
+    env_type = env_config["env_type"]
+    if "js" in spec["languages"]:
+        if env_type != "local":
+            return tool_error('execute_code(language="js") is only available with the local '
+                              "terminal backend; this session uses a remote/container backend.")
+        if _bun_binary() is None:
+            return tool_error("JavaScript needs Bun: hermes pm install bun")
+        if not _js_kernel_available():
+            return tool_error("JavaScript execution is unavailable in this build.")
+    # Hard-block gateway-lifecycle commands (mirrors the terminal_tool guard — otherwise
+    # `os.system("launchctl bootout ...")` or `Bun.spawn([...])` here bypasses it and SIGTERMs
+    # the gateway mid-task). Gated on PID-file ownership, not the inherited env marker. The
+    # identity probe ends in a kernel process query that has wedged on macOS (#111922); share
+    # the call's own deadline and fail CLOSED when it renders no verdict.
+    from agent.deadline import run_bounded_sync
+    from tools.process_registry import _is_supervised_gateway_process
+    from tools.terminal_tool import _PRE_EXEC_GUARD_MIN_TIMEOUT_S
+    probe_timeout = max(spec["timeout"], _PRE_EXEC_GUARD_MIN_TIMEOUT_S)
+    probe = run_bounded_sync(
+        _is_supervised_gateway_process, probe_timeout, label="execute_code.lifecycle-guard",
+    )
+    if probe.timed_out:
+        return tool_error(
+            f"execute_code lifecycle guard did not finish within {probe_timeout}s "
+            "(process-identity probe wedged); the code was not run. Retry the call."
+        )
+    if probe.value:
+        from cron.lifecycle_guard import (
+            HOST_INTERPRETER_KILL_REJECTION,
+            contains_gateway_lifecycle_command,
+            contains_host_interpreter_kill,
+        )
+        for cell in spec["cells"]:
+            if contains_gateway_lifecycle_command(cell["code"]):
+                if contains_host_interpreter_kill(cell["code"]):
+                    return tool_error(HOST_INTERPRETER_KILL_REJECTION)
+                return tool_error(
+                    "Blocked: cannot restart or stop the gateway from inside the "
+                    "gateway process. The gateway would kill this script before "
+                    "it could complete (SIGTERM propagates to child processes). "
+                    "Run the lifecycle command from a shell outside the gateway."
+                )
+    # Arbitrary code never passes through terminal()/DANGEROUS_PATTERNS, so guard the whole
+    # script before either dispatch path spawns it — in this (tool-executor) thread, which holds
+    # the session context. A Docker sandbox with host bind mounts gets no container fast-path.
+    # See #30882.
+    from tools.approval import check_execute_code_guard
+    from tools.terminal_tool import _docker_has_host_access
+    has_host_access = _docker_has_host_access(env_config)
+    user_approved = False
+    for cell in spec["cells"]:
+        guard = check_execute_code_guard(cell["code"], env_type, has_host_access=has_host_access,
+                                         language=cell["language"])
+        if not guard.get("approved", False):
+            return _error_result(guard.get("message") or "execute_code blocked by approval guard.",
+                                 user_summary=guard.get("user_summary"))
+        user_approved = user_approved or bool(guard.get("user_approved"))
+    # Clear a stale interrupt bit that landed during the blocking approval-wait so it can't
+    # kill the just-approved run on the first poll. A genuine post-clear interrupt re-sets it.
+    if user_approved:
+        from tools.interrupt import clear_current_thread_interrupt
+        clear_current_thread_interrupt()
+    return None
+
+
+def _execute_multi_cells(spec: dict, *, task_id: Optional[str], enabled_tools: Optional[list[str]],
+                         env_type: str, reset: bool, max_tool_calls: int, is_interrupted,
+                         on_stream=None) -> str:
+    """Run ``cells``. Same-language cells stay in input order on one kernel; different
+    languages may run concurrently (ADR-4 D11.4). ``reset`` clears each involved language's
+    kernel on its first cell. Call-level ``timeout`` is the whole-call deadline: a cell that
+    starts after it expires is reported as timed out, never run. Results keep input order."""
+    exec_start = time.monotonic()
+    deadline = exec_start + spec["timeout"]
+    mode = _get_execution_mode()
+    child_python = _resolve_child_python(mode)
+    child_cwd = _resolve_child_cwd(mode, "", task_id=task_id or "")
+    sandbox_tools = frozenset(_sandbox_tools_for(enabled_tools))
+    cells = spec["cells"]
+    entries: list[Optional[dict[str, Any]]] = [None] * len(cells)
+    from tools.eval_js_packages import parse_magic
+
+    def run_one(index: int, cell: dict, want_reset: bool, interrupted) -> None:
+        if cell["language"] == "js" and parse_magic(cell["code"]) is not None:
+            message = "%bun/%environment cells must be a single-cell call."
+            entries[index] = {"index": index, "code": cell["code"], "language": "js",
+                              "status": "error", "exit_code": 1, "duration_seconds": 0.0,
+                              "error": message, "output": message}
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            message = (f"Cell not run: the execute_code deadline ({spec['timeout']:g}s) "
+                       "expired before it started.")
+            entry = {"index": index, "code": cell["code"], "language": cell["language"]}
+            if cell.get("title") is not None:
+                entry["title"] = cell["title"]
+            entry.update({"status": "timeout", "exit_code": -1, "duration_seconds": 0.0,
+                          "error": message, "output": f"⏰ {message}"})
+            entries[index] = entry
+            return
+        cell_start = time.monotonic()
+        if env_type != "local":
+            raw = _execute_remote(cell["code"], task_id, enabled_tools, reset=want_reset,
+                                  timeout=remaining)
+        else:
+            raw = _run_local_cell(
+                cell["code"], cell["language"], task_id=task_id or "", mode=mode,
+                child_python=child_python, child_cwd=child_cwd, sandbox_tools=sandbox_tools,
+                timeout=remaining, max_tool_calls=max_tool_calls, reset=want_reset,
+                is_interrupted=interrupted, on_stream=on_stream, cell_index=index,
+            )
+        entries[index] = _cell_entry(index, cell, raw, cell_start)
+
+    groups: dict[str, list[int]] = {}
+    for index, cell in enumerate(cells):
+        groups.setdefault(cell["language"], []).append(index)
+
+    def run_group(indexes: list[int], interrupted) -> None:
+        for position, index in enumerate(indexes):
+            run_one(index, cells[index], bool(reset) and position == 0, interrupted)
+
+    if env_type != "local" or len(groups) <= 1:
+        for indexes in groups.values():
+            run_group(indexes, is_interrupted)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        from tools.interrupt import is_thread_interrupted
+        from tools.thread_context import propagate_context_to_thread
+        submitter_tid = threading.current_thread().ident
+
+        def group_interrupted() -> bool:
+            # Pool threads are not the tool-call thread, so the per-thread interrupt bit must be
+            # read for the submitter (/stop, Ctrl+C) as well as this worker.
+            return bool(is_interrupted()) or is_thread_interrupted(submitter_tid)
+
+        with ThreadPoolExecutor(max_workers=len(groups),
+                                thread_name_prefix="hermes-eval-cell") as pool:
+            # Capture each group's context HERE (on the tool-executor thread): a bare pool worker
+            # would lose the turn's approval/session ContextVars and CellAuthority would snapshot none.
+            futures = [pool.submit(propagate_context_to_thread(run_group), indexes, group_interrupted)
+                       for indexes in groups.values()]
+            for future in futures:
+                future.result()
+
+    ordered = []
+    for index, cell in enumerate(cells):
+        entry = entries[index]
+        if entry is None:
+            entry = {"index": index, "code": cell["code"], "language": cell["language"],
+                     "status": "error", "exit_code": -1, "duration_seconds": 0.0,
+                     "error": "Cell did not produce a result.", "output": ""}
+        ordered.append(entry)
+    return _multi_cell_result(ordered, exec_start=exec_start, title=spec.get("title"))
+
+
+def _execute_spec(spec: dict, *, task_id: Optional[str], enabled_tools: Optional[list[str]],
+                  env_type: str, reset: bool, max_tool_calls: int, is_interrupted,
+                  on_stream=None) -> tuple[str, str]:
+    """Run one validated call spec; returns ``(result_json, backend)``. Shared by the synchronous
+    path and the background job manager so both produce one result shape (ADR-4 D14)."""
+    if spec["single"]:
+        cell = spec["cells"][0]
+        if env_type != "local":
+            raw = _execute_remote(cell["code"], task_id, enabled_tools, reset=bool(reset),
+                                  timeout=spec["timeout"])
+            backend = "remote"
+        else:
+            mode = _get_execution_mode()
+            raw = _run_local_cell(
+                cell["code"], cell["language"], task_id=task_id or "", mode=mode,
+                child_python=_resolve_child_python(mode),
+                child_cwd=_resolve_child_cwd(mode, "", task_id=task_id or ""),
+                sandbox_tools=frozenset(_sandbox_tools_for(enabled_tools)),
+                timeout=spec["timeout"], max_tool_calls=max_tool_calls,
+                reset=bool(reset), is_interrupted=is_interrupted,
+                on_stream=on_stream, cell_index=0,
+            )
+            backend = "local"
+        if spec.get("explicit_language") or spec.get("explicit_title"):
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                if spec.get("explicit_language"):
+                    parsed["language"] = cell["language"]
+                if spec.get("explicit_title"):
+                    parsed["title"] = spec.get("title")
+                raw = json.dumps(parsed, ensure_ascii=False)
+        return raw, backend
+    raw = _execute_multi_cells(
+        spec, task_id=task_id, enabled_tools=enabled_tools, env_type=env_type,
+        reset=bool(reset), max_tool_calls=max_tool_calls, is_interrupted=is_interrupted,
+        on_stream=on_stream,
+    )
+    return raw, "remote" if env_type != "local" else "local"
+
+
 def execute_code(
-    code: str,
+    code: Optional[str] = None,
     task_id: Optional[str] = None,
     enabled_tools: Optional[list[str]] = None,
     reset: bool = False,
+    *,
+    language: Optional[str] = None,
+    cells: Optional[list[dict[str, Any]]] = None,
+    title: Optional[str] = None,
+    timeout: Optional[float] = None,
+    background: bool = False,
+    tool_call_id: Optional[str] = None,
 ) -> str:
-    """Run Python in the session's persistent kernel (local) or on the remote terminal backend,
+    """Run code in the session's persistent kernel (local) or on the remote terminal backend,
     with RPC access to a subset of Hermes tools; returns the JSON result string. "Sandbox" means
     the security envelope (env scrubbing, tool whitelist + call budget, output redaction), not an
     isolation jail: default `project` mode runs in the session's cwd with the project venv.
-    ``enabled_tools`` ∩ SANDBOX_ALLOWED_TOOLS; ``reset`` kills the existing kernel first."""
+    ``enabled_tools`` ∩ SANDBOX_ALLOWED_TOOLS; ``reset`` kills the existing kernel first.
+
+    D8 surface: exactly one of ``code`` (single cell) or ``cells`` (ordered, up to
+    ``code_execution.max_cells``); ``language`` selects ``py``/``js`` per cell; ``timeout`` is the
+    whole-call deadline (capped by ``code_execution.timeout``); ``background`` is handled by the
+    eval job manager (ADR-4 D14)."""
     if not SANDBOX_AVAILABLE:
         return tool_error("execute_code sandbox is unavailable in this environment. "
                           "Use normal tool calls (terminal, read_file, write_file, ...) instead.")
@@ -757,79 +1477,64 @@ def execute_code(
     except Exception as refusal:
         return tool_error(f"execute_code refused: {refusal} "
                           "(profile terminal policy unresolved; fix the profile's config.yaml / .env and retry)")
-    if not code or not code.strip():
-        return tool_error("No code provided. execute_code requires a non-empty 'code' "
-                          "parameter containing Python source. To run shell commands, use terminal(command=...) instead.")
-    # Hard-block gateway-lifecycle commands (mirrors the terminal_tool guard — otherwise
-    # `os.system("launchctl bootout ...")` here bypasses it and SIGTERMs the gateway mid-task).
-    # Gated on PID-file ownership, not the inherited env marker.
-    # Hard-block gateway-lifecycle commands, mirroring the terminal_tool guard (#68289): without this,
-    # execute_code is a straight bypass — the terminal() path refuses `launchctl bootout ai.hermes.gateway`,
-    # but the identical command inside `os.system(...)` / `subprocess.run([...])` here sailed through and
-    # SIGTERM'd the gateway mid-task.
-    # The identity probe ends in a kernel process query that has wedged on macOS
-    # (#111922); share the cell's own deadline and fail CLOSED when it renders no verdict.
-    from agent.deadline import run_bounded_sync
-    from tools.process_registry import _is_supervised_gateway_process
-    from tools.terminal_tool import _PRE_EXEC_GUARD_MIN_TIMEOUT_S
-    _probe_timeout = max(_load_config().get("timeout", DEFAULT_TIMEOUT), _PRE_EXEC_GUARD_MIN_TIMEOUT_S)
-    _probe = run_bounded_sync(
-        _is_supervised_gateway_process, _probe_timeout, label="execute_code.lifecycle-guard",
-    )
-    if _probe.timed_out:
-        return tool_error(
-            f"execute_code lifecycle guard did not finish within {_probe_timeout}s "
-            "(process-identity probe wedged); the code was not run. Retry the call."
-        )
-    if _probe.value:
-        from cron.lifecycle_guard import (
-            HOST_INTERPRETER_KILL_REJECTION,
-            contains_gateway_lifecycle_command,
-            contains_host_interpreter_kill,
-        )
-        if contains_gateway_lifecycle_command(code):
-            if contains_host_interpreter_kill(code):
-                return tool_error(HOST_INTERPRETER_KILL_REJECTION)
-            return tool_error(
-                "Blocked: cannot restart or stop the gateway from inside the "
-                "gateway process. The gateway would kill this script before "
-                "it could complete (SIGTERM propagates to child processes). "
-                "Run the lifecycle command from a shell outside the gateway."
-            )
-    from tools.terminal_tool import _get_env_config, _docker_has_host_access
-    _env_config = _get_env_config()
-    env_type = _env_config["env_type"]
-    # Arbitrary Python never passes through terminal()/DANGEROUS_PATTERNS, so guard the whole
-    # script before either dispatch path spawns it — in this (tool-executor) thread, which holds
-    # the session context. A Docker sandbox with host bind mounts gets no container fast-path.
-    # See #30882.
-    from tools.approval import check_execute_code_guard
-    _guard = check_execute_code_guard(code, env_type, has_host_access=_docker_has_host_access(_env_config))
-    if not _guard.get("approved", False):
-        return _error_result(_guard.get("message") or "execute_code blocked by approval guard.",
-                             user_summary=_guard.get("user_summary"))
-    # Clear a stale interrupt bit that landed during the blocking approval-wait so it can't
-    # kill the just-approved run on the first poll. A genuine post-clear interrupt re-sets it.
-    if _guard.get("user_approved"):
-        from tools.interrupt import clear_current_thread_interrupt
-        clear_current_thread_interrupt()
+    if not isinstance(background, bool):
+        return tool_error("'background' must be a boolean.")
+    cfg = _load_config()
+    spec, error = _prepare_cell_call(code=code, cells=cells, language=language, title=title,
+                                     timeout=timeout, cfg=cfg)
+    if error is not None:
+        return error
+    from tools.terminal_tool import _get_env_config
+    env_config = _get_env_config()
+    if spec["single"] and spec["cells"][0]["language"] == "js":
+        from tools.eval_js_packages import parse_magic, run_magic
+        magic = parse_magic(spec["cells"][0]["code"])
+        if magic is not None:
+            if background:
+                return tool_error("`background` is not supported for %bun/%environment cells.")
+            if env_config["env_type"] != "local":
+                return tool_error("JavaScript package magic is only available on the local terminal backend.")
+            from tools.eval_js_packages import managed_dir, managed_key
+            mode = _get_execution_mode()
+            session_cwd = managed_key(
+                _resolve_child_cwd(mode, "", task_id=task_id or ""), task_id or "")
+            body = run_magic(magic[0], magic[1], session_cwd=session_cwd,
+                             bun_path=_bun_binary() if magic[0] == "bun_add" else None)
+            body.setdefault("tool_calls_made", 0)
+            body.setdefault("duration_seconds", 0.0)
+            body["managed_dir"] = body.get("managed_dir") or str(managed_dir(session_cwd))
+            return json.dumps(body, ensure_ascii=False)
+    error = _preflight_cell_call(spec, env_config=env_config)
+    if error is not None:
+        return error
+    try:
+        from agent.tool_progress_relay import current_tool_events
+        sink = current_tool_events()
+    except Exception:  # health: allow BLE001 -- a host without the relay still runs the cell
+        sink = None
+
+    def _on_stream(frame) -> None:
+        if sink is None or not isinstance(frame, dict) or frame.get("type") != "stream":
+            return
+        sink.stream(int(frame.get("cell_index") or 0), str(frame.get("stream") or "stdout"),
+                    str(frame.get("text") or ""))
+
+    env_type = env_config["env_type"]
+    max_tool_calls = _positive_int(cfg.get("max_tool_calls"), DEFAULT_MAX_TOOL_CALLS)
+    if background:
+        from tools.eval_jobs import start_eval_job
+        return start_eval_job(spec=spec, task_id=task_id, enabled_tools=enabled_tools,
+                              reset=bool(reset), cfg=cfg, env_type=env_type,
+                              max_tool_calls=max_tool_calls, tool_call_id=tool_call_id,
+                              sink=sink)
     from hermes_cli.observability.shared_metrics_loop import record_execution_backend
-    if env_type != "local":
-        return record_execution_backend("code", "remote", _execute_remote(code, task_id, enabled_tools, reset=bool(reset)))
-    from tools.interrupt import is_interrupted as _is_interrupted
-    # Session kernels are always on locally (one interpreter per conversation); the guards above
-    # already ran for this cell, and the kernel path shares env builder, RPC server and redaction.
-    from tools.code_kernel import execute_in_session_kernel
-    _cfg = _load_config()
-    _mode = _get_execution_mode()
-    return record_execution_backend("code", "local", execute_in_session_kernel(
-        code, task_id=task_id or "", mode=_mode, child_python=_resolve_child_python(_mode),
-        child_cwd=_resolve_child_cwd(_mode, "", task_id=task_id or ""),
-        sandbox_tools=frozenset(_sandbox_tools_for(enabled_tools)),
-        timeout=_cfg.get("timeout", DEFAULT_TIMEOUT),
-        max_tool_calls=_cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS),
-        reset=bool(reset), is_interrupted=_is_interrupted,
-    ))
+    from tools.interrupt import is_interrupted
+    raw, backend = _execute_spec(
+        spec, task_id=task_id, enabled_tools=enabled_tools, env_type=env_type,
+        reset=bool(reset), max_tool_calls=max_tool_calls, is_interrupted=is_interrupted,
+        on_stream=_on_stream,
+    )
+    return record_execution_backend("code", backend, raw)
 
 
 def _kill_process_group(proc, escalate: bool = False):
@@ -909,13 +1614,18 @@ _TOOL_DOC_LINES = [
 
 
 def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
-                              mode: str | None = None) -> dict:
+                              mode: str | None = None,
+                              js_available: bool = False) -> dict:
     """execute_code schema listing only *enabled_sandbox_tools* — a disabled tool (e.g. web off)
-    must not appear or the model keeps trying it. ``mode`` (None → config) picks the cwd sentence."""
+    must not appear or the model keeps trying it. ``mode`` (None → config) picks the cwd sentence.
+    ``js_available`` adds ``js`` to the language enums; it is resolved per session from PM Bun +
+    the shipped JS kernel, so registration-time ``EXECUTE_CODE_SCHEMA`` stays Python-only."""
     if enabled_sandbox_tools is None:
         enabled_sandbox_tools = SANDBOX_ALLOWED_TOOLS
     if mode is None:
         mode = _get_execution_mode()
+    languages = ["py", "js"] if js_available else ["py"]
+    max_cells = _max_cells()
     tool_lines = "\n".join(doc for name, doc in _TOOL_DOC_LINES if name in enabled_sandbox_tools)
     import_examples = [n for n in ("web_search", "terminal") if n in enabled_sandbox_tools]
     import_examples = import_examples or sorted(enabled_sandbox_tools)[:2]
@@ -934,12 +1644,19 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
             "Hermes's own python (the common case — stdlib plus Hermes's "
             "deps; check `import x` before relying on project packages)."
         )
+    runtimes = "Python and JavaScript" if js_available else "Python"
+    cell_note = (
+        "Provide exactly one of `code` (a single cell) or `cells` (an ordered list of up to "
+        f"{max_cells} cells, each `{{code, language?, title?}}`). `language` is "
+        + ("`py` (default) or `js`" if js_available else "`py`")
+        + "; Python and JS run in separate persistent kernels and do not share state."
+    )
     # Remote hosts that fail open to per-call are not worth schema words; the result's
     # `kernel` field tells the truth per call.
     # Session kernels are always on (kernel_mode retired in #96787): persistence is part of the tool's one
     # description, not a bolt-on paragraph behind a dead conditional.
     description = (
-        "Run Python that calls Hermes tools programmatically. Use when you "
+        f"Run {runtimes} that calls Hermes tools programmatically. Use when you "
         "need 3+ tool calls with logic between them: filtering/reducing "
         "large outputs before they enter context, branching, or loops "
         "(N pages/files, retry on failure). Use normal tool calls for "
@@ -947,10 +1664,12 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
         "Calls run in a persistent session kernel: variables, imports, and "
         "loaded data survive across execute_code calls, so build on earlier "
         "work instead of re-loading it. A timed-out or interrupted call loses that state.\n\n"
+        f"{cell_note}\n\n"
         f"Available via `from hermes_tools import ...`:\n\n"
         f"{tool_lines}\n\n"
-        "Limits: 5-minute timeout, max 50 tool calls per call. Stdout over "
-        "50KB shows head/tail inline; the FULL text is auto-saved to a file whose path rides in the result.\n\n"
+        "Limits: 5-minute timeout (or `timeout` seconds, capped by config), max 50 tool calls "
+        "per call. Stdout over 50KB shows head/tail inline; the FULL text is auto-saved to a "
+        "file whose path rides in the result.\n\n"
         f"{cwd_note}\n\n"
         "Helpers require imports: `from hermes_tools import json_parse, shell_quote, retry`. "
         "json_parse(text) — tolerant "
@@ -964,13 +1683,38 @@ def build_execute_code_schema(enabled_sandbox_tools: set | None = None,
             "type": "object",
             "properties": {
                 "code": {"type": "string", "description": (
-                    "Python code to execute. Import tools with "
-                    f"`from hermes_tools import {import_str}` "
-                    "and print your final result to stdout.")},
+                    "Single-cell source. Provide exactly one of `code` or `cells`. Import tools "
+                    f"with `from hermes_tools import {import_str}` and print your final result "
+                    "to stdout.")},
+                "cells": {
+                    "type": "array",
+                    "description": ("Ordered cells executed against the same per-language kernel "
+                                    "(up to the configured max). Provide exactly one of `code` or "
+                                    "`cells`."),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "Cell source."},
+                            "language": {"type": "string", "enum": languages,
+                                         "description": "Cell language; defaults to the call-level language."},
+                            "title": {"type": "string", "description": "Optional cell title for display."},
+                        },
+                        "required": ["code"],
+                    },
+                },
+                "language": {"type": "string", "enum": languages, "description": (
+                    "Language for `code` (and the default for cells). Defaults to `py`.")},
+                "title": {"type": "string", "description": (
+                    "Optional human title for this call; never changes the execution semantics.")},
+                "timeout": {"type": "number", "description": (
+                    "Whole-call deadline in seconds; capped by `code_execution.timeout` "
+                    "(default 300). A timeout kills the involved kernel(s).")},
+                "background": {"type": "boolean", "description": (
+                    "Return a running job instead of waiting for the cells to finish.")},
                 "reset": {"type": "boolean", "description": (
-                    "Discard the kernel's persistent state and start fresh before running this code.")},
+                    "Discard the involved kernels' persistent state and start fresh before "
+                    "running this call.")},
             },
-            "required": ["code"],
         },
     }
 
@@ -982,17 +1726,22 @@ EXECUTE_CODE_SCHEMA = build_execute_code_schema()
 def _execute_code_handler(args: dict, **kwargs) -> str:
     """Redirect misdirected calls (terminal's ``command`` arg, non-string ``code``) with an
     actionable error before dispatching to ``execute_code``."""
-    if "code" not in args and "command" in args:
+    if "code" not in args and "cells" not in args and "command" in args:
         logger.warning("execute_code received 'command' instead of the required 'code' argument")
         return tool_error("execute_code received a 'command' parameter, but it requires "
-                          "Python source in 'code'. Use terminal(command=...) for shell "
-                          "commands; for Python, retry as execute_code(code=...).")
-    code = args.get("code", "")
+                          "source in 'code' or 'cells'. Use terminal(command=...) for shell "
+                          "commands; for code, retry as execute_code(code=...).")
+    code = args.get("code")
     if code is not None and not isinstance(code, str):
+        hint = "JavaScript" if _normalize_language(args.get("language")) == "js" else "Python"
         return tool_error(f"execute_code received a {type(code).__name__} in 'code', but it "
-                          "requires Python source as a string. Retry as execute_code(code=\"...\").")
-    return execute_code(code=code or "", task_id=kwargs.get("task_id"),
-                        enabled_tools=kwargs.get("enabled_tools"), reset=bool(args.get("reset", False)))
+                          f"requires {hint} source as a string. Retry as execute_code(code=\"...\").")
+    return execute_code(code=code, task_id=kwargs.get("task_id"),
+                        enabled_tools=kwargs.get("enabled_tools"), reset=bool(args.get("reset", False)),
+                        language=args.get("language"), cells=args.get("cells"),
+                        title=args.get("title"), timeout=args.get("timeout"),
+                        background=args.get("background", False),
+                        tool_call_id=kwargs.get("tool_call_id"))
 
 
 registry.register(

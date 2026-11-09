@@ -1,8 +1,11 @@
 """Streamed tool-call delta assembly for the chat-completions stream (and Relay's accumulator)."""
 
+import logging
 from typing import Optional
 
 from agent.reasoning_carriers import field
+
+logger = logging.getLogger(__name__)
 
 
 class _ToolCallAccumulator:
@@ -11,9 +14,10 @@ class _ToolCallAccumulator:
     for every call in a parallel batch, distinguishing them only by id, so a new
     id at an already-seen raw index is redirected to a fresh slot."""
 
-    def __init__(self):
+    def __init__(self, on_delta=None):
         self.acc: dict = {}
         self._notified: set = set()
+        self._on_delta = on_delta
         self._last_id_at_idx: dict = {}      # raw_index -> last seen non-empty id
         self._active_slot_by_idx: dict = {}  # raw_index -> current slot in acc
         # Argument deltas are collected per slot and joined once in ``materialize`` —
@@ -98,6 +102,12 @@ class _ToolCallAccumulator:
                 entry["function"]["name"] = tc_function.name
             if getattr(tc_function, "arguments", None):
                 parts.append(tc_function.arguments)
+                if self._on_delta is not None:
+                    try:
+                        self._on_delta(entry["function"]["name"], tc_function.arguments, idx,
+                                       str(entry.get("id") or ""))
+                    except Exception:  # health: allow BLE001 -- speculation must never break streaming
+                        logger.debug("tool-args speculation observer failed", exc_info=True)
             # Some gateways sign Gemini 3 calls inside ``function``.
             if isinstance(fn_sig := field(tc_function, "thought_signature"), str) and fn_sig:
                 entry["thought_signature"] = fn_sig
