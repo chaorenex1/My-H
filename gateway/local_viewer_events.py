@@ -12,6 +12,8 @@ previous values; ``restore`` puts them back when the turn's ``run_conversation``
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import time
 import uuid
@@ -155,7 +157,39 @@ def _publish_subagent(turn, event_type, payload) -> None:
 
 
 def publish_progress(turn, event_type, name, preview, kwargs) -> None:
-    """``subagent.*``, ``reasoning.available`` and the MoA facade events from the agent's progress callback; a classic CLI renders MoA references whatever its reasoning display (main's ``_on_tool_progress``), while other viewers get them only with reasoning shown."""
+    """``subagent.*``, ``reasoning.available``, the MoA facade events and ADR-4 D14 eval frames.
+
+    A classic CLI renders MoA references whatever its reasoning display (main's
+    ``_on_tool_progress``), while other viewers get them only with reasoning shown.
+    """
+    if event_type == "tool.output":
+        # ADR-4 D14: a running eval cell's own output, not progress chrome — never gated on
+        # the viewer's reasoning/tool-progress switches and never appended twice.
+        text = kwargs.get("text")
+        if isinstance(text, str) and text:
+            turn._publish_execution("tool.output", {
+                "tool_id": str(kwargs.get("tool_call_id") or ""),
+                "name": str(name or ""),
+                "cell_index": int(kwargs.get("cell_index") or 0),
+                "stream": str(kwargs.get("stream") or "stdout"),
+                "text": text,
+            })
+        return
+    if event_type == "tool.complete" and kwargs.get("job_id"):
+        # A background eval job re-settles the card it started (same tool id + job id).
+        from gateway.session_tool_events import bounded_result
+        is_error = bool(kwargs.get("is_error"))
+        payload = {
+            "tool_id": str(kwargs.get("tool_call_id") or ""),
+            "name": str(name or ""),
+            "result": bounded_result(kwargs.get("result"), is_error),
+            "is_error": is_error,
+            "job_id": str(kwargs.get("job_id")),
+        }
+        if isinstance(kwargs.get("duration_s"), (int, float)):
+            payload["duration_s"] = float(kwargs["duration_s"])
+        turn._publish_execution("tool.complete", payload)
+        return
     if isinstance(event_type, str) and event_type.startswith("subagent."):
         if event_type == "subagent.text":
             return
@@ -277,17 +311,51 @@ def _render_edit_diff(tool_name, args, result, snapshot) -> str | None:
     return "\n".join(rendered) if rendered else None
 
 
+def _session_id(turn) -> str:
+    owner = getattr(turn, "_approval_owner", None)
+    if isinstance(owner, (tuple, list)) and len(owner) > 1:
+        return str(owner[1])
+    return str(getattr(getattr(turn, "_ctx", None), "session_id", "") or "")
+
+
+def _eval_card_fields(turn, call_id, tool_name, args, result) -> dict:
+    """ADR-4 D11.1/D13: the eval card's display block and generated titles.
+
+    These are display-only and belong at the top level of ``display_metadata``: the durable
+    row ("``display_metadata.display``/``card_title``/``cell_titles``") and the live
+    ``tool.complete`` event both read them there.
+    """
+    body = None
+    if tool_name == "execute_code" and isinstance(result, str):
+        with contextlib.suppress(Exception):
+            body = json.loads(result)
+    cards: dict = {}
+    display = body.get("display") if isinstance(body, dict) else None
+    if isinstance(display, dict) and display:
+        cards["display"] = display
+    from tools.eval_card_metadata import card_titles
+    with contextlib.suppress(Exception):
+        titles = card_titles(_session_id(turn), call_id, tool_name, args, result=body)
+        for key in ("card_title", "cell_titles"):
+            if titles.get(key):
+                cards[key] = titles[key]
+    return cards
+
+
 def prepare_fields(turn, call_id, tool_name, args, result) -> dict:
     """ADR-10 D5: result metadata computed BEFORE the tool row is appended.
 
-    The executor merges its own ``is_error`` verdict in; ``complete_fields`` reuses the diff so
-    the live ``tool.complete`` event and the durable row agree and the snapshot is popped once.
+    The executor merges its own ``is_error`` verdict in; ``complete_fields`` reuses the diff and
+    the eval card fields so the live ``tool.complete`` event and the durable row agree and the
+    snapshot is popped once.
     """
     key = str(call_id or "")
     snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
     diff = _render_edit_diff(tool_name, args, result, snapshot)
     turn.__dict__.setdefault("_local_tool_diffs", {})[key] = diff
-    return {"tool_result_metadata": {"inline_diff": diff} if diff else {}}
+    cards = _eval_card_fields(turn, call_id, tool_name, args, result)
+    turn.__dict__.setdefault("_local_tool_cards", {})[key] = cards
+    return {"tool_result_metadata": {"inline_diff": diff} if diff else {}, **cards}
 
 
 def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is_error=False) -> dict:
@@ -310,6 +378,10 @@ def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is
     fields["inline_diff"] = diff
     from agent.terminal_image import tool_image_path
     fields["image_path"] = tool_image_path(tool_name, args, result, is_error=is_error)
+    # ADR-4 D11.1/D13: the durable row and this live frame carry the same eval card fields.
+    cards = turn.__dict__.setdefault("_local_tool_cards", {}).pop(key, None)
+    if isinstance(cards, dict):
+        fields.update(cards)
     todo = todo_state(tool_name, result)
     if todo is not None:
         fields.update(todo)

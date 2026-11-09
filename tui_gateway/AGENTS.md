@@ -99,7 +99,7 @@ profile's does not, and that `os.environ` is unchanged afterwards.
 | Surface | Ink component | Gateway method / event |
 |---|---|---|
 | Chat streaming | `app.tsx` + `messageLine.tsx` | `prompt.submit` → `message.delta` / `message.complete` |
-| Tool activity | `thinking.tsx` | `tool.start` / `tool.generating` / `tool.complete` |
+| Tool activity | `thinking.tsx` | `tool.start` / `tool.generating` / `tool.output` / `tool.complete` |
 | Approvals | `prompts.tsx` | server→client request `approval` → response `{choice}` |
 | Clarify / sudo / secret | `prompts.tsx`, `maskedPrompt.tsx` | server→client requests `clarify` / `sudo` / `secret` (`server_requests.py`) |
 | Session picker | `sessionPicker.tsx` | `session.list` / `session.resume` (+ `session.transcript.list` / `session.transcript.read` for the ADR-16 bundle state) |

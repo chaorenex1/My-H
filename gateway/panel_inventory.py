@@ -289,8 +289,9 @@ TRANSCRIPT_BLOCKS: tuple[TranscriptBlock, ...] = (
     # A skill row is durable-only: the invocation is rebuilt from session.history/session.resume.
     TranscriptBlock("skill_invocation", True, READY,
                     fields=("custom_type", "details", "row_id")),
-    TranscriptBlock("tool_execution", True, READY, ("tool.start", "tool.progress", "tool.complete"),
-                    fields=("name", "args", "labels", "content", "is_error", "row_id")),
+    TranscriptBlock("tool_execution", True, READY,
+                    ("tool.start", "tool.progress", "tool.output", "tool.title", "tool.complete"),
+                    fields=("name", "args", "labels", "content", "is_error", "details", "row_id")),
     TranscriptBlock("notice", True, READY, ("transcript.notice",),
                     fields=("id", "level", "text", "source", "row_id")),
     TranscriptBlock("todo_reminder", True, READY, ("todo.reminder",),

@@ -639,6 +639,10 @@ class ToolStartPayload(Payload):
     #: ADR-2 D1: the provider response that requested this call, in ``Usage`` shape. JSON-only
     #: (no ``model``/cumulative context fields) and absent for responses that reported no usage.
     step_usage: Usage | None = None
+    #: ADR-4 D13: deterministic display title (``card_title``) and, for ``execute_code``, one
+    #: title per cell. Display-only; never part of the model-visible call/result.
+    title: str | None = None
+    cell_titles: list[str | None] | None = None
 
 
 event("tool.start", ToolStartPayload, doc="A tool call began (stable id + full args).")
@@ -662,6 +666,14 @@ class ToolCompletePayload(Payload):
     revision: int | None = None
     labels: list[ToolLabel] | None = None
     image_path: str | None = None  # local image the call produced or looked at (agent.terminal_image.tool_image_path)
+    #: ADR-4 D14: a background eval job's terminal frame for a card that was returned
+    #: ``status="running"`` earlier. Absent from ordinary (foreground) completions.
+    job_id: str | None = None
+    #: ADR-4 D11.1/D13: display-only eval card data and generated titles (also persisted in
+    #: ``display_metadata`` for resume); the model-visible result never carries them.
+    display: dict[str, JsonValue] | None = None
+    card_title: str | None = None
+    cell_titles: list[str | None] | None = None
 
 
 event("tool.complete", ToolCompletePayload, doc="A tool call finished: parsed result, summary, optional diff / todo snapshot.")
@@ -702,6 +714,42 @@ class ToolProgressPayload(Payload):
 
 
 event("tool.progress", ToolProgressPayload, doc="Live progress of a running tool call (MCP notifications/progress).")
+
+
+class ToolOutputPayload(Payload):
+    """``agent.tool_progress_relay.ToolEventSink`` — ADR-4 D14 streamed eval cell output.
+
+    Not progress chrome: it is emitted regardless of ``display.tool_progress`` because it is the
+    cell's own output. The final ``tool.complete`` remains authoritative; these frames are merged
+    per ``cell_index``/``stream`` and never appended twice.
+    """
+
+    tool_id: str
+    name: str
+    cell_index: int
+    stream: str
+    text: str
+
+
+event("tool.output", ToolOutputPayload,
+      doc="Incremental stdout/stderr of a running eval cell (execute_code, ADR-4 D14).")
+
+
+class ToolTitlePayload(Payload):
+    """``run_turn_progress.combined_tool_start_callback`` / ``tool_progress._emit_tool_titles``.
+
+    ADR-4 D13: the deterministic display title of one card (``cell_index`` absent) or of one
+    ``execute_code`` cell. Display-only; it never rides the model-visible call or result.
+    """
+
+    tool_id: str
+    name: str
+    title: str
+    cell_index: int | None = None
+
+
+event("tool.title", ToolTitlePayload,
+      doc="A generated display title for a tool card or one eval cell (execute_code, ADR-4 D13).")
 
 
 class TodoUpdatedPayload(Payload):

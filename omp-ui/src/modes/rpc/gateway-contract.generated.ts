@@ -6875,6 +6875,8 @@ export interface ToolStartPayload {
   preview?: string | null
   labels?: ToolLabel[] | null
   step_usage?: Usage | null
+  title?: string | null
+  cell_titles?: (string | null)[] | null
 }
 /** ``tool_progress._on_tool_complete``; ``todos``/``revision`` merged in for the todo tools. */
 export interface ToolCompletePayload {
@@ -6891,6 +6893,10 @@ export interface ToolCompletePayload {
   revision?: number | null
   labels?: ToolLabel[] | null
   image_path?: string | null
+  job_id?: string | null
+  display?: Record<string, unknown> | null
+  card_title?: string | null
+  cell_titles?: (string | null)[] | null
 }
 /** ``agent_callbacks`` tool_gen_callback. */
 export interface ToolGeneratingPayload {
@@ -6912,6 +6918,21 @@ export interface ToolProgressPayload {
   total?: number | null
   percent?: number | null
   message?: string | null
+}
+/** ``agent.tool_progress_relay.ToolEventSink`` — ADR-4 D14 streamed eval cell output. Not progress chrome: it is emitted regardless of ``display.tool_progress`` because it is the cell's own output. The final ``tool.complete`` remains authoritative; these frames are merged per ``cell_index``/``stream`` and never appended twice. */
+export interface ToolOutputPayload {
+  tool_id: string
+  name: string
+  cell_index: number
+  stream: string
+  text: string
+}
+/** ``run_turn_progress.combined_tool_start_callback`` / ``tool_progress._emit_tool_titles``. ADR-4 D13: the deterministic display title of one card (``cell_index`` absent) or of one ``execute_code`` cell. Display-only; it never rides the model-visible call or result. */
+export interface ToolTitlePayload {
+  tool_id: string
+  name: string
+  title: string
+  cell_index?: number | null
 }
 /** ``tool_progress._normalize_todo_state`` — full task snapshot. */
 export interface TodoUpdatedPayload {
@@ -8460,12 +8481,16 @@ export interface BackendGatewayEventMap {
   'tool.complete': ToolCompletePayload
   /** The model is emitting a tool call's arguments. */
   'tool.generating': ToolGeneratingPayload
+  /** Incremental stdout/stderr of a running eval cell (execute_code, ADR-4 D14). */
+  'tool.output': ToolOutputPayload
   /** Tool output was classified as risky (prompt-injection / secret findings). */
   'tool.output_risk': ToolOutputRiskPayload
   /** Live progress of a running tool call (MCP notifications/progress). */
   'tool.progress': ToolProgressPayload
   /** A tool call began (stable id + full args). */
   'tool.start': ToolStartPayload
+  /** A generated display title for a tool card or one eval cell (execute_code, ADR-4 D13). */
+  'tool.title': ToolTitlePayload
   /** A durable custom transcript row injected live; omp-ui merges it by row_id and renders it with the same component a resume snapshot uses. */
   'transcript.custom': TranscriptCustomPayload
   /** A deduped one-shot transcript notice; omp-ui ignores agent.print/status.update for these lines. */
@@ -8572,9 +8597,11 @@ export const GATEWAY_EVENT_TYPES = [
   'todo.updated',
   'tool.complete',
   'tool.generating',
+  'tool.output',
   'tool.output_risk',
   'tool.progress',
   'tool.start',
+  'tool.title',
   'transcript.custom',
   'transcript.notice',
   'ttsr.triggered',

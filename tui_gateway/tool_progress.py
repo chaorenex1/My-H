@@ -3,6 +3,7 @@ projection. Bodies are rebound onto server.py's globals (method_ctx.bind_module)
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 
@@ -287,6 +288,29 @@ def _emit_tool_lifecycle(event, sid, name, args, payload):
     transport.write(frame)
 
 
+def _card_titles(sid: str, tool_call_id: str, name: str, args: dict,
+                 result: object = None) -> dict:
+    """ADR-4 D13 titles for one call; never raises (a card must render without a title)."""
+    with contextlib.suppress(Exception):
+        from tools.eval_card_metadata import card_titles
+        return card_titles(sid, tool_call_id, name, args, result=result)
+    return {}
+
+
+def _emit_tool_titles(sid: str, tool_call_id: str, name: str, titles: dict) -> None:
+    """Emit ``tool.title`` per cell (``cell_index`` set) or once for an ordinary tool."""
+    cell_titles = titles.get("cell_titles")
+    if isinstance(cell_titles, list) and cell_titles:
+        for index, title in enumerate(cell_titles):
+            if title:
+                _emit("tool.title", sid, {"tool_id": tool_call_id, "name": name,
+                                          "title": title, "cell_index": index})
+        return
+    title = titles.get("card_title")
+    if title:
+        _emit("tool.title", sid, {"tool_id": tool_call_id, "name": name, "title": title})
+
+
 def _on_tool_start(sid: str, tool_call_id: str, name: str, args: dict):
     if _connector_lifecycle_is_stale(sid, name, args):
         return
@@ -313,7 +337,15 @@ def _on_tool_start(sid: str, tool_call_id: str, name: str, args: dict):
             payload["args"] = args
         if _session_verbose(sid) and (args_text := _tool_args_text(args)):
             payload["args_text"] = args_text
+        # ADR-4 D13: deterministic card titles ride the start frame so the card is named at
+        # construction; tool.title repeats them for clients that only update a pending card.
+        titles = _card_titles(sid, tool_call_id, name, args)
+        if titles.get("card_title"):
+            payload["title"] = titles["card_title"]
+        if titles.get("cell_titles"):
+            payload["cell_titles"] = titles["cell_titles"]
         _emit_tool_lifecycle("tool.start", sid, name, args, payload)
+        _emit_tool_titles(sid, tool_call_id, name, titles)
 
 
 def _prepare_tool_result_metadata(sid: str, tool_call_id: str, name: str, args: dict, result: str) -> dict:
@@ -332,7 +364,27 @@ def _prepare_tool_result_metadata(sid: str, tool_call_id: str, name: str, args: 
             metadata["inline_diff"] = "\n".join(rendered)
     if session is not None:
         session.setdefault("tool_result_metadata", {})[tool_call_id] = metadata
-    return {"tool_result_metadata": metadata} if metadata else {}
+    body = None
+    if name == "execute_code" and isinstance(result, str):
+        with contextlib.suppress(Exception):
+            body = json.loads(result)
+        # ADR-4 D11.1: the cell's display block (views/images/statusEvents) rides the durable
+        # metadata so resume rebuilds the same card; the model-facing result is unchanged.
+        display = body.get("display") if isinstance(body, dict) else None
+        if isinstance(display, dict) and display:
+            metadata["display"] = display
+    # ADR-4 D13: generated titles are display-only; the model-visible result is unchanged.
+    titles = _card_titles(sid, tool_call_id, name, args, body)
+    if titles.get("card_title"):
+        metadata["card_title"] = titles["card_title"]
+    if titles.get("cell_titles"):
+        metadata["cell_titles"] = titles["cell_titles"]
+    if not metadata:
+        return {}
+    # The live completion reads the inner dict; the durable row reads top-level keys
+    # (``stamp_tool_result_metadata`` merges this return value's top level only).
+    durable = {key: metadata[key] for key in ("display", "card_title", "cell_titles") if metadata.get(key)}
+    return {"tool_result_metadata": metadata, **durable}
 
 
 def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result: str):
@@ -402,6 +454,37 @@ def _progress_tool_progress(sid, name, preview, kw):
     if _tool_progress_enabled(sid):
         from agent.tool_progress_relay import tool_progress_payload
         _emit("tool.progress", sid, tool_progress_payload(name, preview, kw))
+
+
+def _progress_tool_output(sid, name, preview, kw):
+    """ADR-4 D14: eval cell output is the card's content, not progress chrome — never gated
+    on ``display.tool_progress`` (a cell's own output must not disappear with chrome)."""
+    text = kw.get("text")
+    if not isinstance(text, str) or not text:
+        return
+    _emit("tool.output", sid, {
+        "tool_id": str(kw.get("tool_call_id") or ""),
+        "name": str(name or ""),
+        "cell_index": int(kw.get("cell_index") or 0),
+        "stream": str(kw.get("stream") or "stdout"),
+        "text": text,
+    })
+
+
+def _progress_eval_job_complete(sid, name, preview, kw):
+    """ADR-4 D14: a background job re-settles the card it started (same tool_id/job_id)."""
+    if not kw.get("job_id"):
+        return
+    payload = {
+        "tool_id": str(kw.get("tool_call_id") or ""),
+        "name": str(name or ""),
+        "result": kw.get("result"),
+        "is_error": bool(kw.get("is_error")),
+        "job_id": str(kw.get("job_id")),
+    }
+    if isinstance(kw.get("duration_s"), (int, float)):
+        payload["duration_s"] = float(kw["duration_s"])
+    _emit("tool.complete", sid, payload)
 
 
 def _progress_output_risk(sid, name, preview, kw):
@@ -519,6 +602,9 @@ def _progress_subagent(sid: str, name: str, preview, kw, event_type):
 # emitted at all ("name" / "preview" / None).
 _PROGRESS_HANDLERS = {
     "tool.output_risk": (_progress_output_risk, "name"), "tool.progress": (_progress_tool_progress, "name"),
+    # ADR-4 D14: streamed eval cell output and a background job's terminal frame.
+    "tool.output": (_progress_tool_output, "name"),
+    "tool.complete": (_progress_eval_job_complete, "name"),
     "reasoning.available": (_progress_reasoning, "preview"),
     "moa.reference": (_progress_moa_reference, "name"),
     # Answer-only drops MoA content (references, progress/phase lines that land in the reasoning

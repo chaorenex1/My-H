@@ -51709,6 +51709,65 @@
             ],
             "default": null,
             "title": "Image Path"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Job Id"
+          },
+          "display": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Display"
+          },
+          "card_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Card Title"
+          },
+          "cell_titles": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Titles"
           }
         },
         "required": [
@@ -51786,6 +51845,41 @@
         ],
         "title": "ToolLabelKind",
         "type": "string"
+      },
+      "ToolOutputPayload": {
+        "additionalProperties": false,
+        "description": "``agent.tool_progress_relay.ToolEventSink`` \u2014 ADR-4 D14 streamed eval cell output.\n\nNot progress chrome: it is emitted regardless of ``display.tool_progress`` because it is the\ncell's own output. The final ``tool.complete`` remains authoritative; these frames are merged\nper ``cell_index``/``stream`` and never appended twice.",
+        "properties": {
+          "tool_id": {
+            "title": "Tool Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "cell_index": {
+            "title": "Cell Index",
+            "type": "integer"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_id",
+          "name",
+          "cell_index",
+          "stream",
+          "text"
+        ],
+        "title": "ToolOutputPayload",
+        "type": "object"
       },
       "ToolOutputRiskPayload": {
         "additionalProperties": false,
@@ -52013,6 +52107,40 @@
               }
             ],
             "default": null
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "cell_titles": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Titles"
           }
         },
         "required": [
@@ -52020,6 +52148,43 @@
           "name"
         ],
         "title": "ToolStartPayload",
+        "type": "object"
+      },
+      "ToolTitlePayload": {
+        "additionalProperties": false,
+        "description": "``run_turn_progress.combined_tool_start_callback`` / ``tool_progress._emit_tool_titles``.\n\nADR-4 D13: the deterministic display title of one card (``cell_index`` absent) or of one\n``execute_code`` cell. Display-only; it never rides the model-visible call or result.",
+        "properties": {
+          "tool_id": {
+            "title": "Tool Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "cell_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Index"
+          }
+        },
+        "required": [
+          "tool_id",
+          "name",
+          "title"
+        ],
+        "title": "ToolTitlePayload",
         "type": "object"
       },
       "ToolsAction": {
@@ -58573,6 +58738,18 @@
       ]
     },
     {
+      "name": "tool.output",
+      "summary": "Incremental stdout/stderr of a running eval cell (execute_code, ADR-4 D14).",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/ToolOutputPayload"
+          }
+        }
+      ]
+    },
+    {
       "name": "tool.output_risk",
       "summary": "Tool output was classified as risky (prompt-injection / secret findings).",
       "params": [
@@ -58604,6 +58781,18 @@
           "name": "payload",
           "schema": {
             "$ref": "#/components/schemas/ToolStartPayload"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tool.title",
+      "summary": "A generated display title for a tool card or one eval cell (execute_code, ADR-4 D13).",
+      "params": [
+        {
+          "name": "payload",
+          "schema": {
+            "$ref": "#/components/schemas/ToolTitlePayload"
           }
         }
       ]

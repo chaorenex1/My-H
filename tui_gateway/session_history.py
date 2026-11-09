@@ -464,6 +464,24 @@ def _tool_row_message(m: dict, tool_call_args: dict, include_tool_content: str) 
     is_error = _tool_result_is_error(m.get("display_metadata"))
     if is_error is not None:
         entry["is_error"] = is_error
+    metadata = m.get("display_metadata")
+    inner = metadata.get("tool_result_metadata") if isinstance(metadata, dict) else None
+    sources = (metadata, inner) if isinstance(metadata, dict) else ()
+    details: dict = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        display = source.get("display")
+        if isinstance(display, dict) and display:
+            details.setdefault("display", display)
+        # ADR-4 D13: generated card titles are durable display state, like the eval card's views.
+        if isinstance(source.get("card_title"), str) and source["card_title"]:
+            details.setdefault("card_title", source["card_title"])
+        cell_titles = source.get("cell_titles")
+        if isinstance(cell_titles, list) and cell_titles:
+            details.setdefault("cell_titles", cell_titles)
+    if details:
+        entry["details"] = details
     return entry
 
 
