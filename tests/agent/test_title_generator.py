@@ -568,7 +568,7 @@ class TestMaybeAutoTitle:
             }}
         }
         with patch("hermes_cli.config.load_config_readonly", return_value=config), \
-             patch("agent.memory_provider.spawn_context_thread") as thread, \
+             patch("hermes_threading.spawn_context_thread") as thread, \
              patch("agent.title_generator.call_llm") as call_llm:
             maybe_auto_title(db, "sess-1", "repair startup memory routing", [])
         assert db.get_session_title("sess-1") == "repair startup memory routing"
@@ -593,7 +593,7 @@ class TestMaybeAutoTitle:
             }}
         }
         with patch("hermes_cli.config.load_config_readonly", return_value=config), \
-             patch("agent.memory_provider.spawn_context_thread") as thread, \
+             patch("hermes_threading.spawn_context_thread") as thread, \
              patch("agent.title_generator.call_llm") as call_llm:
             maybe_auto_title(db, "sess-1", "repair startup memory routing", [])
         assert db.get_session_title("sess-1") is None

@@ -200,7 +200,7 @@ def test_speculation_claim_hits_then_fingerprint_change_misses(tmp_path, monkeyp
         def start(self):
             self.fn()
 
-    monkeypatch.setattr("agent.memory_provider.spawn_context_thread",
+    monkeypatch.setattr("hermes_threading.spawn_context_thread",
                         lambda target, **kw: _Inline(target))
     monkeypatch.setattr("tools.registry.registry.dispatch",
                         lambda name, args: json.dumps({"content": path.read_text(encoding="utf-8")}))

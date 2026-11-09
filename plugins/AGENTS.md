@@ -111,7 +111,7 @@ from eviction, shutdown, `tui_gateway` teardown and cron completion (bound by th
 process serves several profiles, so a provider never caches `hermes_home` from `initialize()` as
 "the" home — key state by the home it is handed per call (`hermes_home_key()`) — and never reads
 `os.environ` for credentials (`agent.secret_scope.get_secret`; a `check_fn` too). Background
-work starts via `agent.memory_provider.spawn_context_thread`, never a bare `threading.Thread`,
+work starts via `hermes_threading.spawn_context_thread`, never a bare `threading.Thread`,
 or the worker runs with no scope and fails closed (or writes into the launch profile's tenant).
 Platform plugins never mutate `os.environ`: YAML goes to `PlatformConfig.extra` through
 `_shared.apply_yaml_bridge`, gates through `platform_gate_env` (`gateway/AGENTS.md`).

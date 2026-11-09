@@ -16,7 +16,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from agent.memory_provider import ctx_bound
+from hermes_threading import ctx_bound
 from tools import tts_command_provider
 from tools.tts_command_provider import (
     BUILTIN_TTS_PROVIDERS, _get_command_tts_timeout, _get_named_provider_config,

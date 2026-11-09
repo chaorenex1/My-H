@@ -153,7 +153,7 @@ providers intentionally do not run during cron.
   turn, eviction, shutdown, `tui_gateway` teardown — and the CALLER binds the owning profile's scope
   first (`_run_release_in_profile_scope`, `_session_profile_runtime_scope`); the agent never derives
   its home from `os.environ` at flush time (`Path(_session_db.db_path).parent` is the ground truth).
-  Provider background work starts through `memory_provider.py::spawn_context_thread` (copies the
+  Provider background work starts through `hermes_threading.py::spawn_context_thread` (copies the
   contextvars), never a bare `threading.Thread`; `title_generator.py` is the shape.
 - `agent/secret_scope.py::get_secret` fails closed (`UnscopedSecretError`) only after
   `set_multiplex_active(True)`; the gateway, cron, migrate and `serve` set it. A new multi-home host

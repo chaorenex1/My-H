@@ -170,7 +170,7 @@ def start_eval_job(*, spec: dict, task_id: Optional[str], enabled_tools: Optiona
     }
     with _JOBS_LOCK:
         _JOBS[record["id"]] = record
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     thread = spawn_context_thread(
         propagate_context_to_thread(_run_job), name=f"hermes-eval-job-{record['id'][-8:]}",
         args=(record,),

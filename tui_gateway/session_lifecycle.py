@@ -23,7 +23,7 @@ def _session_turn_admission(session: dict):
 
 def _start_session_work(target, *, name: str, session: dict | None = None):
     """Reserve before spawning; release only after the worker (including cleanup) has unwound."""
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from hermes_cli.backend_retirement import retirement
 
     if not retirement.acquire():

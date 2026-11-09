@@ -429,7 +429,7 @@ class PreparedCompaction:
                     _slots.release()
                     return None
                 token = self._pending = _PendingPass(window)
-            from agent.memory_provider import spawn_context_thread
+            from hermes_threading import spawn_context_thread
 
             # Profile and secret scope ride the contextvars into the pass.
             thread = spawn_context_thread(

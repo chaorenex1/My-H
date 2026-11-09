@@ -284,7 +284,7 @@ async def _on_own_thread(fn):
     (``plugins.hook_callback_timeout``, enforced by the hook dispatcher: abandoned worker, suppression,
     cap) holds from another session. One session runs one delivery at a time, so this is at most one
     thread per session with a delivery in flight."""
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     loop = asyncio.get_running_loop()
     done = loop.create_future()
 

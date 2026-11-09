@@ -149,7 +149,7 @@ def _unescape(path: str) -> str:
 
 
 def _spawn_prefetch(owner: str, generation: int, path: str) -> None:
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
 
     def run() -> None:
         try:

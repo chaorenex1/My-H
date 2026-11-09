@@ -821,7 +821,7 @@ def maybe_auto_title(
     # The thread must resolve auxiliary.title_generation (config, provider key, language) for the
     # profile whose turn this is: a bare Thread starts with an empty context and lands on the launch
     # profile under multiplex, titling X's session with the default profile's model and billing its key.
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     upgrade_kwargs = dict(failure_callback=failure_callback, main_runtime=main_runtime, title_callback=title_callback,
                           runtime_validator=runtime_validator)
     if isinstance(title_preview, str) and title_preview.strip():
@@ -1121,7 +1121,7 @@ def start_title_drift_check(agent, messages, *, final_status) -> Optional[thread
         session_id = getattr(agent, "session_id", None)
         if not session_db or not session_id:
             return None
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         thread = spawn_context_thread(
             maybe_refresh_title_drift,
             name="title-drift",

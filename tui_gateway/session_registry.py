@@ -385,7 +385,7 @@ def _maybe_notify_auto_prune(sid: str, profile_home: str | None) -> None:
         else:
             _AUTO_PRUNE_NOTIFIED.pop(str(home), None)
 
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     spawn_context_thread(_work, name="auto-prune-advice").start()
 
 

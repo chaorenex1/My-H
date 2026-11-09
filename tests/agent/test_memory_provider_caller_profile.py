@@ -12,10 +12,11 @@ import pytest
 
 from agent.inline_tool_executors import resolve_invoke_tool_executor
 from agent.memory_manager import MemoryManager
-from agent.memory_provider import MemoryProvider, ctx_bound
+from agent.memory_provider import MemoryProvider
 from agent.secret_scope import is_multiplex_active
 from agent.tool_executor import _resolve_sequential_dispatch, _ToolCallRef
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+from hermes_threading import ctx_bound
 
 _TOOL = "pw_remember"
 

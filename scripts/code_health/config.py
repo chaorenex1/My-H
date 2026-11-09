@@ -149,7 +149,7 @@ RULES: tuple[Rule, ...] = (
          " (`get_hermes_home()`, `load_config()`) or key the slot by `hermes_home_key()`;"
          " module constants hold the launch profile's value", "ast",
          exclude=SINGLE_PROFILE),
-    Rule("HX012", "raw threading.Thread", "`spawn_context_thread(...)` so the thread keeps"
+    Rule("HX012", "raw threading.Thread", "`hermes_threading.spawn_context_thread(...)` so the thread keeps"
          " the caller's profile scope (ContextVars do not cross a bare Thread)", "ast",
          blocking=WARN_UNTIL_REPLAYED,
          exclude=SINGLE_PROFILE),

@@ -1897,7 +1897,7 @@ def _plugins_settings(rid, params):
     if plugin_dir and pc._is_portable_plugin_dir(plugin_dir):
         servers = _portable_server_names(Path(str(plugin_dir)), canonical)
         if servers:
-            from agent.memory_provider import spawn_context_thread  # keeps this request's profile scope
+            from hermes_threading import spawn_context_thread  # keeps this request's profile scope
             discovery = _tools_mod("tools.mcp_tool_discovery")
             spawn_context_thread(discovery.restart_mcp_servers_with_new_inputs, args=(servers,),
                                  name=f"plugin-settings-mcp-{canonical}").start()

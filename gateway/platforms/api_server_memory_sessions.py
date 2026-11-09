@@ -118,7 +118,7 @@ class ApiServerMemorySessions:
 
     def _shutdown_async(self, manager: Any, owner: Optional[Path]) -> None:
         """Eviction runs inside a request's own turn: never make that reply wait on a provider drain."""
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         spawn_context_thread(self._shutdown, args=(manager, owner), name="api-server-memory-evict").start()
 
     @staticmethod

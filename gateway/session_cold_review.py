@@ -104,7 +104,7 @@ def start_cold_refine(runner, source, session_key, session_id, history, focus):
     is spawned (or raises its start error); the parent's clients are released when the review's request ends,
     on the thread that built it."""
     from agent.async_utils import safe_schedule_threadsafe
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from gateway.run import _interim_metadata, _non_conversational_metadata
     loop = asyncio.get_running_loop()
     adapter = runner._delivery_adapter_for(source)

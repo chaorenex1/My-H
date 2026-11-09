@@ -33,7 +33,7 @@ from array import array
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from agent.memory_provider import spawn_context_thread
+from hermes_threading import submit_context
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -193,7 +193,7 @@ class _WebSocketSession(StreamingSession):
         finally:
             # Publish first, close after: the sync close handshake waits up to close_timeout on a
             # server that already hung up, and the caller is blocked on finalize() meanwhile.
-            spawn_context_thread(ws.close, name="stt-stream-close").start()
+            submit_context(ws.close, name="stt-stream-close")
 
     def _loop(self, ws: Any) -> dict[str, Any]:
         self._open(ws)

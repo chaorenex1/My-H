@@ -340,7 +340,7 @@ class AgentSessionRuntime:
                on_settle: Optional[Callable[[Any, Any, Optional[BaseException]], None]] = None
                ) -> SessionJob:
         """Run one fresh session on its own thread; the caller has already opened the slot."""
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         job = SessionJob(job_id=f"agent-session-{next(_SEQUENCE)}", label=str(label or ""),
                          session_key=str(session_key or ""))
@@ -494,7 +494,7 @@ class AgentSessionRuntime:
     def _ensure_worker_locked(self, session: _Session) -> Optional[threading.Thread]:
         if session.worker:
             return None
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         session.worker = True
         return spawn_context_thread(
@@ -769,7 +769,7 @@ class AgentSessionRuntime:
         cap = float(self._limits.get("max_runtime_seconds") or 0)
         if ttl <= 0 and cap <= 0:
             return
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         # The copied launch context is only a starting point: ``sweep`` rebinds each session's
         # profile (explicit state.db path) before any row/inbox access. ``spawn_context_thread``

@@ -87,7 +87,7 @@ def _version(path):
 def start_due_boot() -> None:
     """Work out the local Desktop's due answer off the RPC path, after the setup bootstrap has recorded
     a fresh install (``begin_local_desktop_boot``)."""
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from hermes_cli import free_tier_bootstrap, onboarding_due
 
     finish = onboarding_due.begin_boot(_due_stamp)
@@ -110,7 +110,7 @@ def begin_local_desktop_boot() -> None:
     process outlives app launches, so a later connection retries the install steps a failed boot
     left unsettled."""
     global _local_desktop_boot_started
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from hermes_cli import free_tier_bootstrap
     from hermes_cli.process_identity import serving_local_desktop
     from tui_gateway.launch_profile_policy import launch_profile_scope_if_multiplexed

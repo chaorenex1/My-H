@@ -138,7 +138,7 @@ def _enqueue(home: str, workspace: str, turn_id: str) -> dict[str, Any]:
             with _INFLIGHT_LOCK:
                 _INFLIGHT.discard(key)
 
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
 
     thread = spawn_context_thread(
         worker, name="codegraph-post-turn", daemon=True

@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from agent.memory_provider import spawn_context_thread
+from hermes_threading import spawn_context_thread
 from gateway import hosted_room_router as router
 from gateway import hosted_rooms
 

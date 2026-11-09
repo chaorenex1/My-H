@@ -79,6 +79,7 @@
         "agent.runtime_cwd:resolve_agent_cwd",
         "agent.usage_pricing:CostResult",
         "hermes_cli.auth_constants:AuthError",
+        "hermes_threading:spawn_context_thread",
         "tools.environments.base:BaseEnvironment",
         "tools.environments:BaseEnvironment",
         "utils:atomic_json_write",

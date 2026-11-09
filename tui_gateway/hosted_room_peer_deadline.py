@@ -112,7 +112,7 @@ def _fetch(request, budget):
 
 def open_peer_url(request, *, timeout: float):
     """Bound the caller's wait and outstanding attempts; never follow redirects."""
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
 
     url = urllib.parse.urlsplit(request.full_url)
     target = (url.hostname, url.port or (443 if url.scheme == 'https' else 80))

@@ -107,7 +107,7 @@ def _run(root: Path, name: str, mode: str, digest: Optional[str]) -> concurrent.
         except Exception:  # the waiter cancelled; the verdict is simply not delivered
             logger.debug("immediate Semgrep verdict was cancelled", exc_info=True)
 
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
 
     spawn_context_thread(_scan, name="hermes-semgrep").start()
     return future

@@ -221,7 +221,7 @@ def call_unbounded(cli, connection, name, command):
     from cli import _cprint
     from hermes_cli.gateway_connection import CallStopped
     wake = cli._gateway_command_wait = threading.Event()  # set by Ctrl+C (cli_tui_mixin)
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     answering: list = []  # the clarify request id the panel is answering, while it is open
     spawn_context_thread(_answer_choices, args=(cli, connection, wake, answering), name="hermes-command-choices").start()
     try:

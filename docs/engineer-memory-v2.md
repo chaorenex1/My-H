@@ -547,7 +547,7 @@ auxiliary:
 | turn 挂载点 | `agent/conversation_loop.py:1845`、`agent/turn_tool_round.py:299`、`agent/turn_stop_gates.py:341` |
 | 会话 bundle 路径 | `hermes_session_paths.py: ADVISOR_STEM`（`_engineer_memory.jsonl` 取同一族命名） |
 | 工具注册 | `tools/registry.py: registry.register(...)`；`toolsets.py: TOOLSETS` |
-| 通用：后台线程作用域 | `agent/memory_provider.py: spawn_context_thread` |
+| 通用：后台线程作用域 | `hermes_threading.py: spawn_context_thread` |
 | 辅助模型调用 | `agent/auxiliary_client.py: call_llm` |
 | ACE 三角色 | `ace/core/{generator,reflector,curator}.py` |
 | ACE playbook 格式与 op | `playbook_utils.py`（`parse_playbook_line`、`apply_curator_operations`） |

@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 import uuid
-from agent.memory_provider import spawn_context_thread
+from hermes_threading import spawn_context_thread
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)

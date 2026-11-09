@@ -68,7 +68,7 @@ class _Pool:
         call.add_done_callback(self.release)
         if spawn:
             # Daemon: a call stuck on its model must not hold up interpreter exit (it writes no state).
-            from agent.memory_provider import spawn_context_thread
+            from hermes_threading import spawn_context_thread
             try:
                 spawn_context_thread(self.drain, name='hermes-oneshot').start()
             except RuntimeError:

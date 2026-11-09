@@ -482,10 +482,10 @@ hooks:
 
 ## Threading Contract
 
-**`sync_turn()` MUST be non-blocking.** If your backend has latency (API calls, LLM processing), run the work in a daemon thread — spawned with `agent.memory_provider.spawn_context_thread`, never a bare `threading.Thread`. Profile isolation (the active `HERMES_HOME`, the per-turn secret scope) lives in `contextvars`, and a plain thread starts with an empty context: under multiplexed profiles it would silently write into the *default* profile's store, and `get_secret()` fails closed there.
+**`sync_turn()` MUST be non-blocking.** If your backend has latency (API calls, LLM processing), run the work in a daemon thread — spawned with `hermes_threading.spawn_context_thread`, never a bare `threading.Thread`. Profile isolation (the active `HERMES_HOME`, the per-turn secret scope) lives in `contextvars`, and a plain thread starts with an empty context: under multiplexed profiles it would silently write into the *default* profile's store, and `get_secret()` fails closed there.
 
 ```python
-from agent.memory_provider import spawn_context_thread
+from hermes_threading import spawn_context_thread
 
 def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
     def _sync():

@@ -400,7 +400,7 @@ class AdvisorRuntime:
     def _ensure_worker(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         self._stop.clear()
         self._thread = spawn_context_thread(

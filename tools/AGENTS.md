@@ -126,7 +126,7 @@ served_profile_child_env(target_home=, inherit_credentials=)`: launch-profile `.
 target's own secrets overlaid. `os.environ.copy()` / `dict(os.environ)` pins the launch profile;
 contextvars do not cross process boundaries, so resolve before `Popen`. A child's
 `UnscopedSecretError` is a spawn-site bug, never a reason to add environ fallthrough. New threads
-from scoped code use `agent.memory_provider.spawn_context_thread` (a bare `threading.Thread`
+from scoped code use `hermes_threading.spawn_context_thread` (a bare `threading.Thread`
 drops the scope). **MCP trust is a per-profile record:** `mcp_tool_registration.py::
 _record_scope_trust` keys trust on the home; a secondary never adopts the launch profile's trust
 for a same-named server, and `mcp_tool_handlers.py::_trust_gate_check` consults the calling

@@ -222,7 +222,7 @@ class ManagedWorker:
     def drain_stderr(self, path):
         """Route the child's stderr (its tracebacks and redirected prints) into the profile's
         bounded, redacted, private log instead of discarding it."""
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         from gateway.session_managed_worker_log import drain_worker_stderr
         self.stderr_drain = spawn_context_thread(drain_worker_stderr, name='managed-stderr-drain',
                                                  args=(self.process.stderr, path, self.process.pid, lambda: self.secrets))
@@ -252,7 +252,7 @@ class ManagedWorker:
         silent one, instead of leaving the turn started behind it."""
         if self.reader is None:
             self._arrived = asyncio.Event()
-            from agent.memory_provider import spawn_context_thread
+            from hermes_threading import spawn_context_thread
             self.reader = spawn_context_thread(self._read_frames, name='managed-frame-reader',
                                                args=(asyncio.get_running_loop(),))
             self.reader.start()
