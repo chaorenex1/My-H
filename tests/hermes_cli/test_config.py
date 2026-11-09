@@ -295,7 +295,6 @@ class TestSaveAndLoadRoundtrip:
 
 
 
-
     def test_config_set_refuses_to_overwrite_unparseable_existing_config(self, tmp_path):
         """Unparseable YAML must not be replaced with a single-key document.
 
@@ -1369,6 +1368,7 @@ class TestEnvWriteDenylist:
 
         assert protected_key not in load_env()
 
+    @pytest.mark.platforms("linux", "macos")
     @pytest.mark.parametrize(
         "allowed_key",
         [
@@ -1747,7 +1747,6 @@ class TestConfigNormalizationDoesNotOverwriteUserValues:
 
         assert "max_turns" not in raw.get("agent", {})
         assert raw["memory"]["user_char_limit"] == 2200
-
 
 
     def test_normalize_max_turns_does_not_inject_default(self):
