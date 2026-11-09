@@ -252,32 +252,12 @@ async def read(connection, ref, params, *, kind):
         raise RuntimeStoreError('not_found')
     authorize(connection, ref, params, 'session:read')
     live = authority.sessions[ref.session_id]
-    agents = []
-    if kind == 'subagents':
-        from gateway.agent_roster import list_agent_definitions
-        from gateway.session_authorities import owner_scope
-        from gateway.session_policy import policy_for_source
-        from hermes_constants import get_hermes_home
-        policy = policy_for_source(authority.runner, live.source)
-        home = Path(str(authority.profile_id))
-        home = str(home) if home.is_absolute() and home.is_dir() else str(get_hermes_home())
-        cwd = policy.cwd if policy is not None else home
-
-        def roster():
-            with owner_scope(authority):
-                return list_agent_definitions(cwd, authority.db)
-        agents = await asyncio.to_thread(roster)
-    if kind == 'control':
-        # Persisted per session id, never the route's live objects: readable after a messaging
-        # route moved on to another conversation. The three state.db meta reads and the ESTOP
-        # sentinel probe run off the owner loop, as publish_async's snapshot read already does.
-        return {'control': await asyncio.to_thread(control_snapshot, authority, ref)}
     # In a worker thread (it inherits the dispatch's owner scope): the projection takes the session's
     # event lock, which every streamed token takes too, reads state.db (compression lineage, local
     # receipt, control meta) and the process registry under its lock. Clients poll these every 1-5 s per
     # open session, so on the loop they were a large share of loop time with many sessions running.
     return await asyncio.to_thread(locked_projection, authority, live, ref,
-                                   partial(_project, authority, ref, params, kind, agents))
+                                   partial(_project, authority, ref, params, kind))
 
 
 def locked_projection(authority, live, ref, project):
@@ -295,15 +275,37 @@ def locked_projection(authority, live, ref, project):
             raise
 
 
-def _project(authority, ref, params, kind, agents=()):
+def _project(authority, ref, params, kind):
+    if kind == 'control':
+        # Persisted per session id, never the route's live objects: readable after a messaging
+        # route moved on to another conversation.
+        return {'control': control_snapshot(authority, ref)}
     _require_current_route(authority, ref)
     agent, records = _owner_objects(authority, ref, include_fallback_evicted=kind == 'subagents')
     if kind == 'subagents':
         return {'subagents': [subagent_row(record) for record in records],
-                'delegations': [], 'agents': list(agents)}
+                'delegations': [], 'agents': _roster_agents(authority, authority.sessions[ref.session_id])}
     if kind == 'tail':
         return subagent_tail(records, params['subagent_id'])
     return {'processes': process_snapshot(authority, ref, agent, records)}
+
+
+def _roster_agents(authority, live):
+    """The named agents a profile folder offers (``subagent.list``'s ``agents``).
+
+    Runs inside the projection's worker thread: the profile-dir stat and the roster's
+    ``state.db`` read must stay off the event loop, like the rest of this projection.
+    """
+    from gateway.agent_roster import list_agent_definitions
+    from gateway.session_authorities import owner_scope
+    from gateway.session_policy import policy_for_source
+    from hermes_constants import get_hermes_home
+    policy = policy_for_source(authority.runner, live.source)
+    home = Path(str(authority.profile_id))
+    cwd = policy.cwd if policy is not None else (
+        str(home) if home.is_absolute() and home.is_dir() else str(get_hermes_home()))
+    with owner_scope(authority):
+        return list_agent_definitions(cwd, authority.db)
 
 
 def _owned_targets(connection, ref, params, *, select):
