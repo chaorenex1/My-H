@@ -60,7 +60,7 @@ def record(session_id: str, task_id: str, question: str, answer: str) -> None:
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
             if path.stat().st_size > _MAX_BYTES:
-                lines = path.read_text(encoding="utf-8").splitlines()[-_KEEP_LINES:]
+                lines = path.read_text(encoding="utf-8-sig").splitlines()[-_KEEP_LINES:]
                 path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except OSError:
             logger.warning("btw.history: could not store an answer for %s", session_id, exc_info=True)
@@ -69,7 +69,7 @@ def record(session_id: str, task_id: str, question: str, answer: str) -> None:
 def _read(session_id: str, limit: int) -> list[dict]:
     path = _store_path(session_id)
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
     except OSError:
         return []
     items = []
