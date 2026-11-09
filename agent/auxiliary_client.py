@@ -35,9 +35,6 @@ from agent.error_classifier import (
 )
 from agent.errors import InvalidProviderResponseError
 from agent.auxiliary_fallback_recovery import reapply_repairs
-from agent.auxiliary_error_shapes import (
-    _botocore_error, _exc_http_status, _is_invalid_aux_response_error, _is_statusless_structured_provider_error,
-)
 from agent.auxiliary_fallback_chains import (
     coerce_positive_timeout as _coerce_positive_timeout,
     fallback_chain_entry as _fallback_chain_entry,
