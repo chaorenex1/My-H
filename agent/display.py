@@ -504,7 +504,11 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
 
 
 def _primary_arg_preview(tool_name: str, args: dict, max_len: int) -> str | None:
-    key = _PRIMARY_ARGS.get(tool_name) or next((k for k in _FALLBACK_PREVIEW_KEYS if k in args), None)
+    if tool_name == "skills_list":
+        key = "query" if args.get("query") else "category"
+    else:
+        key = _PRIMARY_ARGS.get(tool_name) or next(
+            (k for k in _FALLBACK_PREVIEW_KEYS if k in args), None)
     if not key or key not in args:
         return None
     value = args[key]
@@ -1267,7 +1271,10 @@ _CUTE_LINES = {
     "todo_list": _cute_todo_list,
     "session_search": lambda a, r: _cute_row("🔍", "recall", f"\"{_cute_trunc(a.get('query', ''))}\""),
     "memory": _cute_memory,
-    "skills_list": lambda a, r: _cute_row("📚", "skills", t("display.cute.skills_list", category=a.get("category") or t("display.cute.skills_all"))),
+    "skills_list": lambda a, r: _cute_row(
+        "📚", "skills",
+        _cute_trunc(a.get("query", "")) if a.get("query")
+        else t("display.cute.skills_list", category=a.get("category") or t("display.cute.skills_all"))),
     "skill_view": _cute_skill_view,
     "image_generate": lambda a, r: _cute_row("🎨", "create", _cute_trunc(a.get("prompt", ""))),
     "text_to_speech": lambda a, r: (

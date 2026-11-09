@@ -52,6 +52,11 @@ class ToolSearchConfig:
     listing_max_tokens: int = 4000  # budget = min(this, threshold_pct% of context)
     # None = curated default; an explicit list replaces it wholesale ([] = defer no core tools).
     defer_tools: Optional[frozenset] = None
+    # Judgment rerank of BM25 hits (ADR-18 D9): "auto"/"on" ask the judgment model to pick
+    # the best candidate when at least judge_min_candidates were retrieved; "off" = BM25 only.
+    judge: str = "auto"
+    judge_min_candidates: int = 8
+    max_questions: int = 3
 
     @property
     def effective_defer_tools(self) -> frozenset:
@@ -82,7 +87,10 @@ class ToolSearchConfig:
             listing=_tri_state(raw.get("listing", "auto")),
             listing_max_tokens=_clamped_int(raw.get("listing_max_tokens"), 4000, 200, 60000),
             defer_tools=(frozenset(str(n).strip() for n in defer_raw if str(n).strip())
-                         if isinstance(defer_raw, (list, tuple, set)) else None))
+                         if isinstance(defer_raw, (list, tuple, set)) else None),
+            judge=_tri_state(raw.get("judge", "auto")),
+            judge_min_candidates=_clamped_int(raw.get("judge_min_candidates"), 8, 2, 24),
+            max_questions=_clamped_int(raw.get("max_questions"), 3, 1, 3))
 
 
 _TRI_STATE_ALIASES = {"true": "on", "1": "on", "yes": "on", "false": "off", "0": "off", "no": "off"}
@@ -436,6 +444,46 @@ def _string_list_arg(args: dict[str, Any], key: str, *, dedupe: bool, max_items:
     return out, None
 
 
+_JUDGE_CANDIDATE_CAP = 24  # 3 questions x 8 candidates (ADR-18 D9)
+
+
+def _judge_tool_hits(queries: list[str], hit_groups: list[list[CatalogEntry]],
+                     config: ToolSearchConfig) -> dict[int, list[str]]:
+    """Judgment rerank of the BM25 recall pool; ``{}`` means keep the BM25 order (ADR-18 D9)."""
+    if config.judge == "off":
+        return {}
+    # Round-robin across queries: every query's top hits reach the question set before any
+    # query's deeper hits, so a multi-query call does not spend all slots on its first few.
+    pool: list[CatalogEntry] = []
+    seen: set[str] = set()
+    depth = max((len(hits) for hits in hit_groups), default=0)
+    for rank in range(depth):
+        for hits in hit_groups:
+            if rank >= len(hits) or len(pool) >= _JUDGE_CANDIDATE_CAP:
+                continue
+            entry = hits[rank]
+            if entry.name in seen:
+                continue
+            seen.add(entry.name)
+            pool.append(entry)
+        if len(pool) >= _JUDGE_CANDIDATE_CAP:
+            break
+    if len(pool) < config.judge_min_candidates:
+        return {}
+    try:
+        from agent.judgment.choice import ask_choices, judgment_route_available
+
+        if not judgment_route_available():
+            return {}
+        return ask_choices(
+            queries, [(entry.name, entry.description) for entry in pool],
+            question_file="tool-choice", purpose="tool_choice",
+            max_questions=config.max_questions)
+    except Exception as exc:  # health: allow BLE001 -- BM25 is the fallback
+        logger.debug("tool-search judgment failed (%s); using BM25 order", exc)
+        return {}
+
+
 def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[str, Any]],
                          config: Optional[ToolSearchConfig] = None,
                          connector_search: Optional[Any] = None, call: Optional[Any] = None) -> str:
@@ -454,15 +502,29 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
     if connections_in_scope(current_tool_defs):
         remote_entries, hosted_failure = connector_entries_by_group(
             queries, connector_search=connector_search, call=call)
+    # Retrieval fetches enough candidates for judgment to run at the default limit; the
+    # final response is still trimmed to ``limit`` (ADR-18 D9).
+    recall_limit = limit
+    if config.judge != "off":
+        recall_limit = max(limit, min(config.judge_min_candidates, _JUDGE_CANDIDATE_CAP))
+    hit_groups = [search_catalog(catalog + remote_entries[position], query, limit=recall_limit)
+                  for position, query in enumerate(queries)]
+    judged = _judge_tool_hits(queries, hit_groups, config)
     results: list[dict[str, Any]] = []
     tools_map: dict[str, dict[str, Any]] = {}
+    # A judged pick may come from another query's recall slice (the questions share one union
+    # pool); accept and dedupe it instead of discarding it as a cross-query hit (ADR-18 D9).
+    records = {h.name: h for hits in hit_groups for h in hits}
     available_sources = _available_source_summary(catalog)
     for position, query in enumerate(queries):
-        corpus = catalog + remote_entries[position]
-        hits = search_catalog(corpus, query, limit=limit)
-        for h in hits:
-            tools_map.setdefault(h.name, _shared_tool_record(h))
+        hits = hit_groups[position]
         matches = [h.name for h in hits]
+        picks = [name for name in judged.get(position, ()) if name in records]
+        if picks:  # judged picks first, BM25 order retained for the rest
+            matches = list(dict.fromkeys([*picks, *matches]))
+        matches = matches[:limit]
+        for name in matches:
+            tools_map.setdefault(name, _shared_tool_record(records[name]))
         group: dict[str, Any] = {"query": query, "matches": matches}
         if not matches and available_sources:
             group["available_sources"] = available_sources

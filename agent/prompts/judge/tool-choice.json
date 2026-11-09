@@ -1,0 +1,6 @@
+{
+  "choice": {
+    "instructions": "`state.query` is a capability request for a tool. Each criterion names a candidate tool with its description. Choose the single candidate that best satisfies the request, or `none` when no candidate is a plausible match. Judge capability, not keyword overlap.",
+    "criteria": {}
+  }
+}

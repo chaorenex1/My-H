@@ -214,3 +214,41 @@ def test_judgrg_unavailable_when_the_judge_cannot_answer(monkeypatch, tmp_path):
 def test_judgrg_rejects_a_missing_scope(tmp_path):
     with pytest.raises(ValueError, match="path not found"):
         find.judgrg("login", judge=ChoiceJudge(), path=str(tmp_path / "missing"))
+
+
+def test_parse_expanded_terms_accepts_json_and_lines_and_caps_five():
+    assert find._parse_expanded_terms('["retry", "backoff", "3", ""]') == [
+        "retry", "backoff", "3"]
+    assert find._parse_expanded_terms("- retry\n- backoff\n") == ["retry", "backoff"]
+    assert len(find._parse_expanded_terms('["a","b","c","d","e","f"]')) == 5
+
+
+def test_expand_terms_falls_back_to_empty_on_failure(monkeypatch):
+    def fail(_query):
+        raise RuntimeError("no aux model")
+
+    monkeypatch.setattr(find, "_aux_terms", fail)
+    assert find._expand_terms("retry handling") == []
+
+
+def test_query_terms_reserves_room_for_expansions(monkeypatch):
+    monkeypatch.setattr(find, "_aux_terms", lambda _query: ["backoff", "jitter"])
+    assert find._query_terms("retry handling status endpoint") == [
+        "retry", "handling", "status", "backoff", "jitter"]
+
+
+def test_judgrg_uses_expanded_terms_in_the_plan(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_execute(plan, _query, _scope, **_kwargs):
+        seen["plan"] = plan
+        return [], False, find._Output("", "", 0), ["rg"]
+
+    monkeypatch.setattr(find, "_aux_terms", lambda _query: ["backoff"])
+    monkeypatch.setattr(find, "_execute", fake_execute)
+    payload = find.judgrg(
+        "retry handling status endpoint", judge=ChoiceJudge("literal"), path=str(tmp_path))
+
+    assert payload["coverage"] == "complete"
+    assert set(seen["plan"].expression.split("|")) == {
+        "retry", "handling", "status", "backoff", "endpoint"}

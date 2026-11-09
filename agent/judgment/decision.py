@@ -1,4 +1,4 @@
-"""Decision table for ``judgrg`` (ADR-11 D14), loaded from ``prompts/find.json``.
+"""Decision table for ``judgrg`` (ADR-11 D14), loaded from ``prompts/judge/find.json``.
 
 The table mirrors omp's ``prompts/judge`` JSON: one question with fixed criteria.
 It is data, not code, so the intent vocabulary and the tool preference per intent
@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 from agent.judgment.types import JudgmentError
 
-PROMPT_DIR = Path(__file__).parent / "prompts"
+PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts" / "judge"
 MODES = frozenset({"content", "ast", "hybrid"})
 
 

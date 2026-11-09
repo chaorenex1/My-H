@@ -773,7 +773,6 @@ include = [
 agent = [
   "prompts/**/*.md",
   "prompts/judge/*.json",
-  "judgment/prompts/*.json",
   "judgment/prompts/*.md",
   "judgment/schemas/*.json",
 ]

@@ -2,7 +2,7 @@
 
 The tool accepts only the request — a user question, an agent task, or a code
 analysis goal. A restricted choice question decides the intent and therefore the
-tool (see ``agent/judgment/prompts/find.json``), then ripgrep or ast-grep runs on
+tool (see ``agent/prompts/judge/find.json``), then ripgrep or ast-grep runs on
 the local filesystem. Read-only and service-gated by ``judgment.tools.enabled``;
 a partial or unavailable run is reported as such and never presented as proof
 that nothing matches.

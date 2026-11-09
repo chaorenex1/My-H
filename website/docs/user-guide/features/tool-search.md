@@ -110,6 +110,9 @@ tools:
     max_search_limit: 25
     listing: auto       # embed a grouped name+description catalog manifest
     listing_max_tokens: 4000
+    judge: auto         # auto/on rerank BM25 hits with the judgment model; off = BM25 only
+    judge_min_candidates: 8   # activate judgment only at this candidate-pool size (2..24)
+    max_questions: 3    # choice questions per search, 8 candidates each (1..3)
     defer:              # replace the curated default; [] keeps every tool eager
       - computer_use
       - session_search
@@ -133,6 +136,9 @@ shipped curated set; the runtime fallback uses the same value.
 | `listing` | `auto` | Embed a skills-style manifest of every deferred tool (name + first sentence of its description, ≤60 chars, grouped by MCP server) in the `tool_search` bridge description. `auto` includes it when it fits the budget (falling back to names-only, then to the tier-2 server summary); `on`/`off` force either way. |
 | `listing_max_tokens` | `4000` | Absolute cap on the embedded listing, regardless of context size. Range 200–60000. Large catalogs degrade to names-only or per-server summaries, keeping full schemas available through search. |
 | `defer` | Curated list | Tool names replaced by the bridge by default. The list may include cold built-in tools as well as MCP/plugin tools; an explicit list replaces it, and `[]` disables deferral for every tool. |
+| `judge` | `auto` | Judgment rerank of the BM25 candidates: `auto`/`on` ask the judgment model to pick the best tool when the candidate pool reaches `judge_min_candidates`; `off` keeps BM25 only. Any judge failure — no route, timeout, parse error — silently falls back to BM25 order. |
+| `judge_min_candidates` | `8` | Minimum pooled BM25 candidates before judgment runs. Range 2–24. Small searches stay lexical, so a narrow query pays no extra model call. |
+| `max_questions` | `3` | Choice questions sent per search, each carrying up to 8 candidate tools plus `none`. Range 1–3. The judged pick is moved to the front of that query's `matches`; the remaining BM25 order is preserved. |
 
 Per-call array caps are internal safety bounds, not configuration. Over-cap
 calls return an error so the model can retry with a smaller batch.

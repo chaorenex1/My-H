@@ -886,6 +886,18 @@ skills:
 
 Resolved once per session when the system prompt is first built (so the prompt stays cache-stable; edits apply to the next session). Missing or disabled skills warn and are skipped; `--ignore-rules` / `HERMES_IGNORE_RULES=1` suppresses the list. Profile-scoped. See [CLI — persistent auto-load](./cli.md#persistent-auto-load-via-config).
 
+### Capability search in `skills_list`
+
+`skills_list` accepts an optional `query` to rank skills by capability. The lexical layer matches names, descriptions, categories, and `SKILL.md` paths (via ripgrep); when a judgment model is available it also reranks the candidates.
+
+```yaml
+skills:
+  search:
+    enabled: auto   # auto | on | off
+```
+
+`auto` (default) uses the judgment rerank when the configured judgment route is reachable, otherwise lexical only; `on` always attempts it and falls back on failure; `off` keeps lexical ordering only.
+
 ### Guard on agent-created skill writes
 
 When the agent uses `skill_manage` to create, edit, patch, or delete a skill, Hermes can optionally scan the new/updated content for dangerous keyword patterns (credential harvesting, obvious prompt injection, exfil instructions). The scanner is **off by default** — real agent workflows that legitimately touch `~/.ssh/` or mention `$OPENAI_API_KEY` were tripping the heuristic too often. Turn it back on if you want the scanner to prompt you before the agent's skill writes land:
@@ -2171,7 +2183,7 @@ Inside `execute_code`, the local sandbox exposes the same contract as `__judge__
 
 One read-only model tool, `judgrg`, takes a single input: the request (a user question, an agent task, or a code-analysis goal). A restricted choice question — the model cannot pass questions or state — classifies the intent and therefore the tool, and then ripgrep or ast-grep runs. It runs on the local filesystem, not inside a sandboxed task environment, so container/SSH sessions should use `search_files` for the remote tree.
 
-The decision logic is data: `agent/judgment/prompts/find.json` maps each query type to a preferred tool and its criteria.
+The decision logic is data: `agent/prompts/judge/find.json` maps each query type to a preferred tool and its criteria.
 
 | Query type | Tool | Signal |
 |---|---|---|

@@ -129,6 +129,81 @@ def search_terms(query: str) -> list[str]:
     return terms
 
 
+EXPAND_TERMS_LIMIT = 5
+_EXPAND_PROMPT = (
+    "Expand this code-search request into additional search terms. Reply with ONLY a "
+    "JSON array of at most five short literal terms (identifiers, words, or quoted "
+    "phrases) that are likely to appear in the code the request describes. "
+    "No commentary."
+)
+
+
+def _parse_expanded_terms(text: str) -> list[str]:
+    """Terms from a JSON array, else bullet/line output; validated and deduped."""
+    terms: list[str] = []
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, list):
+        terms = [str(item) for item in payload if isinstance(item, str)]
+    else:
+        for line in str(text or "").splitlines():
+            term = line.strip().strip("-*•`\"', ")
+            if term and len(term.split()) <= 4:
+                terms.append(term)
+    out: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        term = term.strip()
+        key = term.lower()
+        if not term or len(term) > 64 or key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+        if len(out) >= EXPAND_TERMS_LIMIT:
+            break
+    return out
+
+
+def _aux_terms(query: str) -> list[str]:
+    """One aux-LLM call for extra literal search terms (ADR-18 D9)."""
+    from agent.auxiliary_client import call_llm
+    from agent.judgment.chat import response_text
+
+    response = call_llm(
+        task="judge",
+        messages=[{"role": "system", "content": _EXPAND_PROMPT},
+                  {"role": "user", "content": str(query)}],
+        temperature=0.0, max_tokens=80, timeout=4.0, fallback=False)
+    return _parse_expanded_terms(response_text(response))
+
+
+def _expand_terms(query: str) -> list[str]:
+    """Extra terms, or ``[]`` on any failure so callers keep ``search_terms()``."""
+    try:
+        return _aux_terms(query)[:EXPAND_TERMS_LIMIT]
+    except Exception as exc:  # health: allow BLE001 -- lexical terms are the fallback
+        logger.debug("judgrg term expansion failed (%s); using lexical terms", exc)
+        return []
+
+
+def _query_terms(query: str) -> list[str]:
+    """Original terms first (room reserved for two expansions), capped at five."""
+    originals = search_terms(query)
+    merged: list[str] = []
+    seen: set[str] = set()
+    for term in [*originals[:3], *_expand_terms(query), *originals[3:]]:
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(term)
+        if len(merged) >= EXPAND_TERMS_LIMIT:
+            break
+    return merged
+
+
 def _glob_term(term: str) -> str:
     """Drop glob metacharacters: a backslash escape is a path separator on Windows."""
     return re.sub(r"[{}*?\[\],!\\:/]", "", term)
@@ -297,10 +372,11 @@ def _single_identifier(terms: Sequence[str]) -> str | None:
 
 
 def plan_search(intent: str, query: str, scope: Path,
-                glob_pattern: str | None) -> _Plan:
+                glob_pattern: str | None,
+                terms: Sequence[str] | None = None) -> _Plan:
     """Map the judged intent through the JSON table to a runnable plan."""
     entry: IntentPlan = load_decision().plan_for(intent)
-    terms = search_terms(query)
+    terms = list(terms) if terms is not None else search_terms(query)
     fallback = ""
     mode = entry.mode
     ast_pattern = query.strip() if looks_structural(query) else None
@@ -663,7 +739,9 @@ def judgrg(
             "coverage": "unavailable",
             "stats": stats.snapshot(),
         }
-    plan = plan_search(intent, query, scope, glob_pattern)
+    mode = load_decision().plan_for(intent).mode
+    terms = _query_terms(query) if mode != "ast" else search_terms(query)
+    plan = plan_search(intent, query, scope, glob_pattern, terms=terms)
     hits, truncated, output, tools = _execute(
         plan, query, scope, glob_pattern=glob_pattern, hidden=hidden,
         limit=limit, context_lines=context_lines)

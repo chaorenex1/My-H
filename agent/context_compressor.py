@@ -1850,10 +1850,10 @@ def _sum_skill_manage(name, args, content, content_len, line_count):
 
 
 def _sum_skills_list(name, args, content, content_len, line_count):
-    # `skills_list` takes only `category`, not a top-level `name` — the count
-    # from the payload is what identifies the call after compression.
-    category = _str_arg(args, "category")
-    scope = f" category={category}" if category else ""
+    # `skills_list` takes `category` and an optional `query`, not a top-level `name` —
+    # the count from the payload is what identifies the call after compression.
+    query, category = _str_arg(args, "query"), _str_arg(args, "category")
+    scope = (f" query={query}" if query else "") + (f" category={category}" if category else "")
     payload = _json_dict(content)
     count = payload.get("count")
     listed = f" {count} skills" if isinstance(count, int) else ""

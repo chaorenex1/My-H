@@ -8,6 +8,7 @@ import contextvars
 import json
 import logging
 import os
+import subprocess
 import time
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -287,8 +288,105 @@ def sort_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(skills, key=lambda s: (s.get("category") or "", s["name"]))
 
 
-def skills_list(category: str | None = None, task_id: str | None = None) -> str:
-    """Tier 1 listing: name + description (+ category) only; ``task_id`` is handler parity."""
+def _skills_search_setting() -> str:
+    """``skills.search.enabled`` normalized to auto/on/off; a broken config means auto."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        raw = cfg_get(load_config_readonly(), "skills", "search", "enabled", default="auto")
+    except Exception:  # health: allow BLE001 -- search config must never break listing
+        return "auto"
+    text = str(raw).strip().lower()
+    return text if text in ("auto", "on", "off") else "auto"
+
+
+def _rg_skill_paths(terms: list[str]) -> set[str]:
+    """Absolute SKILL.md paths whose text matches any term; empty when rg is unavailable."""
+    try:
+        from agent.judgment.find import resolve_rg
+
+        executable = resolve_rg()
+    except Exception:  # health: allow BLE001 -- lexical text matching is the fallback
+        return set()
+    roots, _active = skill_search_dirs()
+    root_dirs = [str(d) for _tier, d in roots if d.exists()]
+    if not executable or not root_dirs:
+        return set()
+    argv = [executable, "--files-with-matches", "--no-messages", "-i"]
+    for term in terms:
+        argv += ["-e", term]
+    argv += ["--", *root_dirs]
+    try:
+        completed = subprocess.run(
+            argv, capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace", check=False)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if completed.returncode not in (0, 1):
+        return set()
+    return {os.path.normcase(os.path.abspath(line.strip()))
+            for line in completed.stdout.splitlines() if line.strip()}
+
+
+def _skill_lexical_order(query: str, skills: list[dict[str, Any]],
+                         path_by_name: dict[str, Path]) -> list[str]:
+    """Query-matching skill names, best first: exact name, name, rg path, description."""
+    from agent.judgment.find import search_terms
+
+    terms = [term.lower() for term in search_terms(query)]
+    needle = query.strip().lower()
+    if not terms:
+        return []
+    rg_paths = _rg_skill_paths(terms)
+    scored: list[tuple[int, int, str]] = []
+    for index, skill in enumerate(skills):
+        name = str(skill.get("name") or "")
+        lower_name = name.lower()
+        description = str(skill.get("description") or "").lower()
+        category = str(skill.get("category") or "").lower()
+        path = path_by_name.get(name)
+        in_rg = path is not None and os.path.normcase(os.path.abspath(path)) in rg_paths
+        if lower_name == needle:
+            score = 0
+        elif needle in lower_name:
+            score = 1
+        elif any(term in lower_name for term in terms):
+            score = 2
+        elif in_rg:
+            score = 3
+        elif any(term in description or term in category for term in terms):
+            score = 4
+        else:
+            continue
+        scored.append((score, index, name))
+    scored.sort()
+    return [name for _score, _index, name in scored]
+
+
+def _judge_skill_order(query: str, skills: list[dict[str, Any]],
+                       lexical: list[str]) -> list[str]:
+    """Judgment rerank over the lexical candidates plus the catalog (ADR-18 D9)."""
+    try:
+        from agent.judgment.choice import ask_choices, judgment_route_available
+
+        if not judgment_route_available():
+            return []
+        by_name = {str(s.get("name")): s for s in skills}
+        ordered = list(dict.fromkeys([*lexical, *(str(s.get("name") or "") for s in skills)]))
+        pool = [by_name[name] for name in ordered if name in by_name][:24]
+        picks = ask_choices(
+            [query], [(str(s.get("name")), str(s.get("description") or "")) for s in pool],
+            question_file="skill-choice", purpose="skill_choice")
+        return picks.get(0, [])
+    except Exception as exc:  # health: allow BLE001 -- lexical order is the fallback
+        logger.debug("skill-search judgment failed (%s); using lexical order", exc)
+        return []
+
+
+def skills_list(category: str | None = None, query: str | None = None,
+                task_id: str | None = None) -> str:
+    """Tier 1 listing: name + description (+ category) only. ``query`` ranks matching skills
+    (rg/lexical, plus a judgment rerank when available); ``task_id`` is handler parity."""
     try:
         _skills_dir().mkdir(parents=True, exist_ok=True)
         all_skills = find_all_skills()
@@ -307,7 +405,18 @@ def skills_list(category: str | None = None, task_id: str | None = None) -> str:
                           "message": "No skills found in skills/ directory."})
         if category:
             all_skills = [s for s in all_skills if s.get("category") == category]
-        all_skills = sort_skills(all_skills)
+        needle = str(query or "").strip()
+        if needle:
+            path_by_name = {s["load_name"]: s["path"]
+                            for s in _skill_catalog() if s.get("load_name")}
+            lexical = _skill_lexical_order(needle, all_skills, path_by_name)
+            picked = ([] if _skills_search_setting() == "off"
+                      else _judge_skill_order(needle, all_skills, lexical))
+            ordered = list(dict.fromkeys([*picked, *lexical]))
+            by_name = {str(s.get("name")): s for s in all_skills}
+            all_skills = [by_name[name] for name in ordered if name in by_name]
+        else:
+            all_skills = sort_skills(all_skills)
         categories = sorted({s.get("category") for s in all_skills if s.get("category")})
         return _json({
             "success": True, "skills": all_skills, "categories": categories,
@@ -724,7 +833,11 @@ SKILLS_LIST_SCHEMA = {
             "category": {
                 "type": "string",
                 "description": "Optional category filter to narrow results",
-            }
+            },
+            "query": {
+                "type": "string",
+                "description": "Optional capability keywords: rank matching skills first (lexical, plus judgment rerank when available).",
+            },
         },
         "required": [],
     },
@@ -751,7 +864,8 @@ SKILL_VIEW_SCHEMA = {
 
 registry.register(
     name="skills_list", toolset="skills", schema=SKILLS_LIST_SCHEMA,
-    handler=lambda args, **kw: skills_list(category=args.get("category"), task_id=kw.get("task_id")),
+    handler=lambda args, **kw: skills_list(
+        category=args.get("category"), query=args.get("query"), task_id=kw.get("task_id")),
     check_fn=check_skills_requirements, emoji="📚")
 
 

@@ -1,0 +1,6 @@
+{
+  "choice": {
+    "instructions": "`state.query` describes a workflow or domain capability. Each criterion names a candidate skill with its description. Choose the single candidate that best satisfies the request, or `none` when no candidate is a plausible match. Judge capability, not keyword overlap.",
+    "criteria": {}
+  }
+}

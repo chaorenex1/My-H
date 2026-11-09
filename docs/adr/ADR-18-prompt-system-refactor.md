@@ -431,7 +431,7 @@ cache:
 | 工具搜索 | `tools/tool_search.py` | 判定路径、候选上限、回退、缓存 |
 | 技能搜索 | `tools/skills_tool.py`（`skills_list(query=...)`） | catalog + rg + judge + 缓存 |
 | judgrg | `agent/judgment/find.py` | 候选词扩展、合并去重、缓存 |
-| 问题文件 | 新 `agent/judgment/prompts/tool-choice.json`、`skill-choice.json` | `choice` 问题模板 |
+| 问题文件 | 新 `agent/prompts/judge/tool-choice.json`、`skill-choice.json`（`find.json` 同目录） | `choice` 问题模板 |
 | 配置 | `hermes_cli/config_defaults.py` + 新 `config_defaults_prompts.py` | `prompts.*`、`skills.index/search`、`tools.tool_search.judge`、`cache.purposes` |
 | 背景 review | `agent/background_review.py` | 产出 additionalCommunication，按预算裁剪 |
 | 打包 | `pyproject.toml` | `prompts/system/*.md`、`prompts/system/*.json` |

@@ -1428,6 +1428,9 @@ DEFAULT_CONFIG = {
         # through the unchanged-file dedup and, if still over, drops the oldest entries (0 = keep
         # the ledger append-only forever, the previous behaviour).
         "ledger_max_bytes": 5 * 1024 * 1024,
+        # Capability search for `skills_list(query=...)` (ADR-18 D9): "auto"/"on" rerank the
+        # lexical (rg) candidates with the judgment model when available; "off" is lexical only.
+        "search": {"enabled": "auto"},
     },
 
     # Curator — background maintenance of AGENT-CREATED skills (never hub-installed): marks
@@ -1933,6 +1936,14 @@ DEFAULT_CONFIG = {
             # Absolute cap on the embedded listing in tokens (chars/4), regardless of context size.
             # Range 200..60000.
             "listing_max_tokens": 4000,
+            # Judgment rerank of BM25 candidates (ADR-18 D9): "auto"/"on" ask the judgment
+            # model to pick the best tool when at least judge_min_candidates were retrieved;
+            # "off" keeps BM25 only. Any judge failure falls back to BM25 order.
+            "judge": "auto",
+            # Activate judgment only when the BM25 candidate pool reaches this size. Range 2..24.
+            "judge_min_candidates": 8,
+            # Choice questions per search; each carries up to 8 candidates. Range 1..3.
+            "max_questions": 3,
             # Tools replaced by the bridge by default. This list intentionally includes cold,
             # event-triggered built-ins; an explicit list replaces it wholesale and [] keeps every
             # tool eager. The runtime fallback in tools/tool_search.py derives from this value.

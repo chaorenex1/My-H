@@ -106,6 +106,15 @@ def _read_builtin(name: str) -> Any:
             f"could not load bundled judgment questions {name!r}: {exc}") from None
 
 
+def load_bundled_document(name: str) -> Mapping[str, Any]:
+    """Raw bundled question document (``agent/prompts/judge/<name>.json``)."""
+    payload = _read_builtin(name)
+    if not isinstance(payload, Mapping) or not payload:
+        raise JudgmentValidationError(
+            f"bundled judgment questions {name!r} must be a non-empty object")
+    return payload
+
+
 def _question_payload(source: str | Path | Mapping[str, Any]) -> Any:
     if isinstance(source, Mapping):
         return source
