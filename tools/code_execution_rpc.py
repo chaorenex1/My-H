@@ -1,7 +1,7 @@
 """Host-side RPC servers for execute_code sandboxes.
 
 Two transports share one request pipeline (token check → allow-list → call
-budget → dispatch under output silence → log): ``_rpc_server_loop`` serves the
+budget → dispatch under output silence → log): ``serve_rpc`` serves the
 local UDS/TCP socket, ``_rpc_poll_loop`` polls a remote filesystem for request
 files via ``env.execute()``.
 """
@@ -25,13 +25,18 @@ logger = logging.getLogger("tools.code_execution_tool")
 _TERMINAL_BLOCKED_PARAMS = {"background", "pty", "notify", "notify_on_complete", "watch_patterns", "heartbeat", "persist_on_release"}
 
 
-def _host_op(name: str):
-    """The judgment host op for ``name``; ``__`` names are reserved for host ops (ADR-17 D6)."""
+def _host_op(name: str, task_id: str = ""):
+    """The host op for ``name``; ``__`` names are reserved for host ops (ADR-17 D6, ADR-4 D10)."""
     if not name.startswith("__"):
         return None
-    from agent.judgment.rpc import host_op
-
-    return host_op(name)
+    from agent.judgment.rpc import host_op as judgment_op
+    op = judgment_op(name)
+    if op is not None:
+        return op
+    from tools.eval_host_ops import dispatch_host_op, host_op as eval_host_op
+    if eval_host_op(name) is None:
+        return None
+    return lambda args: dispatch_host_op(name, args, task_id=task_id)
 
 
 def _default_dispatch(task_id, *, allow_host_ops: bool = False):
@@ -39,7 +44,7 @@ def _default_dispatch(task_id, *, allow_host_ops: bool = False):
 
     def dispatch(tool_name, tool_args):
         if allow_host_ops:
-            op = _host_op(tool_name)
+            op = _host_op(tool_name, task_id)
             if op is not None:
                 return op(tool_args)
         return handle_function_call(tool_name, tool_args, task_id=task_id)
@@ -162,11 +167,12 @@ def tool_errors_since(tool_call_log: list, start: int = 0) -> list:
     return [{"tool": e["tool"], "error": e["error"]} for e in tool_call_log[start:] if e.get("error")][:5]
 
 
-def _rpc_server_loop(server_sock: socket.socket, task_id: str, tool_call_log: list,
+def serve_rpc(server_sock: socket.socket, task_id: str, tool_call_log: list,
                      tool_call_counter: list, max_tool_calls: int, allowed_tools: frozenset,
                      stop_event: threading.Event, rpc_token: str, dispatch=None):
     """Accept one client and serve newline-delimited JSON requests until it disconnects, idles
-    300s, or the call limit is reached. ``tool_call_counter`` is a mutable ``[int]``. ``dispatch``
+    300s, or the call limit is reached. Shared by the Python and Bun kernels: ``task_id`` picks the
+    default dispatch identity (the caller supplies ``dispatch`` when it rebinds authority per cell). ``tool_call_counter`` is a mutable ``[int]``. ``dispatch``
     overrides how an allowed, budgeted call runs: per-call sandboxes use the default (the thread
     carries the cell's context); session kernels rebind each call to the CURRENT cell's authority.
     """

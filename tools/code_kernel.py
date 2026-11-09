@@ -2,7 +2,7 @@
 interpreter, cwd, tool-set), one code cell per call, state survives across calls.
 
 Constraints, in order: (1) SAME security envelope as per-call (``_build_child_env``
-scrubbing, ``_rpc_server_loop`` token + per-cell tool budget, ANSI strip + secret
+scrubbing, ``serve_rpc`` token + per-cell tool budget, ANSI strip + secret
 redaction) — only lifetime widens. (2) A wedged kernel dies, never hangs the agent:
 timeout/interrupt kills the process tree and drops the registry entry; state loss is
 deliberate (a cell cannot be interrupted in place safely). (3) Env frozen at spawn:
@@ -46,15 +46,65 @@ _RUNNER_CAPTURE_BYTES = 1_000_000
 # persistent GLOBALS namespace, build the payload. `__name__` is `__main__` as on the per-call path.
 RUNNER_CELL_SOURCE = '''\
 GLOBALS = {"__name__": "__main__", "__builtins__": __builtins__}
+_ACTIVE_CELL = {"id": "", "index": 0}
+_STREAM_LOCK = threading.Lock()
+_STREAM_CHUNK = 4096
 
 
 def _clip(text):
     return (text, False) if len(text) <= _CAPTURE_LIMIT else (text[:_CAPTURE_LIMIT], True)
 
 
+def _emit_stream(stream, text):
+    """ADR-4 D14: a cell's live output frame. Remote runners do not define _real_stdout and
+    simply skip streaming; the result frame stays authoritative either way."""
+    try:
+        real, sentinel = globals().get("_real_stdout"), globals().get("_SENTINEL", "")
+        if real is None or not sentinel or not text:
+            return
+        body = json.dumps({"type": "stream", "id": _ACTIVE_CELL["id"],
+                           "cell_index": _ACTIVE_CELL["index"], "stream": stream,
+                           "text": text}, ensure_ascii=False).encode("utf-8")
+        header = ("\\n" + sentinel + " " + str(len(body)) + "\\n").encode("utf-8")
+        with _STREAM_LOCK:
+            real.buffer.write(header)
+            real.buffer.write(body)
+            real.buffer.flush()
+    except Exception:
+        pass
+
+
+class _StreamTee(io.StringIO):
+    """Redirect target for stdout/stderr: captures the cell's text and streams it in
+    newline/4KiB batches so a chatty cell cannot spam one frame per write."""
+
+    def __init__(self, stream):
+        super().__init__()
+        self._stream = stream
+        self._pending = []
+        self._pending_size = 0
+
+    def write(self, text):
+        text = str(text)
+        super().write(text)
+        if text:
+            self._pending.append(text)
+            self._pending_size += len(text)
+            if "\\n" in text or self._pending_size >= _STREAM_CHUNK:
+                self.flush()
+        return len(text)
+
+    def flush(self):
+        text, self._pending, self._pending_size = "".join(self._pending), [], 0
+        for start in range(0, len(text), _STREAM_CHUNK):
+            _emit_stream(self._stream, text[start:start + _STREAM_CHUNK])
+
+
 def run_cell(request, execution_count):
     """Exec one cell; returns (response payload, FULL stdout text)."""
-    out, err = io.StringIO(), io.StringIO()
+    out, err = _StreamTee("stdout"), _StreamTee("stderr")
+    _ACTIVE_CELL["id"] = str(request.get("id", ""))
+    _ACTIVE_CELL["index"] = int(request.get("cell_index") or 0)
     status, trace = "ok", ""
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -63,6 +113,8 @@ def run_cell(request, execution_count):
         status, trace = "exit", "SystemExit: " + repr(exc.code)
     except BaseException:
         status, trace = "error", traceback.format_exc()
+    out.flush()
+    err.flush()
     stdout_text, stdout_clipped = _clip(out.getvalue())
     stderr_text, stderr_clipped = _clip(err.getvalue())
     return {
@@ -209,6 +261,8 @@ class CellAuthority:
         self.task_id = task_id
         self.ctx = contextvars.copy_context()
         self.active = True
+        # ADR-4 D11.1: display/status data this cell emitted, merged into its result.
+        self.display: dict[str, list] = {"images": [], "views": [], "statusEvents": []}
         # ((getter, setter), captured value) per thread-local prompt callback (approval, sudo, vault unlock…)
         self._callbacks: list = []
         try:
@@ -231,11 +285,14 @@ class CellAuthority:
 
     def _invoke(self, tool_name: str, tool_args: dict) -> str:
         if isinstance(tool_name, str) and tool_name.startswith("__"):
-            from agent.judgment.rpc import host_op
-
-            op = host_op(tool_name)
-            if op is not None:
-                return op(tool_args)
+            from tools.eval_host_ops import (
+                dispatch_host_op, reset_cell_display, set_cell_display,
+            )
+            token = set_cell_display(self.display)
+            try:
+                return dispatch_host_op(tool_name, tool_args, task_id=self.task_id)
+            finally:
+                reset_cell_display(token)
         from model_tools import handle_function_call
         previous = None
         if self._callbacks:
@@ -297,6 +354,24 @@ class SessionKernel:
         self.raw, self.stderr = _BoundedBuffer(), _BoundedBuffer()
         self.execution_count, self.last_used = 0, time.monotonic()
         self.cell_authority: Optional[CellAuthority] = None
+        # ADR-4 D11.1: the display block of the cell currently running (read by _cell_result).
+        self.cell_display: Optional[dict] = None
+        # ADR-4 D14: live output of the cell currently running. The Bun kernel shares this state
+        # (frames carry cell_index; raw fd output is attributed to stream_cell_index).
+        self.stream_cb: Optional[Callable[[dict], None]] = None
+        self.stream_cell_index: int = 0
+
+    def emit_stream_raw(self, data: bytes) -> None:
+        """ADR-4 D14: fd-level output also feeds the live channel (the result frame stays
+        authoritative). Only the current cell can own raw bytes; between cells the callback is unset."""
+        callback = self.stream_cb
+        if callback is None or not data:
+            return
+        try:
+            callback({"type": "stream", "cell_index": self.stream_cell_index,
+                      "stream": "stdout", "text": data.decode("utf-8", errors="replace")})
+        except Exception:  # health: allow BLE001 -- streaming must never break the kernel reader
+            logger.debug("kernel raw stream callback failed", exc_info=True)
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -335,6 +410,7 @@ class KernelRegistry:
     def __init__(self, teardown: Callable[[Any], None]):
         self.kernels: dict[tuple, Any] = {}
         self.lock, self._teardown = threading.Lock(), teardown
+        self.reaper_started = False
 
     def shutdown(self, owner: Optional[str] = None, *, owner_matches: Optional[Callable[[str], bool]] = None) -> None:
         """Tear down every kernel, every kernel one owner (key[0]) holds, or every kernel whose owner
@@ -440,6 +516,16 @@ def shutdown_kernels_for_delegated_child(child_session_id: str) -> None:
     _REGISTRY.shutdown(owner_matches=matcher)
     from tools.code_kernel_remote import shutdown_remote_kernels_where
     shutdown_remote_kernels_where(matcher)
+    try:
+        from tools.eval_js_kernel import shutdown_js_kernels_where
+        shutdown_js_kernels_where(matcher)
+    except Exception:
+        logger.debug("JS kernel shutdown for delegated child failed", exc_info=True)
+    try:
+        from tools.eval_jobs import clear_jobs_where
+        clear_jobs_where(matcher)
+    except Exception:
+        logger.debug("eval job shutdown for delegated child failed", exc_info=True)
 
 
 atexit.register(shutdown_all_kernels)
@@ -447,11 +533,11 @@ atexit.register(shutdown_all_kernels)
 
 def _rpc_forever(kernel: SessionKernel, max_tool_calls: int,
                  sandbox_tools: frozenset) -> None:
-    """Serve tool RPC for the kernel's whole life: ``_rpc_server_loop`` returns on disconnect or
+    """Serve tool RPC for the kernel's whole life: ``serve_rpc`` returns on disconnect or
     its 300s idle timeout, and a kernel idles longer between cells, so re-accept until teardown
     (the client stub reconnects: HERMES_RPC_PERSISTENT). The serving thread carries NO frozen
     authority — every dispatch routes through the CURRENT cell's ``CellAuthority``."""
-    from tools.code_execution_rpc import _rpc_server_loop
+    from tools.code_execution_rpc import serve_rpc
     from tools.registry import tool_error
     def _dispatch(tool_name: str, tool_args: dict) -> str:
         authority = kernel.cell_authority
@@ -459,19 +545,15 @@ def _rpc_forever(kernel: SessionKernel, max_tool_calls: int,
             return tool_error("No active execute_code cell: this kernel has no cell authority installed.")
         return authority.dispatch(tool_name, tool_args)
     while not kernel.stop_event.is_set():
-        _rpc_server_loop(kernel.server_sock, "", kernel.tool_call_log, kernel.tool_call_counter,
-                         max_tool_calls, sandbox_tools, kernel.stop_event, kernel.rpc_token,
-                         dispatch=_dispatch)
+        serve_rpc(kernel.server_sock, "", kernel.tool_call_log, kernel.tool_call_counter,
+                  max_tool_calls, sandbox_tools, kernel.stop_event, kernel.rpc_token,
+                  dispatch=_dispatch)
 
 
-def _stdout_reader(kernel: SessionKernel) -> None:
-    """Split the child's stdout into protocol frames and raw passthrough."""
-    from tools.code_execution_tool import MAX_STDOUT_BYTES
-    assert kernel.proc is not None and kernel.proc.stdout is not None
-    stream = kernel.proc.stdout
-    marker = ("\n" + kernel.sentinel + " ").encode("utf-8")
-    def raw(data: bytes) -> None:
-        kernel.raw.append(data, MAX_STDOUT_BYTES)
+def _pump_frames(stream, marker: bytes, on_raw, on_frame) -> None:
+    """Split a child's stdout into ``<marker><len>\\n<json>`` frames and raw bytes.
+    ``on_frame`` also receives ``kernel-eof``/``protocol-error`` statuses so both
+    the Python and Bun kernels settle a cell on a dead child the same way."""
     buf = b""
     while True:
         # read1 returns as soon as any bytes arrive; a plain read(n) on a BufferedReader
@@ -479,8 +561,8 @@ def _stdout_reader(kernel: SessionKernel) -> None:
         chunk = stream.read1(4096)
         if not chunk:
             if buf:
-                raw(buf)
-            kernel.response_q.put({"status": "kernel-eof"})
+                on_raw(buf)
+            on_frame({"status": "kernel-eof"})
             return
         buf += chunk
         while True:
@@ -489,11 +571,11 @@ def _stdout_reader(kernel: SessionKernel) -> None:
                 # Keep a marker-sized tail (marker may be split across reads); the rest is raw.
                 spill = buf[: -len(marker)] if len(buf) > len(marker) else b""
                 if spill:
-                    raw(spill)
+                    on_raw(spill)
                     buf = buf[len(spill):]
                 break
             if index:
-                raw(buf[:index])
+                on_raw(buf[:index])
             rest = buf[index + len(marker):]
             newline = rest.find(b"\n")
             if newline < 0:
@@ -503,21 +585,47 @@ def _stdout_reader(kernel: SessionKernel) -> None:
                 length = int(rest[:newline])
             except ValueError:
                 # Not a real frame header (user output containing the marker bytes): raw.
-                raw(marker)
+                on_raw(marker)
                 buf = rest
                 continue
             body = rest[newline + 1:]
             while len(body) < length:
                 more = stream.read1(length - len(body))
                 if not more:
-                    kernel.response_q.put({"status": "kernel-eof"})
+                    on_frame({"status": "kernel-eof"})
                     return
                 body += more
             try:
-                kernel.response_q.put(json.loads(body[:length].decode("utf-8", errors="replace")))
+                on_frame(json.loads(body[:length].decode("utf-8", errors="replace")))
             except ValueError:
-                kernel.response_q.put({"status": "protocol-error"})
+                on_frame({"status": "protocol-error"})
             buf = body[length:]
+
+
+def _stdout_reader(kernel: SessionKernel) -> None:
+    """Split the child's stdout into protocol frames and raw passthrough."""
+    from tools.code_execution_tool import MAX_STDOUT_BYTES
+    assert kernel.proc is not None and kernel.proc.stdout is not None
+
+    def raw(data: bytes) -> None:
+        kernel.raw.append(data, MAX_STDOUT_BYTES)
+        kernel.emit_stream_raw(data)
+
+    def on_frame(payload: dict) -> None:
+        # ADR-4 D14: stream frames are display-only and must never settle a cell; the result
+        # frame remains the one authoritative reply.
+        if isinstance(payload, dict) and payload.get("type") == "stream":
+            callback = kernel.stream_cb
+            if callback is not None:
+                try:
+                    callback(payload)
+                except Exception:  # health: allow BLE001 -- streaming must never break the reader
+                    logger.debug("Python stream callback failed", exc_info=True)
+            return
+        kernel.response_q.put(payload)
+
+    _pump_frames(kernel.proc.stdout, ("\n" + kernel.sentinel + " ").encode("utf-8"),
+                 raw, on_frame)
 
 
 def _stderr_reader(kernel: SessionKernel) -> None:
@@ -620,40 +728,46 @@ def _spawn(kernel: SessionKernel, *, child_python: str, child_cwd: str,
     _ensure_background_reaper()
 
 
-def _pop_idle_expired(now: float, idle_timeout: float) -> list[SessionKernel]:
-    """Pop (caller holds ``_REGISTRY.lock``) every kernel idle past *idle_timeout*. Kernels with
+def _pop_idle_expired(now: float, idle_timeout: float, kernels: Optional[dict] = None) -> list:
+    """Pop (caller holds the registry lock) every kernel idle past *idle_timeout*. Kernels with
     attached cells are skipped: the last cell out tears them down."""
-    return [_KERNELS.pop(k) for k in list(_KERNELS)
-            if _KERNELS[k].attached == 0 and now - _KERNELS[k].last_used > idle_timeout]
+    kernels = _KERNELS if kernels is None else kernels
+    return [kernels.pop(k) for k in list(kernels)
+            if kernels[k].attached == 0 and now - kernels[k].last_used > idle_timeout]
 
 
-def _acquire_kernel(key: tuple, reset: bool, *, pinned: bool = False) -> tuple[SessionKernel, bool]:
+def _acquire_kernel(key: tuple, reset: bool, *, pinned: bool = False,
+                    registry: Optional[KernelRegistry] = None,
+                    factory: Optional[Callable[[tuple], Any]] = None) -> tuple[Any, bool]:
     """Look up or register the kernel for *key*; returns (kernel, state_reset). Every entry also
     sweeps idle-expired kernels and enforces the process-wide LRU cap (doomed kernels are popped
     under the lock, torn down outside it), so a long-lived host stays bounded. ``pinned`` kernels
     (live delegate_task children) are exempt from the cap: their lifetime is the child's, ended by
-    ``shutdown_kernels_for_delegated_child``, so the cap has nothing to bound for them."""
+    ``shutdown_kernels_for_delegated_child``, so the cap has nothing to bound for them.
+    ``registry`` selects the kernel family (Python or JS); the same bounds apply to both."""
+    registry = registry or _REGISTRY
+    kernels = registry.kernels
     cap, idle_timeout = _lifecycle_limits()
-    with _REGISTRY.lock:
-        expired = _pop_idle_expired(time.monotonic(), idle_timeout)
-        kernel = _KERNELS.get(key)
+    with registry.lock:
+        expired = _pop_idle_expired(time.monotonic(), idle_timeout, kernels)
+        kernel = kernels.get(key)
         state_reset = kernel is not None and (reset or kernel.dead())
         if state_reset:
-            dropped = _KERNELS.pop(key)
+            dropped = kernels.pop(key)
             if dropped.attached == 0:
                 expired.append(dropped)
             kernel = None
         if kernel is None:
-            kernel = _KERNELS[key] = SessionKernel(key)
+            kernel = kernels[key] = (factory or SessionKernel)(key)
             kernel.pinned = pinned
         kernel.last_used = time.monotonic()
         kernel.attached += 1
-        unpinned = [k for k in _KERNELS if not _KERNELS[k].pinned]
-        by_age = sorted((k for k in unpinned if k != key and _KERNELS[k].attached == 0),
-                        key=lambda k: _KERNELS[k].last_used)
-        expired.extend(_KERNELS.pop(k) for k in by_age[: max(0, len(unpinned) - cap)])
+        unpinned = [k for k in kernels if not kernels[k].pinned]
+        by_age = sorted((k for k in unpinned if k != key and kernels[k].attached == 0),
+                        key=lambda k: kernels[k].last_used)
+        expired.extend(kernels.pop(k) for k in by_age[: max(0, len(unpinned) - cap)])
     for doomed in expired:
-        doomed.teardown()
+        registry._teardown(doomed)
     return kernel, state_reset
 
 
@@ -665,7 +779,6 @@ def _acquire_kernel(key: tuple, reset: bool, *, pinned: bool = False) -> tuple[S
 # outlived a host which died without cleanup (SIGKILL / container restart).
 _STALE_STAGING_DIR_AGE = 7 * 86400
 _REAPER_INTERVAL_FLOOR, _REAPER_INTERVAL_CEIL = 30.0, 300.0
-_REAPER_STARTED = False
 
 
 def _sweep_stale_staging_dirs(now: Optional[float] = None) -> int:
@@ -688,39 +801,42 @@ def _sweep_stale_staging_dirs(now: Optional[float] = None) -> int:
     return removed
 
 
-def _reap_once() -> None:
+def _reap_once(registry: Optional[KernelRegistry] = None) -> None:
     """One background pass: the acquire-path idle criteria, then the stale-dir sweep."""
+    registry = registry or _REGISTRY
     _, idle_timeout = _lifecycle_limits()
-    with _REGISTRY.lock:
-        expired = _pop_idle_expired(time.monotonic(), idle_timeout)
+    with registry.lock:
+        expired = _pop_idle_expired(time.monotonic(), idle_timeout, registry.kernels)
     for doomed in expired:
-        doomed.teardown()
+        registry._teardown(doomed)
     _sweep_stale_staging_dirs()
 
 
-def _ensure_background_reaper() -> None:
-    """Start the reaper once per process (on the first kernel spawn)."""
-    global _REAPER_STARTED
-    with _REGISTRY.lock:
-        if _REAPER_STARTED:
+def _ensure_background_reaper(registry: Optional[KernelRegistry] = None) -> None:
+    """Start the reaper once per registry (on the first kernel spawn)."""
+    registry = registry or _REGISTRY
+    with registry.lock:
+        if registry.reaper_started:
             return
-        _REAPER_STARTED = True
-    threading.Thread(target=_background_reaper, daemon=True,
+        registry.reaper_started = True
+    # Registry-wide reaper: profile-agnostic by design, so it must not inherit one turn's scope.
+    # health: allow HX012 -- the reaper spans every dispatch context in the process
+    threading.Thread(target=_background_reaper, args=(registry,), daemon=True,
                      name="hermes-kernel-idle-reaper").start()
 
 
-def _background_reaper() -> None:
+def _background_reaper(registry: KernelRegistry) -> None:
     while True:
         _, idle_timeout = _lifecycle_limits()
         time.sleep(min(_REAPER_INTERVAL_CEIL,
                        max(_REAPER_INTERVAL_FLOOR, idle_timeout / 6.0)))
         try:
-            _reap_once()
+            _reap_once(registry)
         except Exception:
             logger.exception("kernel idle reaper pass failed; retrying next interval")
 
 
-def _await_cell(kernel: SessionKernel, timeout: int, is_interrupted) -> tuple[str, dict[str, Any]]:
+def _await_cell(kernel: SessionKernel, timeout: float, is_interrupted) -> tuple[str, dict[str, Any]]:
     """Wait for the cell's reply; returns (host status, payload)."""
     deadline = time.monotonic() + timeout if timeout else None
     while True:
@@ -742,17 +858,20 @@ def _with_stderr(stdout_text: str, stderr_text: str) -> str:
 
 
 def _cell_result(kernel: SessionKernel, key: tuple, status: str, payload: dict[str, Any], *,
-                 timeout: int, sandbox_tools: frozenset, reused: bool,
-                 state_reset: bool, exec_start: float) -> dict[str, Any]:
-    """Assemble the tool result for one settled cell (disposing the kernel where the contract says so)."""
+                 timeout: float, sandbox_tools: frozenset, reused: bool,
+                 state_reset: bool, exec_start: float,
+                 discard: Optional[Callable[[tuple, Any], None]] = None) -> dict[str, Any]:
+    """Assemble the tool result for one settled cell (disposing the kernel where the contract says so).
+    ``discard`` names the kernel family's registry; the Bun kernel shares this finishing path."""
     from tools.code_execution_tool import _sandbox_failure_hint, _truncate_stdout_text
     from agent.redact import redact_sensitive_text
     from tools.ansi_strip import strip_ansi
+    discard = discard or _REGISTRY.discard
     def clean(text: str) -> str:
         return redact_sensitive_text(strip_ansi(text), code_file=True)
     if status in ("timeout", "interrupted"):
         # No safe way to interrupt one cell in place: kill the kernel, report the loss, respawn next call.
-        _REGISTRY.discard(key, kernel)
+        discard(key, kernel)
     duration = round(time.monotonic() - exec_start, 2)
     kernel.execution_count = int(payload.get("execution_count", kernel.execution_count + 1))
     stderr_raw = kernel.stderr.drain()
@@ -766,6 +885,13 @@ def _cell_result(kernel: SessionKernel, key: tuple, status: str, payload: dict[s
                    "execution_count": kernel.execution_count, "state_reset": state_reset},
     }
     result.update(stdout_metadata)
+    cell_display = kernel.cell_display
+    if cell_display and any(cell_display.get(key) for key in ("images", "views", "statusEvents")):
+        result["display"] = {
+            key: list(cell_display.get(key) or [])
+            for key in ("images", "views", "statusEvents")
+            if cell_display.get(key)
+        }
     from tools.code_execution_rpc import tool_errors_since
     tool_errors = tool_errors_since(kernel.tool_call_log, kernel.cell_log_start)
     if tool_errors:
@@ -797,12 +923,12 @@ def _cell_result(kernel: SessionKernel, key: tuple, status: str, payload: dict[s
             result["hint"] = hint
     elif cell_status == "exit":
         # The cell called sys.exit(): honor it as end-of-kernel.
-        _REGISTRY.discard(key, kernel)
+        discard(key, kernel)
         result["kernel"]["ended"] = True
         if cell_stderr:
             result["output"] = _with_stderr(stdout_text, cell_stderr)
     elif status == "error":
-        _REGISTRY.discard(key, kernel)
+        discard(key, kernel)
         result.update(exit_code=-1, error="The session kernel died while running the cell"
                       + (": " + stderr_raw.strip() if stderr_raw.strip() else "."))
     elif cell_stderr:
@@ -813,9 +939,11 @@ def _cell_result(kernel: SessionKernel, key: tuple, status: str, payload: dict[s
 def execute_in_session_kernel(
     code: str, *, task_id: str, mode: str, child_python: str, child_cwd: str,
     sandbox_tools: frozenset, timeout: int, max_tool_calls: int, reset: bool, is_interrupted,
+    on_stream: Optional[Callable[[dict], None]] = None, cell_index: int = 0,
 ) -> str:
     """Run one cell in the (owner, mode, python, cwd, tools) session kernel. The owner is the
-    session key (``_resolve_owner``), not the per-turn task id, so state survives across turns."""
+    session key (``_resolve_owner``), not the per-turn task id, so state survives across turns.
+    ``on_stream`` receives ADR-4 D14 stream frames (``{"cell_index","stream","text"}``)."""
     key = (_resolve_owner(task_id) or "", mode, child_python, child_cwd, tuple(sorted(sandbox_tools)))
     exec_start = time.monotonic()
     from agent.delegation_context import is_delegated_child_context
@@ -823,7 +951,8 @@ def execute_in_session_kernel(
     try:
         return _run_cell(kernel, key, code, task_id=task_id, child_python=child_python, child_cwd=child_cwd,
                          sandbox_tools=sandbox_tools, timeout=timeout, max_tool_calls=max_tool_calls,
-                         is_interrupted=is_interrupted, exec_start=exec_start, state_reset=state_reset)
+                         is_interrupted=is_interrupted, exec_start=exec_start, state_reset=state_reset,
+                         on_stream=on_stream, cell_index=cell_index)
     finally:
         with _REGISTRY.lock:
             kernel.attached -= 1
@@ -837,11 +966,18 @@ def execute_in_session_kernel(
 
 def _run_cell(kernel: SessionKernel, key: tuple, code: str, *, task_id: str, child_python: str,
               child_cwd: str, sandbox_tools: frozenset, timeout: int, max_tool_calls: int,
-              is_interrupted, exec_start: float, state_reset: bool) -> str:
+              is_interrupted, exec_start: float, state_reset: bool,
+              on_stream: Optional[Callable[[dict], None]] = None, cell_index: int = 0) -> str:
     reused = kernel.proc is not None
     # Captured on the calling thread BEFORE the cell runs (the snapshot a per-call RPC thread
     # would get) and installed on the kernel so RPC dispatches under THIS cell's identity.
     authority = CellAuthority(task_id)
+    if state_reset:
+        try:
+            from tools.eval_speculation import invalidate_owner
+            invalidate_owner(task_id)
+        except Exception:
+            logger.debug("speculation invalidation failed", exc_info=True)
     with kernel.lock:
         try:
             if kernel.proc is None:
@@ -853,7 +989,11 @@ def _run_cell(kernel: SessionKernel, key: tuple, code: str, *, task_id: str, chi
             kernel.cell_log_start = len(kernel.tool_call_log)
             kernel.raw.drain(), kernel.stderr.drain()  # raw output leaked between cells belongs to no cell
             kernel.cell_authority = authority
-            kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code}) + "\n").encode("utf-8"))
+            kernel.cell_display = authority.display
+            kernel.stream_cb = on_stream
+            kernel.stream_cell_index = cell_index
+            kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code,
+                                                 "cell_index": cell_index}) + "\n").encode("utf-8"))
             kernel.proc.stdin.flush()
             status, payload = _await_cell(kernel, timeout, is_interrupted)
             result = _cell_result(
@@ -869,6 +1009,7 @@ def _run_cell(kernel: SessionKernel, key: tuple, code: str, *, task_id: str, chi
             return _error_result(str(exc), tool_calls_made=kernel.tool_call_counter[0],
                                  duration=round(time.monotonic() - exec_start, 2))
         finally:
-            # The cell has settled on every path: its tool authority retires with it, so
-            # nothing the cell left running can dispatch under it.
+            # The cell has settled on every path: its stream channel and tool authority retire
+            # with it, so nothing the cell left running can emit into the next card.
+            kernel.stream_cb = None
             authority.retire()

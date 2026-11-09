@@ -39,7 +39,10 @@ METRIC_FIX = {
 }
 
 PY_EXCLUDE = ("website/*", "*/node_modules/*", "node_modules/*")
-TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts")
+# tools/eval_js_parser.ts is the unmodified acorn 8.19.0 dist (MIT), shipped as package data so
+# the Bun JS kernel parses cells without node_modules; its size is upstream's, not ours.
+TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts",
+                           "tools/eval_js_parser.ts")
 # omp-ui/src is a vendored third-party shell, maintained as a unit (omp-ui/src/VENDORED.md); its
 # dependency boundary is enforced by `omp-ui/scripts/check-imports.ts` and its type checks by
 # `bun run check`. The modules Hermes owns inside it — the entry, the gateway client/projection, the
