@@ -102,6 +102,29 @@ class TestSessionStatePersistence(unittest.TestCase):
             second = _run("print(_j.dumps({'k': 1}))")
         self.assertIn('{"k": 1}', second["output"])
 
+    def test_stream_frames_carry_cell_index_and_do_not_settle_the_cell(self):
+        """ADR-4 D14: stream frames are display-only; the result frame remains authoritative."""
+        from tools.code_kernel import execute_in_session_kernel
+
+        frames = []
+        with _kernel_config():
+            raw = execute_in_session_kernel(
+                "import sys\nprint('out-line')\nprint('err-line', file=sys.stderr)",
+                task_id="stream-test", mode="strict", child_python=sys.executable,
+                child_cwd="", sandbox_tools=frozenset(), timeout=20, max_tool_calls=5,
+                reset=True, is_interrupted=lambda: False, on_stream=frames.append,
+                cell_index=3,
+            )
+            result = json.loads(raw)
+            second = _run("print('after')")
+        self.assertEqual(result["status"], "success", result)
+        self.assertIn("out-line", result["output"])
+        self.assertIn("err-line", result["output"])
+        self.assertEqual({frame["cell_index"] for frame in frames}, {3})
+        self.assertEqual({frame["stream"] for frame in frames}, {"stdout", "stderr"})
+        self.assertEqual(second["status"], "success", second)
+        self.assertIn("after", second["output"])
+
 
 class TestKernelLifecycle(unittest.TestCase):
     def test_kernel_exits_when_its_backend_parent_dies(self):

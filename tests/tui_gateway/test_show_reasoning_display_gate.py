@@ -115,7 +115,9 @@ def test_tool_complete_carries_the_executor_error_verdict(monkeypatch):
 
 
 def _lifecycle(events, tool_id):
-    return [event[0] for event in events if (event[2] or {}).get("tool_id") == tool_id]
+    # ADR-4 D13: `tool.title` is a display-only label update, not a lifecycle edge.
+    return [event[0] for event in events
+            if (event[2] or {}).get("tool_id") == tool_id and event[0] != "tool.title"]
 
 
 def test_hidden_reasoning_keeps_tool_rows_when_tool_progress_is_on(monkeypatch):
@@ -277,8 +279,7 @@ def test_tool_progress_off_keeps_card_tool_lifecycle(monkeypatch):
         server._on_tool_complete("hide-cards", tool_id, name, args, json.dumps({"success": True}))
 
     for tool_id in cases:
-        lifecycle = [event[0] for event in events if event[2].get("tool_id") == tool_id]
-        assert lifecycle == ["tool.start", "tool.complete"], tool_id
+        assert _lifecycle(events, tool_id) == ["tool.start", "tool.complete"], tool_id
 
 
 def test_tool_progress_off_keeps_file_edit_lifecycle_pair(monkeypatch):
@@ -308,8 +309,7 @@ def test_tool_progress_off_keeps_file_edit_lifecycle_pair(monkeypatch):
         server._on_tool_complete("hide-edit", tool_id, name, args, json.dumps({"success": True}))
 
     for tool_id in cases:
-        lifecycle = [event[0] for event in events if event[2].get("tool_id") == tool_id]
-        assert lifecycle == ["tool.start", "tool.complete"], tool_id
+        assert _lifecycle(events, tool_id) == ["tool.start", "tool.complete"], tool_id
 
 
 def test_gateway_lifecycle_set_covers_desktop_card_tools():

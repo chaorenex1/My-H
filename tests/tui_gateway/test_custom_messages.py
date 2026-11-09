@@ -299,7 +299,8 @@ def test_transcript_capabilities_cover_the_d6_catalog():
                      "late_diagnostics"):
         assert blocks[block_id]["status"] == "ready", block_id
         assert blocks[block_id]["fields"], block_id
-    assert blocks["tool_execution"]["events"] == ["tool.start", "tool.progress", "tool.complete"]
+    assert blocks["tool_execution"]["events"] == [
+        "tool.start", "tool.progress", "tool.output", "tool.title", "tool.complete"]
     assert blocks["notice"]["events"] == ["transcript.notice"]
     assert blocks["compaction_summary"]["status"] == "ready"
     assert blocks["compaction_summary"]["fields"] == ["text", "details"]

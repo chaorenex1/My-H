@@ -1560,10 +1560,10 @@ def test_tui_verbose_tool_events_omit_details_when_redaction_fails(monkeypatch):
     server._on_tool_start("redaction-test", "tool-1", "terminal", {"command": "pwd"})
     server._on_tool_complete("redaction-test", "tool-1", "terminal", {"command": "pwd"}, "done")
 
-    assert events[0][0] == "tool.start"
-    assert events[1][0] == "tool.complete"
-    assert "args_text" not in events[0][2]
-    assert "result_text" not in events[1][2]
+    start = next(event for event in events if event[0] == "tool.start")
+    complete = next(event for event in events if event[0] == "tool.complete")
+    assert "args_text" not in start[2]
+    assert "result_text" not in complete[2]
 
 
 def test_tui_tool_output_risk_event_exposes_metadata_without_raw_output(monkeypatch):
@@ -1620,6 +1620,7 @@ def test_tui_clarify_lifecycle_events_emit_when_tool_progress_off(monkeypatch):
     server._on_tool_start("clarify-off-test", "tool-clarify", "clarify", args)
     server._on_tool_complete("clarify-off-test", "tool-clarify", "clarify", args, result)
 
+    # Clarify's nested question text yields no derived title (ADR-4 D13), so the pair is unchanged.
     assert [event[0] for event in events] == ["tool.start", "tool.complete"]
     assert events[0][2]["name"] == "clarify"
     assert events[0][2]["tool_id"] == "tool-clarify"
@@ -2815,9 +2816,10 @@ def test_tool_start_ships_full_args(monkeypatch):
     server._on_tool_start("args-test", "tool-1", "terminal", {"command": long_command})
     server._on_tool_start("args-test", "tool-2", "terminal", {})
 
-    assert events[0][2]["args"] == {"command": long_command}
+    starts = [event for event in events if event[0] == "tool.start"]
+    assert starts[0][2]["args"] == {"command": long_command}
     # Empty args stay omitted. Argless tools get no noise key.
-    assert "args" not in events[1][2]
+    assert "args" not in starts[1][2]
 
 
 def test_history_to_messages_keeps_reasoning_only_assistant_turn():

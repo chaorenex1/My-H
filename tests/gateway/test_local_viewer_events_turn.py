@@ -102,6 +102,10 @@ def test_tool_start_carries_the_requesting_steps_usage():
     start = next(payload for kind, payload in published if kind == 'tool.start')
     assert start['step_usage'] == {'input': 10, 'output': 2, 'total': 12, 'cache_read': 7,
                                    'cache_write': 1, 'cost_usd': 0.25}
+    # ADR-4 D13: the card title rides tool.start and is repeated as its own display event.
+    assert start['title'] == 'x'
+    title = next(payload for kind, payload in published if kind == 'tool.title')
+    assert title == {'tool_id': 'c1', 'name': 'read_file', 'title': 'x'}
 
 
 def test_tool_start_without_a_step_usage_omits_the_field():
@@ -132,7 +136,9 @@ def test_prepared_edit_diff_is_reused_by_the_completion_event(monkeypatch):
     monkeypatch.setattr("agent.display.render_edit_diff_with_delta", fake_render)
     turn._local_edit_snapshots = {"c1": {"before": "x"}}
     metadata = local_viewer_events.prepare_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
-    assert metadata == {"tool_result_metadata": {"inline_diff": "+1 line"}}
+    assert metadata["tool_result_metadata"] == {"inline_diff": "+1 line"}
+    # ADR-4 D13: the same preparation also names the card (display-only, top-level for the row).
+    assert metadata["card_title"]
     assert turn._local_edit_snapshots == {}  # consumed exactly once
     fields = local_viewer_events.complete_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
     assert fields["inline_diff"] == "+1 line"
@@ -167,12 +173,64 @@ def test_tool_complete_carries_duration_only_for_local_viewers(platform):
         assert 'duration_s' not in complete
 
 
+def test_prepared_eval_card_fields_are_top_level_and_reused_by_the_live_frame():
+    """ADR-4 D11.1/D13: ``display``/``card_title``/``cell_titles`` must sit at the top level of
+    the metadata dict (that is what ``stamp_tool_result_metadata`` writes to the durable row), and
+    the live ``tool.complete`` frame must carry the same values."""
+    import json
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    view = {"kind": "markdown", "text": "3"}
+    result = json.dumps({"status": "success", "output": "3",
+                         "display": {"views": [{"text": "3", "view": view}], "images": []}})
+
+    metadata = local_viewer_events.prepare_fields(
+        turn, "c1", "execute_code", {"code": "print(1 + 2)"}, result)
+
+    assert metadata["display"]["views"] == [{"text": "3", "view": view}]
+    assert metadata["card_title"]
+    assert metadata["cell_titles"] == [metadata["card_title"]]
+    assert "display" not in metadata["tool_result_metadata"]
+
+    fields = local_viewer_events.complete_fields(turn, "c1", "execute_code", {"code": "print(1 + 2)"}, result)
+    assert fields["display"] == metadata["display"]
+    assert fields["card_title"] == metadata["card_title"]
+    assert fields["cell_titles"] == metadata["cell_titles"]
+
+
+def test_eval_stream_frames_and_a_background_job_completion_reach_the_viewer():
+    """ADR-4 D14: cell output and the job's terminal ``tool.complete`` are not platform progress."""
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+
+    local_viewer_events.publish_progress(turn, "tool.output", "execute_code", None, {
+        "tool_call_id": "c1", "cell_index": 1, "stream": "stderr", "text": "boom\n"})
+    local_viewer_events.publish_progress(turn, "tool.complete", "execute_code", None, {
+        "tool_call_id": "c1", "job_id": "job-1", "is_error": False, "duration_s": 0.5,
+        "result": '{"status":"success","output":"ok"}'})
+
+    assert published[0] == ("tool.output", {
+        "tool_id": "c1", "name": "execute_code", "cell_index": 1, "stream": "stderr", "text": "boom\n"})
+    kind, payload = published[1]
+    assert kind == "tool.complete"
+    assert payload["job_id"] == "job-1" and payload["tool_id"] == "c1"
+    assert payload["duration_s"] == 0.5 and payload["is_error"] is False
+    assert '"status":"success"' in payload["result"]
+
+
 def test_wire_contract_accepts_the_boundary_frame():
     from tui_gateway.contracts.registry import EVENTS
     EVENTS['message.delta'].payload.model_validate({'text': None})
     EVENTS['tool.generating'].payload.model_validate({'name': 'terminal'})
     EVENTS['agent.print'].payload.model_validate({'text': 'line'})
     EVENTS['tool.complete'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'duration_s': 0.1})
+    EVENTS['tool.title'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'title': 'Read x', 'cell_index': 0})
+    EVENTS['tool.output'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'cell_index': 0,
+                                                 'stream': 'stdout', 'text': 'x\n'})
 
 
 def test_thinking_and_reaction_publish_and_reasoning_waits_for_the_session_flag():

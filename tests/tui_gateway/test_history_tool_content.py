@@ -98,6 +98,25 @@ def test_is_error_is_projected_from_the_durable_metadata():
     assert "is_error" not in _history_to_messages([_tool_row()])[0]
 
 
+def test_tool_rows_project_eval_display_and_generated_titles():
+    """ADR-4 D11.1/D13: the eval card's display block and titles are durable row details."""
+    display = {"views": [{"text": "3", "view": {"kind": "markdown", "text": "3"}}], "images": []}
+    row = _tool_row(tool_name="execute_code", display_metadata={
+        "display": display, "card_title": "Print one", "cell_titles": ["Print one"]})
+    entry = _history_to_messages([row])[0]
+    assert entry["details"] == {"display": display, "card_title": "Print one", "cell_titles": ["Print one"]}
+
+
+def test_tool_rows_fall_back_to_the_pre_fix_inner_sidecar():
+    """P3 wrote these under ``tool_result_metadata``; already-stored rows must still resume."""
+    display = {"statusEvents": [{"op": "agent", "status": "running"}]}
+    row = _tool_row(tool_name="execute_code", display_metadata={
+        "display": "ignored",
+        "tool_result_metadata": {"display": display, "card_title": "Cell", "cell_titles": ["Cell"]}})
+    entry = _history_to_messages([row])[0]
+    assert entry["details"] == {"display": display, "card_title": "Cell", "cell_titles": ["Cell"]}
+
+
 def test_stamp_tool_result_metadata_merges_without_rewriting_other_keys():
     from agent.message_metadata import stamp_tool_result_metadata
 

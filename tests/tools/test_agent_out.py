@@ -200,6 +200,99 @@ def test_a_legacy_transcript_path_is_still_readable():
     assert artifact["content"] is None and "no report" in artifact["note"]
 
 
+def test_conversation_tool_artifact_reads_the_recorded_archive(tmp_path):
+    """ADR-4 D15: a main conversation's tool output is read from display_metadata, never guessed."""
+    import json as _json
+
+    from hermes_state_registry import acquire, release_or_close
+
+    log = tmp_path / "1.execute_code.log"
+    original = tmp_path / "1.execute_code-original.log"
+    log.write_text("shown head\ntail\n", encoding="utf-8")
+    original.write_text("FULL original output\n", encoding="utf-8")
+    db = acquire()
+    try:
+        db.create_session(session_id="conv-artifacts", source="cli")
+        db.append_messages_batch("conv-artifacts", [{
+            "role": "tool", "tool_name": "execute_code", "tool_call_id": "call-1",
+            "content": _json.dumps({"status": "success", "output": "shown head\ntail\n"}),
+            "display_metadata": {"tool_output_artifacts": {
+                "step": 1, "tool": "execute_code", "artifact_path": str(log),
+                "artifact_original_path": str(original), "truncated": True,
+            }},
+        }])
+    finally:
+        release_or_close(db)
+
+    data = _read(mode="artifact", kind="tool", session_id="conv-artifacts",
+                 tool_call_id="call-1")
+    assert data["content"] == "shown head\ntail\n"
+    assert data["original_content"] == "FULL original output\n"
+    assert data["truncated"] is True and data["path"] == str(log)
+
+    by_step = _read(mode="artifact", kind="tool", session_id="conv-artifacts",
+                    step=1, tool_name="execute_code")
+    assert by_step["tool_call_id"] == "call-1"
+
+
+def test_conversation_tool_artifact_falls_back_to_stdout_spill(tmp_path):
+    import json as _json
+
+    from hermes_constants import get_hermes_dir
+    from hermes_state_registry import acquire, release_or_close
+
+    spill_dir = get_hermes_dir("cache/exec", "exec_spill")
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    spill = spill_dir / f"stdout-{tmp_path.name}.txt"
+    spill.write_text("full spilled output\n", encoding="utf-8")
+    db = acquire()
+    try:
+        db.create_session(session_id="conv-spill", source="cli")
+        db.append_messages_batch("conv-spill", [{
+            "role": "tool", "tool_name": "execute_code", "tool_call_id": "call-2",
+            "content": _json.dumps({"status": "success", "output": "truncated",
+                                    "stdout_spill_path": str(spill)}),
+        }])
+    finally:
+        release_or_close(db)
+
+    data = _read(mode="artifact", kind="tool", session_id="conv-spill",
+                 tool_call_id="call-2")
+    assert data["path"] == str(spill)
+    assert data["content"] == "full spilled output\n"
+
+
+def test_conversation_spill_fallback_refuses_arbitrary_host_files(tmp_path):
+    import json as _json
+
+    from hermes_state_registry import acquire, release_or_close
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("do not read me\n", encoding="utf-8")
+    db = acquire()
+    try:
+        db.create_session(session_id="conv-unsafe", source="cli")
+        db.append_messages_batch("conv-unsafe", [{
+            "role": "tool", "tool_name": "execute_code", "tool_call_id": "call-3",
+            "content": _json.dumps({"status": "success",
+                                    "stdout_spill_path": str(secret)}),
+        }])
+    finally:
+        release_or_close(db)
+
+    data = _read(mode="artifact", kind="tool", session_id="conv-unsafe",
+                 tool_call_id="call-3")
+    assert data["content"] is None
+    assert "missing or unreadable" in data["note"]
+
+
+def test_conversation_artifact_identity_is_mutually_exclusive():
+    data = _read(mode="artifact", kind="tool", session_id="conv-artifacts",
+                 agent_session_id="agent-1")
+
+    assert "mutually exclusive" in data["error"]
+
+
 def test_identity_must_be_exactly_one_of_id_and_subject():
     both = _read(mode="history", agent_session_id="a", subject="b")
     neither = _read(mode="history")
