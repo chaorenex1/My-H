@@ -414,8 +414,9 @@ class CLIStreamMixin:
             for label, text in items:
                 row_color, row_reset = tone(label)
                 self._agent_status_print(f"    {row_color}· {label} — {text}{row_reset}")
-        except Exception:
-            pass
+        except Exception:  # health: allow BLE001 -- display-only advisor card; never fails the turn
+            from cli import logger
+            logger.debug("Advisor row render failed", exc_info=True)
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open (renders the buffered reasoning tail)."""
