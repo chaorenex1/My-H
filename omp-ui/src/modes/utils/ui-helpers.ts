@@ -36,6 +36,7 @@ import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { InternalUrlRouter } from "../../internal-urls";
 import type { InteractiveModeContext, RenderSessionContextOptions, ShowStatusOptions } from "../../modes/types";
 import { isRecord } from "../../vendor/utils/src/index.ts";
+import { mergeEvalCellTitles } from "./tool-titles";
 import {
 	cfgComposerRecallClearedDrafts,
 	cfgDisplayCacheMissMarker,
@@ -325,9 +326,22 @@ export class UiHelpers {
 		// it here would paint a second card (#6516).
 		if (options?.preservedLiveToolCallIds?.has(message.toolCallId)) return [];
 		const details = isRecord(message.details) ? message.details : undefined;
-		const args = isRecord(details?.args) ? details.args : {};
+		// ADR-4 D13: generated cell titles ride the row's sidecar; merge before the card mounts.
+		const args = mergeEvalCellTitles(
+			isRecord(details?.args) ? details.args : {},
+			Array.isArray(details?.cell_titles) ? (details.cell_titles as (string | null | undefined)[]) : undefined
+		);
 		// ADR-10 D8.2a: the wire name stays on the message; the render key only picks the renderer.
-		const tool = this.ctx.session.getToolByName(message.toolName) as Parameters<typeof toolRenderName>[1];
+		const projection = this.ctx.session.getToolByName(message.toolName);
+		// ADR-4 D13: a per-call card title overrides the wire label without changing the mapping.
+		const cardTitle = typeof details?.card_title === "string" ? details.card_title : undefined;
+		const tool = (
+			projection
+				? { ...projection, ...(cardTitle ? { label: cardTitle } : {}) }
+				: cardTitle
+					? { name: message.toolName, label: cardTitle }
+					: undefined
+		) as Parameters<typeof toolRenderName>[1];
 		const component = new ToolExecutionComponent(
 			toolRenderName(message.toolName, tool),
 			args,

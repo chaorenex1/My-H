@@ -704,6 +704,7 @@ export class InteractiveMode {
 		this.lastAssistantUsage = undefined;
 		this.servedModelTracker = new ServedModelTracker();
 		this.pendingTools.clear();
+		this.#eventController.clearParkedToolCards();
 	}
 
 	constructor(session: AgentSession, version: string, composer?: Composer) {

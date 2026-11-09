@@ -17,6 +17,7 @@ import {
 	gatewayTodoPhases,
 	toOmpUsage
 } from "./gateway-session"
+import { executeCodeDetails } from "./gateway-session-eval"
 
 const SNAPSHOT = (overrides: Partial<GatewaySessionSnapshot> = {}): GatewaySessionSnapshot => ({
 	sessionId: "sid-1",
@@ -980,5 +981,195 @@ describe("ttsr projection", () => {
 			payload: { rules: [{ description: "no name" }, { name: "ok" }] }
 		})
 		expect(events).toEqual([{ type: "ttsr_triggered", rules: [{ name: "ok", description: undefined, content: undefined }] }])
+	})
+})
+
+describe("execute_code eval card (ADR-4 D12/D13/D15)", () => {
+	test("multi-cell results project language, status, exit/duration, views, images and meta", () => {
+		const args = {
+			cells: [
+				{ code: "print(1 + 2)", language: "py" },
+				{ code: "const x = 1", language: "js", title: "JS cell" }
+			]
+		}
+		const decoded = {
+			status: "error",
+			output: "3\nboom",
+			stdout_truncated: true,
+			stdout_bytes_total: 1000,
+			stdout_bytes_captured: 200,
+			stdout_bytes_omitted: 800,
+			stdout_lines_total: 20,
+			stdout_lines_shown: 4,
+			display: { images: [{ type: "image", data: "AA", mimeType: "image/png" }] },
+			cells: [
+				{
+					index: 0,
+					code: "print(1 + 2)",
+					language: "py",
+					status: "success",
+					output: "3\n",
+					exit_code: 0,
+					duration_seconds: 0.25,
+					display: {
+						views: [{ text: "3", view: { kind: "markdown", text: "3" } }],
+						images: [{ type: "image", data: "BB", mimeType: "image/png" }]
+					}
+				},
+				{
+					index: 1,
+					code: "const x = 1",
+					language: "js",
+					title: "JS cell",
+					status: "timeout",
+					output: "boom",
+					exit_code: -1
+				}
+			]
+		}
+
+		const details = executeCodeDetails(args, decoded, {
+			cellTitles: ["Print one", "JS cell"],
+			toolCallId: "t1"
+		})!
+
+		expect(details.languages).toEqual(["python", "js"])
+		expect(details.language).toBe("python")
+		expect(details.cells).toHaveLength(2)
+		expect(details.cells![0]).toMatchObject({
+			title: "Print one",
+			language: "python",
+			status: "complete",
+			output: "3",
+			durationMs: 250,
+			exitCode: 0
+		})
+		expect(details.cells![0]!.views).toEqual([{ text: "3", view: { kind: "markdown", text: "3" } }])
+		// timeout/nterrupted/negative exits never claim an exit code.
+		expect(details.cells![1]).toMatchObject({ title: "JS cell", language: "js", status: "error" })
+		expect(details.cells![1]!.exitCode).toBeUndefined()
+		// Top-level aggregate images plus each cell's own display block.
+		expect(details.images).toEqual([
+			{ type: "image", data: "AA", mimeType: "image/png" },
+			{ type: "image", data: "BB", mimeType: "image/png" }
+		])
+		expect(details.meta?.truncation).toEqual({
+			direction: "middle",
+			truncatedBy: "bytes",
+			totalBytes: 1000,
+			outputBytes: 200,
+			elidedBytes: 800,
+			totalLines: 20,
+			outputLines: 4
+		})
+		expect(details.notice).toContain('agent_out(mode="artifact", kind="tool", tool_call_id="t1")')
+	})
+
+	test("a single cell synthesizes one cell from args and omits an unrecognizable result", () => {
+		const details = executeCodeDetails({ code: "print(1)" }, { status: "success", output: "1\n" })!
+		expect(details.cells).toHaveLength(1)
+		expect(details.cells![0]).toMatchObject({ code: "print(1)", status: "complete", output: "1" })
+		expect(executeCodeDetails({}, { nope: true })).toBeUndefined()
+	})
+
+	test("is_error is the call verdict; a cell with its own status keeps it", () => {
+		const details = executeCodeDetails({ code: "exit(1)" }, { status: "success", output: "" }, { isError: true })!
+		expect(details.cells![0]!.status).toBe("complete")
+		expect(details.isError).toBe(true)
+	})
+
+	test("live tool.output coalesces into a running partial card with the same cell shape", async () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "tool.start",
+			payload: {
+				tool_id: "t1",
+				name: "execute_code",
+				args: { code: "print(1)" },
+				title: "Print one",
+				cell_titles: ["Print one"]
+			}
+		})
+		session.handleNotification({
+			type: "tool.output",
+			payload: { tool_id: "t1", name: "execute_code", cell_index: 0, stream: "stdout", text: "x".repeat(4096) }
+		})
+
+		const start = events.find((event) => event.type === "tool_execution_start")!
+		expect(start).toMatchObject({ title: "Print one", cellTitles: ["Print one"] })
+		const update = events.find(
+			(event): event is Extract<AgentSessionEvent, { type: "tool_execution_update" }> =>
+				event.type === "tool_execution_update"
+		)!
+		const details = update.partialResult.details as { cells: { status: string; output: string }[] }
+		expect(details.cells[0]).toMatchObject({ status: "running" })
+		expect(details.cells[0]!.output).toHaveLength(4096)
+	})
+
+	test("the live text fallback is the cell output, not the wrapper JSON", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "tool.start",
+			payload: { tool_id: "t1", name: "execute_code", args: { code: "print(1 + 2)" } }
+		})
+		session.handleNotification({
+			type: "tool.complete",
+			payload: {
+				tool_id: "t1",
+				name: "execute_code",
+				result: JSON.stringify({ status: "success", output: "3\n" })
+			}
+		})
+		const end = events.find(
+			(event): event is Extract<AgentSessionEvent, { type: "tool_execution_end" }> =>
+				event.type === "tool_execution_end"
+		)!
+		expect(end.result.content).toEqual([{ type: "text", text: "3\n" }])
+	})
+
+	test("tool.title projects a shell event for the pending card and one cell", () => {
+		const { session, events } = harness()
+		session.handleNotification({
+			type: "tool.title",
+			payload: { tool_id: "t1", name: "execute_code", title: "Print one", cell_index: 0 }
+		})
+		expect(events).toEqual([{ type: "tool_title", toolCallId: "t1", title: "Print one", cellIndex: 0 }])
+	})
+
+	test("a resumed execute_code row projects the durable sidecar into the same cells", () => {
+		const row = {
+			role: "tool" as const,
+			name: "execute_code",
+			tool_call_id: "t1",
+			content: JSON.stringify({ status: "success", output: "3\n" }),
+			args: { code: "print(1 + 2)" },
+			row_id: 7,
+			details: {
+				display: { views: [{ text: "3", view: { kind: "markdown", text: "3" } }] },
+				card_title: "Print one",
+				cell_titles: ["Print one"]
+			}
+		}
+		const message = GatewayOmpSession.rowToAgentMessage(row as never)
+		if (message?.role !== "toolResult") throw new Error("expected tool result")
+		const details = message.details as { cells: { title?: string; status: string; views?: unknown[] }[] }
+		expect(details.cells).toHaveLength(1)
+		expect(details.cells[0]).toMatchObject({ title: "Print one", status: "complete" })
+		expect(details.cells[0]!.views).toHaveLength(1)
+	})
+
+	test("without a result body (include_tool_content none) the row keeps args and builds no cells", () => {
+		const message = GatewayOmpSession.rowToAgentMessage({
+			role: "tool",
+			name: "execute_code",
+			tool_call_id: "t1",
+			args: { code: "print(1)" },
+			details: { card_title: "Print one" }
+		} as never)
+		if (message?.role !== "toolResult") throw new Error("expected tool result")
+		const details = message.details as { cells?: unknown; args?: unknown; card_title?: string }
+		expect(details.cells).toBeUndefined()
+		expect(details.args).toEqual({ code: "print(1)" })
+		expect(details.card_title).toBe("Print one")
 	})
 })

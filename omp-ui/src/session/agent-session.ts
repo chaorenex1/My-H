@@ -57,7 +57,9 @@ export interface GatewayToolProjection {
 /** Hermes wire names that render with an omp built-in card under a different render key. */
 const TOOL_RENDER_NAMES: Readonly<Record<string, string>> = {
 	read_file: "read",
-	todo_list: "todo"
+	todo_list: "todo",
+	// ADR-4 D12: `execute_code` renders with omp's native eval card (multi-cell, views, meta).
+	execute_code: "eval"
 };
 
 /** Token/cost snapshot the status line and `/session` render. */

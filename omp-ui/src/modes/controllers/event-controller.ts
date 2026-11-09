@@ -16,7 +16,11 @@ import type { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
-import { ToolExecutionComponent, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	ToolExecutionComponent,
+	type ToolExecutionHandle,
+	toolRenderName
+} from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
 import { previewLine, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { assistantUsageIsBilled } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
@@ -28,6 +32,7 @@ import {
 	refreshAssistantMessageLinkTargets,
 } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import type { AgentSessionEvent } from "../../session/agent-session-events";
+import { mergeEvalCellTitles, withEvalCellTitle } from "../utils/tool-titles";
 import { type RunStatus, setRunStatus } from "../../utils/run-status";
 import {
 	cfgDisplayCacheMissMarker,
@@ -86,6 +91,10 @@ export class EventController {
 	/** The running turn's token and cost totals, shown under its last answer. */
 	readonly #turnUsage = new TurnUsageTally();
 	#lastIntent: string | undefined;
+	/** ADR-4 D13: the args a mounted card was built from, so a late cell title can be merged. */
+	#toolArgs = new Map<string, unknown>();
+	/** ADR-4 D14: cards whose background job outlives the turn; they survive `agent_end`. */
+	#parkedTools = new Map<string, ToolExecutionHandle>();
 
 	constructor(private ctx: InteractiveModeContext) {}
 
@@ -95,12 +104,21 @@ export class EventController {
 		this.#unsubscribe = this.ctx.session.subscribe(event => this.#dispatch(event));
 	}
 
+	/** Drop job cards that outlived their session (session switch/reset). */
+	clearParkedToolCards(): void {
+		for (const component of this.#parkedTools.values()) component.seal();
+		this.#parkedTools.clear();
+		this.#toolArgs.clear();
+	}
+
 	dispose(): void {
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
 		}
 		this.#pendingMessageUpdate = undefined;
+		for (const component of this.#parkedTools.values()) component.seal();
+		this.#parkedTools.clear();
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 	}
@@ -143,6 +161,9 @@ export class EventController {
 				return;
 			case "tool_execution_end":
 				this.#handleToolExecutionEnd(event);
+				return;
+			case "tool_title":
+				this.#handleToolTitle(event);
 				return;
 			case "notice":
 				this.#handleNotice(event);
@@ -403,13 +424,20 @@ export class EventController {
 			)
 		}
 		this.#updateWorkingMessageFromIntent(event.intent);
-		const args = renderArgsWithIntent(event.args, event.intent);
+		const renderedArgs = renderArgsWithIntent(event.args, event.intent);
+		// ADR-4 D13: generated cell titles are display-only; merge them into the render args so the
+		// eval renderer names each cell at mount time.
+		const args = event.cellTitles?.length ? mergeEvalCellTitles(renderedArgs, event.cellTitles) : renderedArgs;
+		this.#toolArgs.set(event.toolCallId, args);
 
+		// A provider may reuse a call id after a dropped frame; never keep a stale parked card.
+		this.#parkedTools.delete(event.toolCallId);
 		const pending = this.ctx.pendingTools.get(event.toolCallId);
 		if (pending) {
 			// The arguments are final now; the card created by an earlier streamed preview keeps its
 			// identity and picks up the authoritative args.
 			pending.updateArgs(args, event.toolCallId);
+			if (event.title && pending instanceof ToolExecutionComponent) pending.setToolLabel(event.title);
 			pending.setArgsComplete(event.toolCallId);
 			pending.setExecutionStarted(event.toolCallId);
 			this.ctx.ui.requestRender();
@@ -418,7 +446,15 @@ export class EventController {
 
 		// ADR-10 D8.2a: the wire name stays on the event; the render key only drives renderer choice
 		// and read-group behavior, while the card title keeps the real tool name.
-		const tool = this.ctx.session.getToolByName(event.toolName) as Parameters<typeof toolRenderName>[1];
+		const projection = this.ctx.session.getToolByName(event.toolName);
+		// ADR-4 D13: a per-call label overrides the wire name without touching the global mapping.
+		const tool = (
+			projection
+				? { ...projection, ...(event.title ? { label: event.title } : {}) }
+				: event.title
+					? { name: event.toolName, label: event.title }
+					: undefined
+		) as Parameters<typeof toolRenderName>[1];
 		const renderName = toolRenderName(event.toolName, tool);
 
 		if (renderName === "read" && readArgsCollapseIntoGroup(event.args)) {
@@ -455,8 +491,25 @@ export class EventController {
 		this.ctx.ui.requestRender();
 	}
 
+	/** ADR-4 D13: a generated title arrived; rename the pending card (or one eval cell). */
+	#handleToolTitle(event: Extract<AgentSessionEvent, { type: "tool_title" }>): void {
+		const component = this.#toolCard(event.toolCallId);
+		if (event.cellIndex === undefined) {
+			if (component instanceof ToolExecutionComponent) component.setToolLabel(event.title);
+			this.ctx.ui.requestRender();
+			return;
+		}
+		const args = this.#toolArgs.get(event.toolCallId);
+		if (args === undefined) return;
+		const next = withEvalCellTitle(args, event.cellIndex, event.title);
+		if (next === args) return;
+		this.#toolArgs.set(event.toolCallId, next);
+		component?.updateArgs(next, event.toolCallId);
+		this.ctx.ui.requestRender();
+	}
+
 	#handleToolExecutionUpdate(event: Extract<AgentSessionEvent, { type: "tool_execution_update" }>): void {
-		const component = this.ctx.pendingTools.get(event.toolCallId);
+		const component = this.#toolCard(event.toolCallId);
 		if (!component) return;
 		const partial = event.partialResult;
 		component.updateResult({ ...partial, isError: partial?.isError === true }, true, event.toolCallId);
@@ -464,11 +517,19 @@ export class EventController {
 	}
 
 	#handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): void {
-		const component = this.ctx.pendingTools.get(event.toolCallId);
+		const component = this.#toolCard(event.toolCallId);
+		const details = isRecord(event.result) ? event.result.details : undefined;
+		const asyncState = isRecord(details) && isRecord(details.async) ? details.async.state : undefined;
 		if (component) {
 			component.updateResult({ ...event.result, isError: event.isError === true }, false, event.toolCallId);
+			// ADR-4 D14: a background eval job keeps filling the card it started until its
+			// terminal frame arrives (same tool id + jobId). Parked cards survive `agent_end`,
+			// which seals only `pendingTools`.
 			this.ctx.pendingTools.delete(event.toolCallId);
+			if (!event.isError && asyncState === "running") this.#parkedTools.set(event.toolCallId, component);
+			else this.#parkedTools.delete(event.toolCallId);
 		}
+		if (asyncState !== "running") this.#toolArgs.delete(event.toolCallId);
 		const tool = this.ctx.session.getToolByName(event.toolName) as Parameters<typeof toolRenderName>[1];
 		if (toolRenderName(event.toolName, tool) === "read") {
 			this.#inlineReadToolImages(event.toolCallId, event.result);
@@ -477,7 +538,6 @@ export class EventController {
 
 		// The todo tool's completion carries the authoritative phase list (`details.phases`, built
 		// from the gateway's rows); the HUD then re-reads the session's todo projection.
-		const details = isRecord(event.result) ? event.result.details : undefined;
 		if (!event.isError && isRecord(details) && Array.isArray(details.phases)) {
 			void this.ctx.reloadTodos().catch(error => {
 				this.ctx.session.emitNotice(
@@ -554,6 +614,11 @@ export class EventController {
 		this.ctx.loadingAnimation.stop();
 		this.ctx.loadingAnimation = undefined;
 		this.ctx.statusContainer.disposeChildren();
+	}
+
+	/** One card by call id: the live turn's map first, then a job parked across turns. */
+	#toolCard(toolCallId: string): ToolExecutionHandle | undefined {
+		return this.ctx.pendingTools.get(toolCallId) ?? this.#parkedTools.get(toolCallId);
 	}
 
 	/** Freeze tool cards a dropped `agent_end` left live so they cannot pin transcript retirement. */

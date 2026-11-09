@@ -16,7 +16,13 @@ export type AgentSessionEvent =
 	| (Extract<AgentEvent, { type: "tool_execution_start" }> & {
 			/** ADR-2 D1: a tool-only step's own usage, counted into the turn tally without a message block. */
 			stepUsage?: Usage;
+			/** ADR-4 D13: the deterministic display title for this card (display-only). */
+			title?: string;
+			/** ADR-4 D13: one generated title per `execute_code` cell, in cell order. */
+			cellTitles?: (string | undefined)[];
 	  })
+	// ADR-4 D13: a generated title arrived after the card mounted; update its label (or one cell's).
+	| { type: "tool_title"; toolCallId: string; title: string; cellIndex?: number }
 	| (Extract<AgentEvent, { type: "agent_end" }> & {
 			/** False while the authority still has work for this session (queued input, a running turn). */
 			isTerminal?: boolean;

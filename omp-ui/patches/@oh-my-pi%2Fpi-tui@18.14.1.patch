@@ -291,3 +291,33 @@ index bbf12af273ca66bd67d39921280341ff5f74a523..3d3bbbb9ba67fdf554e491b6911f3806
  	"icon.ghost": "@",
  	"icon.agents": "AG",
  	"icon.job": "bg",
+diff --git a/src/chat/tool-execution.ts b/src/chat/tool-execution.ts
+--- a/src/chat/tool-execution.ts
++++ b/src/chat/tool-execution.ts
+@@ -536,7 +536,16 @@
+ 		this.#updateSpinnerAnimation();
+ 		this.#updateDisplay();
+ 	}
+ 
++	/** Replace the card's display label (a generated title arrived after mount). */
++	setToolLabel(label: string): void {
++		const next = label.trim();
++		if (!next || next === this.#toolLabel) return;
++		this.#toolLabel = next;
++		this.#displayInputVersion++;
++		this.#updateDisplay();
++	}
++
+ 	updateArgs(args: unknown, _toolCallId?: string): void {
+ 		// Reference-equality short-circuit before any further work. Callers
+ 		// always allocate a new arg object on each streamed delta (see
+diff --git a/dist/types/chat/tool-execution.d.ts b/dist/types/chat/tool-execution.d.ts
+--- a/dist/types/chat/tool-execution.d.ts
++++ b/dist/types/chat/tool-execution.d.ts
+@@ -74,5 +74,6 @@ export declare class ToolExecutionComponent extends Container {
+     #private;
+     constructor(toolName: string, args: unknown, options: ToolExecutionOptions | undefined, tool: AgentTool | undefined, ui: ToolExecutionUi, _cwd?: string, toolCallId?: string);
++    setToolLabel(label: string): void;
+     updateArgs(args: unknown, _toolCallId?: string): void;
+     /**
+      * Signal that args are complete (tool is about to execute).

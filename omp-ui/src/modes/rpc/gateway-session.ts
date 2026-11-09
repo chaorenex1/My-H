@@ -58,6 +58,7 @@ import {
 	type GatewayServerRequestHandler
 } from "./gateway-client"
 import { connectGateway, type GatewayConnection, type GatewayConnectOptions } from "./gateway-socket"
+import { executeCodeDetails } from "./gateway-session-eval"
 import { setLiveGatewayClient } from "./gateway-live-client"
 import { GatewayRolesClient, type ModelRoleRows } from "./gateway-roles"
 
@@ -224,6 +225,29 @@ function toolRow(row: TranscriptMessage, text: string, timestamp: number): Agent
 	if (asString(row.context)) details.context = row.context;
 	if (row.labels) details.labels = row.labels;
 	if (asNumber(row.row_id) !== undefined) details.row_id = row.row_id;
+	// ADR-4 D11.1/D13: the durable sidecar's display block and generated titles merge into the
+	// card; they never replace the row's own args/context/labels/row_id.
+	const sidecar = asRecord(row.details);
+	if (typeof sidecar?.card_title === "string" && sidecar.card_title) details.card_title = sidecar.card_title;
+	if (Array.isArray(sidecar?.cell_titles)) details.cell_titles = sidecar.cell_titles;
+	const toolName = asString(row.name) ?? "";
+	// ADR-4 D12: `include_tool_content:"none"` has no result body, so no cells are built — the
+	// eval renderer's no-cells branch draws the code box + text from args instead of a generic card.
+	const body = typeof row.content === "string"
+		? row.content
+		: Array.isArray(row.content)
+			? row.content.map(part => asString(asRecord(part)?.text) ?? "").join("")
+			: undefined;
+	if (toolName === "execute_code" && body) {
+		const evalDetails = executeCodeDetails(row.args, decodeToolResult(body), {
+			isError: row.is_error === true,
+			toolCallId: asString(row.tool_call_id),
+			cardTitle: asString(sidecar?.card_title),
+			cellTitles: Array.isArray(sidecar?.cell_titles) ? (sidecar.cell_titles as (string | null)[]) : undefined,
+			display: asRecord(sidecar?.display)
+		});
+		if (evalDetails) Object.assign(details, evalDetails);
+	}
 	return {
 		role: "toolResult",
 		toolCallId: asString(row.tool_call_id) ?? "",
@@ -386,12 +410,18 @@ function toolResultContent(decoded: unknown): (TextContent | ImageContent)[] | u
 /** Display text: explicit `result_text`, then the decoded record's text, then the raw payload. */
 function toolResultText(payload: Record<string, unknown>, decoded: unknown): string {
 	const record = asRecord(decoded)
-	return (
-		asString(payload.result_text) ??
-		(record && typeof record.text === "string" ? record.text : undefined) ??
-		(typeof decoded === "string" ? decoded : undefined) ??
-		(typeof payload.result === "string" ? payload.result : "")
-	)
+	const explicit = asString(payload.result_text) ?? (record && typeof record.text === "string" ? record.text : undefined)
+	if (explicit) return explicit
+	// ADR-4 D12: an eval card's text fallback is the cell output, never the wrapper JSON. This
+	// covers the no-cells path (bad/unrecognized result) as well as clients that show text.
+	if (asString(payload.name) === "execute_code" && record) {
+		const text = [asString(record.output), asString(record.error), asString(record.stderr)]
+			.filter((part): part is string => typeof part === "string" && part.length > 0)
+			.join("\n")
+		if (text) return text
+	}
+	return (typeof decoded === "string" ? decoded : undefined)
+		?? (typeof payload.result === "string" ? payload.result : "")
 }
 
 /** Card metadata: summary/duration/diff/labels plus the todo phases the HUD reads. */
@@ -426,11 +456,35 @@ function projectToolResult(payload: Record<string, unknown>): {
 	const content = toolResultContent(decoded)
 	const text = toolResultText(payload, decoded)
 	const details = toolResultDetails(payload)
+	const isError = payload.is_error === true
+	if (asString(payload.name) === "execute_code") {
+		const evalDetails = executeCodeDetails(payload.args, decoded, {
+			isError,
+			toolCallId: asString(payload.tool_id),
+			cardTitle: asString(payload.card_title),
+			cellTitles: Array.isArray(payload.cell_titles) ? (payload.cell_titles as (string | null)[]) : undefined,
+			display: asRecord(payload.display)
+		})
+		if (evalDetails) Object.assign(details, evalDetails)
+	}
 	return {
 		content: content?.length ? content : [textContent(text)],
 		...(Object.keys(details).length ? { details } : {}),
-		isError: payload.is_error === true
+		isError
 	}
+}
+
+/**
+ * ADR-4 D12: `session_tool_events.bounded_result` degrades a >64KiB result to
+ * `{output, truncated:true}` (or `{error,truncated:true}`); that is not the card's data, so the
+ * client refetches the durable row instead of drawing escaped JSON or a guessed status.
+ */
+function isDegradedEvalResult(payload: Record<string, unknown>, decoded: unknown): boolean {
+	if (asString(payload.name) !== "execute_code") return false
+	const record = asRecord(decoded)
+	if (!record || record.truncated !== true) return false
+	return !Array.isArray(record.cells) && record.status === undefined &&
+		(typeof record.output === "string" || typeof record.error === "string")
 }
 
 /** Hermes row status vocabulary → the shell's task status. */
@@ -526,6 +580,21 @@ export class GatewayOmpSession {
 	#stats: SessionStats | undefined
 	#todos: unknown[] = []
 	#closed = false
+	/** ADR-4 D13/D14: live eval-card state per tool call (args, titles, coalesced cell output). */
+	#liveTools = new Map<
+		string,
+		{
+			name: string
+			args: Record<string, unknown>
+			title?: string
+			cellTitles: (string | undefined)[]
+			display?: Record<string, unknown>
+			stream?: { cells: Map<number, string>; timer?: NodeJS.Timeout; pending: number }
+		}
+	>()
+	/** ADR-4 D12: events that arrive while a 64KiB tool row is being refetched, in order. */
+	#deferredEmits: AgentSessionEvent[] = []
+	#pendingToolReconciles = 0
 	#onError?: (error: Error) => void
 	#onServerRequest?: GatewayServerRequestHandler
 
@@ -653,6 +722,10 @@ export class GatewayOmpSession {
 	}
 
 	#emit(event: AgentSessionEvent): void {
+		if (this.#pendingToolReconciles > 0) {
+			this.#deferredEmits.push(event)
+			return
+		}
 		for (const listener of [...this.#listeners]) {
 			try {
 				listener(event)
@@ -836,14 +909,15 @@ export class GatewayOmpSession {
 		})) as unknown as Record<string, unknown>
 	}
 
-	/** Read the durable transcript (the gateway's projection, newest window). */
-	async history(limit = 200): Promise<SessionHistoryResult> {
+	/** Read the durable transcript (the gateway's projection, newest window / rows after `since`). */
+	async history(limit = 200, since?: number): Promise<SessionHistoryResult> {
 		return this.client.request("session.history", {
 			session_id: this.#state.sessionId,
 			limit,
 			// ADR-10 D4/D8.5: one read carries display-safe tool content and the selector outline.
 			include_tool_content: "full",
-			include_outline: true
+			include_outline: true,
+			...(since !== undefined ? { since } : {})
 		})
 	}
 
@@ -1024,6 +1098,8 @@ export class GatewayOmpSession {
 		"message.complete": payload => this.#complete(payload),
 		"tool.start": payload => this.#onToolStart(payload),
 		"tool.progress": payload => this.#onToolProgress(payload),
+		"tool.output": payload => this.#onToolOutput(payload),
+		"tool.title": payload => this.#onToolTitle(payload),
 		"tool.complete": payload => this.#onToolComplete(payload),
 		"todo.updated": payload => this.#onTodoUpdated(payload),
 		"queue.updated": payload => this.#onQueueUpdated(payload),
@@ -1149,17 +1225,115 @@ export class GatewayOmpSession {
 		// Hermes streams one assistant message across tool rounds: text before the tool and the answer
 		// after it would share one block, leaving the tool cards below the answer. Close the pre-tool
 		// segment here; the next delta opens the post-tool block under the cards.
+		const toolCallId = asString(payload.tool_id) ?? ""
+		this.#forgetLiveTool(toolCallId)
+		const cellTitles = Array.isArray(payload.cell_titles)
+			? payload.cell_titles.map(value => (typeof value === "string" ? value : undefined))
+			: []
+		this.#liveTools.set(toolCallId, {
+			name: asString(payload.name) ?? "",
+			args: asRecord(payload.args) ?? {},
+			title: asString(payload.title),
+			cellTitles
+		})
 		const stepUsage = toOmpUsage(payload.step_usage as never)
 		const closed = this.#closeSegmentForTool(stepUsage)
 		this.#emit({
 			type: "tool_execution_start",
-			toolCallId: asString(payload.tool_id) ?? "",
+			toolCallId,
 			toolName: asString(payload.name) ?? "",
 			args: payload.args ?? {},
 			intent: asString(payload.context),
+			...(asString(payload.title) ? { title: asString(payload.title) } : {}),
+			...(cellTitles.length > 0 ? { cellTitles } : {}),
 			// A tool-only step has no assistant block to close; the shell counts this usage directly.
 			...(closed || !stepUsage ? {} : { stepUsage })
 		})
+	}
+
+	/** ADR-4 D13: a generated title for a card or one cell; display-only. */
+	#onToolTitle(payload: Record<string, unknown>): void {
+		const toolCallId = asString(payload.tool_id)
+		const title = asString(payload.title)
+		if (!toolCallId || !title) return
+		const cellIndex = asNumber(payload.cell_index)
+		const live = this.#liveTools.get(toolCallId)
+		if (live) {
+			if (cellIndex === undefined) live.title = title
+			else live.cellTitles[cellIndex] = title
+		}
+		this.#emit({
+			type: "tool_title",
+			toolCallId,
+			title,
+			...(cellIndex !== undefined ? { cellIndex } : {})
+		})
+	}
+
+	/** ADR-4 D14: eval cell output, coalesced (50ms / 4KiB) into the card's running cells. */
+	#onToolOutput(payload: Record<string, unknown>): void {
+		const toolCallId = asString(payload.tool_id)
+		const text = asString(payload.text)
+		if (!toolCallId || !text) return
+		const live = this.#liveTools.get(toolCallId)
+		if (!live) return
+		const state: NonNullable<typeof live.stream> = (live.stream ??= {
+			cells: new Map<number, string>(),
+			pending: 0
+		})
+		const index = asNumber(payload.cell_index) ?? 0
+		state.cells.set(index, (state.cells.get(index) ?? "") + text)
+		state.pending += text.length
+		if (state.pending >= 4096) {
+			this.#flushToolStream(toolCallId)
+		} else if (!state.timer) {
+			state.timer = setTimeout(() => {
+				state.timer = undefined
+				this.#flushToolStream(toolCallId)
+			}, 50)
+		}
+	}
+
+	#flushToolStream(toolCallId: string): void {
+		const live = this.#liveTools.get(toolCallId)
+		const state = live?.stream
+		if (!live || !state || this.#closed) return
+		if (state.timer) {
+			clearTimeout(state.timer)
+			state.timer = undefined
+		}
+		state.pending = 0
+		const argCells = Array.isArray(live.args.cells)
+			? live.args.cells.filter((cell): cell is Record<string, unknown> => asRecord(cell) !== undefined)
+			: []
+		const cells = (argCells.length > 0 ? argCells : [{ code: live.args.code, language: live.args.language }]).map(
+			(cell, index) => ({
+				...cell,
+				index,
+				status: "running",
+				output: state.cells.get(index) ?? ""
+			})
+		)
+		const details = executeCodeDetails(live.args, { status: "running", cells }, {
+			toolCallId,
+			cardTitle: live.title,
+			cellTitles: live.cellTitles
+		})
+		if (!details) return
+		this.#emit({
+			type: "tool_execution_update",
+			toolCallId,
+			toolName: live.name,
+			args: live.args,
+			partialResult: { content: [], details: details as unknown as Record<string, unknown> }
+		})
+	}
+
+	/** Drop one call's live state, cancelling any pending stream flush. */
+	#forgetLiveTool(toolCallId: string): void {
+		const state = this.#liveTools.get(toolCallId)?.stream
+		if (state?.timer) clearTimeout(state.timer)
+		this.#liveTools.delete(toolCallId)
 	}
 
 	#onToolProgress(payload: Record<string, unknown>): void {
@@ -1182,13 +1356,109 @@ export class GatewayOmpSession {
 	}
 
 	#onToolComplete(payload: Record<string, unknown>): void {
-		this.#emit({
-			type: "tool_execution_end",
-			toolCallId: asString(payload.tool_id) ?? "",
-			toolName: asString(payload.name) ?? "",
-			result: projectToolResult(payload),
-			isError: payload.is_error === true
-		})
+		const toolCallId = asString(payload.tool_id) ?? ""
+		const toolName = asString(payload.name) ?? ""
+		const isError = payload.is_error === true
+		const live = this.#liveTools.get(toolCallId)
+		// A background job's terminal frame has no args/display/titles: reuse the ones its start
+		// and foreground completion carried, so the settled card is the same card.
+		const effective: Record<string, unknown> = { ...payload }
+		if (!asString(effective.card_title) && live?.title) effective.card_title = live.title
+		if (!Array.isArray(effective.cell_titles) && live?.cellTitles.length) effective.cell_titles = live.cellTitles
+		if (!asRecord(effective.display) && live?.display) effective.display = live.display
+		// The job's terminal frame carries no call args; the single-cell result JSON has no `code`.
+		if (!asRecord(effective.args) && live) effective.args = live.args
+		const decoded = decodeToolResult(effective.result)
+		const state = this.#liveTools.get(toolCallId)?.stream
+		if (state?.timer) {
+			clearTimeout(state.timer)
+			state.timer = undefined
+		}
+		const finish = (result: { content: (TextContent | ImageContent)[]; details?: unknown }, error: boolean) => {
+			// A refetched end must precede events queued during the fetch (notably `agent_end`),
+			// or the controller seals the card before its result lands.
+			this.#emitToolEnd({
+				type: "tool_execution_end",
+				toolCallId,
+				toolName,
+				result,
+				isError: error
+			})
+			// ADR-4 D14: a background job's card stays tracked until its terminal frame fills it.
+			const asyncState = asRecord(asRecord(result.details)?.async)?.state
+			if (asyncState !== "running") this.#forgetLiveTool(toolCallId)
+		}
+		if (isDegradedEvalResult(payload, decoded)) {
+			// ADR-4 D12: the 64KiB wire form is not the card's data — refetch the durable row that
+			// was flushed before this event, instead of drawing escaped JSON or a guessed status.
+			// Keep every later event (notably the turn's `agent_end`) behind this refetch so the
+			// rebuilt card lands on the live component instead of being sealed away first.
+			this.#beginToolReconcile(this.#reconcileDegradedToolRow(toolCallId)
+				.then(row => {
+					if (row) {
+						finish({ content: row.content, ...(row.details ? { details: row.details } : {}) }, row.isError)
+						return
+					}
+					const text = asString(asRecord(decoded)?.output) ?? asString(asRecord(decoded)?.error) ?? ""
+					finish({
+						content: [textContent(text)],
+						details: { notice: `Full output: agent_out(mode="artifact", kind="tool", tool_call_id="${toolCallId}")` }
+					}, isError)
+				})
+				.catch(() => {
+					finish({
+						content: [textContent(asString(asRecord(decoded)?.output) ?? "")],
+						details: { notice: "The transcript row could not be reloaded; resend to refresh it." }
+					}, isError)
+				}))
+			return
+		}
+		const projected = projectToolResult(effective)
+		// A backgrounded foreground completion keeps its card data for the job's terminal frame.
+		const asyncState = asRecord(asRecord(projected.details)?.async)?.state
+		if (live && asyncState === "running") {
+			const title = asString(effective.card_title)
+			if (title) live.title = title
+			if (Array.isArray(effective.cell_titles)) {
+				live.cellTitles = effective.cell_titles.map(value => (typeof value === "string" ? value : undefined))
+			}
+			const display = asRecord(effective.display)
+			if (display) live.display = display
+		}
+		finish(projected, isError)
+	}
+
+	/** A reconciled tool end bypasses the queue head so it lands before events it was waiting on. */
+	#emitToolEnd(event: AgentSessionEvent): void {
+		if (this.#pendingToolReconciles > 0) this.#deferredEmits.unshift(event)
+		else this.#emit(event)
+	}
+
+	/** Hold every outgoing event behind one refetch; flush in arrival order when the last settles. */
+	#beginToolReconcile(task: Promise<unknown>): void {
+		this.#pendingToolReconciles++
+		void task
+			.catch(error => this.#report(error))
+			.finally(() => {
+				this.#pendingToolReconciles--
+				if (this.#pendingToolReconciles > 0 || this.#closed) return
+				const queued = this.#deferredEmits
+				this.#deferredEmits = []
+				for (const event of queued) this.#emit(event)
+			})
+	}
+
+	/** The durable tool row for one call, projected exactly like a resumed transcript row. */
+	async #reconcileDegradedToolRow(
+		toolCallId: string
+	): Promise<Extract<AgentMessage, { role: "toolResult" }> | undefined> {
+		const page = await this.history(200)
+		for (const row of page.messages) {
+			if (row.tool_call_id !== toolCallId) continue
+			const message = GatewayOmpSession.rowToAgentMessage(row)
+			if (message?.role === "toolResult") return message
+		}
+		return undefined
 	}
 
 	#onTodoUpdated(payload: Record<string, unknown>): void {
@@ -1600,6 +1870,8 @@ export class GatewayOmpSession {
 		if (this.#closed) return
 		this.#closed = true
 		this.#listeners.clear()
+		this.#deferredEmits = []
+		for (const toolCallId of [...this.#liveTools.keys()]) this.#forgetLiveTool(toolCallId)
 		try {
 			this.connection.close(reason)
 		} catch (error) {
