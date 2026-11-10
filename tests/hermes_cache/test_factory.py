@@ -43,7 +43,9 @@ def test_closed_cache_is_recreated(cache_home):
 
 
 def test_provider_is_constructed_inside_factory(cache_home, fake_provider, monkeypatch):
-    monkeypatch.setattr(factory_mod, "SQLiteProvider", lambda path: fake_provider)
+    monkeypatch.setattr(
+        factory_mod, "SQLiteProvider", lambda path, **kwargs: fake_provider
+    )
     cache = get_cache(policy=CachePolicy(default_ttl=1))
     cache.set("k", "v")
     assert ("default", "k") in fake_provider.data
@@ -95,3 +97,11 @@ def test_reset_registry_closes(cache_home):
     cache = get_cache()
     reset_cache_registry()
     assert cache.closed is True
+
+
+def test_reset_registry_stops_background_cleanup(cache_home):
+    cache = get_cache()
+    thread = cache._engine._cleanup_thread
+    assert thread is not None
+    reset_cache_registry()
+    assert thread.is_alive() is False

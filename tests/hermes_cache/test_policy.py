@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from hermes_cache import CachePolicy, InvalidTTLError
+from hermes_cache import CachePolicy, EvictionPolicy, InvalidTTLError
 
 
 def test_defaults_and_hashability():
@@ -48,3 +48,32 @@ def test_bool_fields_validated():
         CachePolicy(fail_open=cast(Any, 1))
     with pytest.raises(ValueError):
         CachePolicy(raise_on_corrupt=cast(Any, 1))
+
+
+def test_eviction_policies_coerce_strings():
+    assert CachePolicy(l1_eviction="fifo").l1_eviction is EvictionPolicy.FIFO
+    assert CachePolicy(l2_eviction="random").l2_eviction is EvictionPolicy.RR
+    assert CachePolicy().background_cleanup is True
+    assert CachePolicy().l2_eviction is EvictionPolicy.FIFO
+
+
+def test_invalid_eviction_policy():
+    with pytest.raises(ValueError):
+        CachePolicy(l1_eviction=cast(Any, "clock"))
+    with pytest.raises(ValueError):
+        CachePolicy(l2_eviction=cast(Any, 3))
+
+
+def test_cleanup_and_retry_validation():
+    with pytest.raises(ValueError):
+        CachePolicy(background_cleanup=cast(Any, 1))
+    with pytest.raises(ValueError):
+        CachePolicy(cleanup_interval=0)
+    with pytest.raises(ValueError):
+        CachePolicy(cleanup_interval=math.inf)
+    with pytest.raises(ValueError):
+        CachePolicy(cleanup_batch_limit=0)
+    with pytest.raises(ValueError):
+        CachePolicy(provider_retries=-1)
+    with pytest.raises(ValueError):
+        CachePolicy(provider_retry_delay=-1)

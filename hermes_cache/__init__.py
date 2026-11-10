@@ -22,7 +22,7 @@ from .factory import (
     reset_cache_registry,
 )
 from .models import CacheStats
-from .policy import CachePolicy
+from .policy import CachePolicy, EvictionPolicy
 from .providers.base import CacheProvider, ProviderEntry, ProviderStats
 from .providers.sqlite import SQLiteProvider
 from .serializers import (
@@ -40,6 +40,7 @@ __all__ = [
     "CachePolicy",
     "CacheProvider",
     "CacheStats",
+    "EvictionPolicy",
     "InvalidKeyError",
     "InvalidTTLError",
     "JSONSerializer",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hermes_cache import EvictionPolicy
 from hermes_cache.l1 import MemoryL1
 
 
@@ -46,3 +47,60 @@ def test_clear_namespace():
     l1.put("b", "1", b"1", "raw.v1", None, 0.0)
     assert l1.clear_namespace("a") == 1
     assert l1.size == 1
+
+
+def test_fifo_ignores_access_order():
+    l1 = MemoryL1(
+        max_entries=2,
+        max_bytes=100,
+        max_age=None,
+        eviction=EvictionPolicy.FIFO,
+    )
+    l1.put("ns", "a", b"a", "raw.v1", None, 0.0)
+    l1.put("ns", "b", b"b", "raw.v1", None, 0.0)
+    assert l1.get("ns", "a", 0.0) is not None
+    assert l1.put("ns", "c", b"c", "raw.v1", None, 0.0) == 1
+    assert l1.get("ns", "a", 0.0) is None
+    assert l1.get("ns", "b", 0.0) is not None
+
+
+def test_lfu_evicts_least_frequent():
+    l1 = MemoryL1(
+        max_entries=2,
+        max_bytes=100,
+        max_age=None,
+        eviction=EvictionPolicy.LFU,
+    )
+    l1.put("ns", "a", b"a", "raw.v1", None, 0.0)
+    l1.put("ns", "b", b"b", "raw.v1", None, 0.0)
+    l1.get("ns", "a", 0.0)
+    l1.get("ns", "a", 0.0)
+    assert l1.put("ns", "c", b"c", "raw.v1", None, 0.0) == 1
+    assert l1.get("ns", "b", 0.0) is None
+    assert l1.get("ns", "a", 0.0) is not None
+
+
+def test_lfu_tie_breaks_oldest():
+    l1 = MemoryL1(
+        max_entries=2,
+        max_bytes=100,
+        max_age=None,
+        eviction=EvictionPolicy.LFU,
+    )
+    l1.put("ns", "a", b"a", "raw.v1", None, 0.0)
+    l1.put("ns", "b", b"b", "raw.v1", None, 0.0)
+    assert l1.put("ns", "c", b"c", "raw.v1", None, 0.0) == 1
+    assert l1.get("ns", "a", 0.0) is None
+
+
+def test_rr_evicts_one_entry():
+    l1 = MemoryL1(
+        max_entries=2,
+        max_bytes=100,
+        max_age=None,
+        eviction=EvictionPolicy.RR,
+    )
+    l1.put("ns", "a", b"a", "raw.v1", None, 0.0)
+    l1.put("ns", "b", b"b", "raw.v1", None, 0.0)
+    assert l1.put("ns", "c", b"c", "raw.v1", None, 0.0) == 1
+    assert l1.size == 2

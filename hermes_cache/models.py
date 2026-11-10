@@ -22,6 +22,8 @@ class CacheStats:
     errors: int = 0
     batches: int = 0
     purges: int = 0
+    evictions_l2: int = 0
+    background_cleanups: int = 0
 
     @property
     def hits(self) -> int:

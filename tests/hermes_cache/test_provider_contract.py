@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from hermes_cache import ProviderEntry, ProviderError, SQLiteProvider
+from hermes_cache import (
+    EvictionPolicy,
+    ProviderEntry,
+    ProviderError,
+    SQLiteProvider,
+)
 
 
 @pytest.fixture(params=["fake", "sqlite"])
@@ -71,3 +76,19 @@ def test_close_rejects_use(provider):
     provider.close()
     with pytest.raises(ProviderError):
         provider.get("ns", "k")
+
+
+def test_trim_honors_lru_metadata(provider):
+    provider.set_many(
+        [
+            _entry("ns", "a", b"12345", created=1.0),
+            _entry("ns", "b", b"12345", created=2.0),
+            _entry("ns", "c", b"12345", created=3.0),
+        ]
+    )
+    provider.touch("ns", "a", 10.0, count_hit=False)
+    provider.touch("ns", "c", 11.0, count_hit=False)
+    assert provider.trim_to_bytes(
+        5, 100.0, EvictionPolicy.LRU
+    ) == 2
+    assert provider.get("ns", "c") is not None

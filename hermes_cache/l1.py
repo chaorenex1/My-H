@@ -1,10 +1,13 @@
-"""Process-local LRU/TTL layer for the cache engine."""
+"""Process-local memory layer with pluggable eviction policies."""
 
 from __future__ import annotations
 
+import random
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
+
+from .policy import EvictionPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +19,7 @@ class L1Entry:
 
 
 class MemoryL1:
-    """Bounded, thread-safe LRU of serialized cache entries."""
+    """Bounded, thread-safe in-process cache with LRU/LFU/FIFO/RR eviction."""
 
     def __init__(
         self,
@@ -24,13 +27,17 @@ class MemoryL1:
         max_entries: int,
         max_bytes: int,
         max_age: float | None,
+        eviction: EvictionPolicy = EvictionPolicy.LRU,
     ) -> None:
         self.max_entries = max_entries
         self.max_bytes = max_bytes
         self.max_age = max_age
+        self.eviction = EvictionPolicy.coerce(eviction)
         self._entries: OrderedDict[tuple[str, str], L1Entry] = OrderedDict()
+        self._freq: dict[tuple[str, str], int] = {}
         self._bytes = 0
         self._lock = threading.RLock()
+        self._random = random.Random()
 
     @property
     def size(self) -> int:
@@ -56,7 +63,10 @@ class MemoryL1:
             if expired or stale:
                 self._remove_locked(item, entry)
                 return None
-            self._entries.move_to_end(item)
+            if self.eviction is EvictionPolicy.LRU:
+                self._entries.move_to_end(item)
+            elif self.eviction is EvictionPolicy.LFU:
+                self._freq[item] = self._freq.get(item, 0) + 1
             return entry
 
     def put(
@@ -79,13 +89,14 @@ class MemoryL1:
             if old is not None:
                 self._bytes -= len(old.payload)
             self._entries[item] = entry
+            self._freq[item] = 1
             self._bytes += size
             while (
                 len(self._entries) > self.max_entries
                 or self._bytes > self.max_bytes
             ):
-                _, victim = self._entries.popitem(last=False)
-                self._bytes -= len(victim.payload)
+                victim = self._victim_locked()
+                self._remove_locked(victim, self._entries[victim])
                 evicted += 1
         return evicted
 
@@ -103,6 +114,7 @@ class MemoryL1:
             keys = [item for item in self._entries if item[0] == namespace]
             for item in keys:
                 entry = self._entries.pop(item)
+                self._freq.pop(item, None)
                 self._bytes -= len(entry.payload)
             return len(keys)
 
@@ -110,11 +122,29 @@ class MemoryL1:
         with self._lock:
             count = len(self._entries)
             self._entries.clear()
+            self._freq.clear()
             self._bytes = 0
             return count
+
+    def _victim_locked(self) -> tuple[str, str]:
+        if self.eviction is EvictionPolicy.RR:
+            return self._random.choice(tuple(self._entries))
+        if self.eviction is EvictionPolicy.LFU:
+            victim = next(iter(self._entries))
+            lowest = self._freq.get(victim, 0)
+            for item in self._entries:
+                frequency = self._freq.get(item, 0)
+                if frequency < lowest:
+                    victim = item
+                    lowest = frequency
+            return victim
+        # LRU reorders on access, so the front is least recently used.
+        # FIFO never reorders, so the front is the oldest insertion.
+        return next(iter(self._entries))
 
     def _remove_locked(
         self, item: tuple[str, str], entry: L1Entry
     ) -> None:
         self._entries.pop(item, None)
+        self._freq.pop(item, None)
         self._bytes -= len(entry.payload)

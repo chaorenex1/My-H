@@ -81,7 +81,11 @@ def get_cache(
             mkdir_under_hermes_home(cache_dir)
             apply_secure_dir_policy(cache_dir, home=root)
             cache = Cache(
-                SQLiteProvider(path),
+                SQLiteProvider(
+                    path,
+                    retries=resolved_policy.provider_retries,
+                    retry_delay=resolved_policy.provider_retry_delay,
+                ),
                 policy=resolved_policy,
                 serializer=resolved_serializer,
             )

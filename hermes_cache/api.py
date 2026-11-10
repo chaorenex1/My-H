@@ -9,7 +9,7 @@ from typing import Any
 from .engine import CacheEngine
 from .errors import CacheClosedError, SerializationError
 from .models import DEFAULT_NAMESPACE, CacheStats
-from .policy import CachePolicy
+from .policy import CachePolicy, EvictionPolicy
 from .providers.base import CacheProvider, ProviderEntry, ProviderStats
 from .serializers import Serializer
 
@@ -110,10 +110,24 @@ class Cache:
     def purge_expired(self, *, limit: int = 1000) -> int:
         return self._engine.purge_expired(limit=limit)
 
+    def maintenance(self) -> tuple[int, int]:
+        return self._engine.maintenance()
+
     def namespace(
-        self, name: str, *, default_ttl: float | None = None
+        self,
+        name: str,
+        *,
+        default_ttl: float | None = None,
+        max_entries: int | None = None,
+        eviction: EvictionPolicy = EvictionPolicy.LRU,
     ) -> Namespace:
-        return Namespace(self, name, default_ttl=default_ttl)
+        return Namespace(
+            self,
+            name,
+            default_ttl=default_ttl,
+            max_entries=max_entries,
+            eviction=eviction,
+        )
 
     def batch(
         self, *, namespace: str = DEFAULT_NAMESPACE
@@ -145,10 +159,16 @@ class Namespace:
         name: str,
         *,
         default_ttl: float | None = None,
+        max_entries: int | None = None,
+        eviction: EvictionPolicy = EvictionPolicy.LRU,
     ) -> None:
         self.cache = cache
         self.name = name
         self.default_ttl = default_ttl
+        if max_entries is not None:
+            self.cache._engine.register_namespace(
+                name, max_entries=max_entries, eviction=eviction
+            )
 
     def get(
         self,
@@ -239,6 +259,50 @@ class Batch:
         self._puts.pop(key, None)
         self._deletes.add(key)
 
+    def set_many(
+        self, values: Mapping[str, Any], *, ttl: float | None = None
+    ) -> None:
+        for key, value in values.items():
+            self.set(key, value, ttl=ttl)
+
+    def delete_many(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            self.delete(key)
+
+    def get_many(self, keys: Sequence[str]) -> dict[str, Any]:
+        self._check_open()
+        result: dict[str, Any] = {}
+        missing: list[str] = []
+        for key in dict.fromkeys(keys):
+            if key in self._deletes:
+                continue
+            entry = self._puts.get(key)
+            if entry is None:
+                missing.append(key)
+                continue
+            try:
+                result[key] = self._cache._engine._decode(
+                    entry.payload, entry.codec
+                )
+            except SerializationError:
+                continue
+        if missing:
+            result.update(
+                self._cache.get_many(missing, namespace=self._namespace)
+            )
+        return result
+
+    def contains(self, key: str) -> bool:
+        self._check_open()
+        if key in self._deletes:
+            return False
+        if key in self._puts:
+            return True
+        return self._cache.contains(key, namespace=self._namespace)
+
+    def pending(self) -> int:
+        return len(self._puts) + len(self._deletes)
+
     def get(self, key: str, default: Any = None) -> Any:
         self._check_open()
         if key in self._deletes:
@@ -263,11 +327,13 @@ class Batch:
         puts = list(self._puts.values())
         deletes = [(self._namespace, key) for key in self._deletes]
         ok = self._cache._engine.apply_batch(puts, deletes)
+        if not ok:
+            return 0
         self._done = True
         count = len(puts) + len(deletes)
         self._puts.clear()
         self._deletes.clear()
-        return count if ok else 0
+        return count
 
     def rollback(self) -> None:
         if self._done:

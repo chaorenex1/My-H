@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hermes_cache import Cache, CachePolicy
+from hermes_cache import Cache, CachePolicy, EvictionPolicy, ProviderError
 
 
 def _cache(fake_provider):
@@ -66,3 +66,62 @@ def test_cache_close(fake_provider):
     cache = _cache(fake_provider)
     cache.close()
     assert cache.closed is True
+
+
+def test_batch_bulk_helpers_and_overlay(fake_provider):
+    cache = _cache(fake_provider)
+    cache.set_many({"old": 0, "keep": 9})
+    batch = cache.batch()
+    batch.set_many({"a": 1, "b": 2})
+    batch.delete("old")
+    batch.delete_many(["ghost"])
+    assert batch.get_many(["a", "keep", "old"]) == {"a": 1, "keep": 9}
+    assert batch.contains("a") is True
+    assert batch.contains("old") is False
+    assert batch.pending() == 4
+    assert batch.commit() == 4
+    assert cache.get("old", "miss") == "miss"
+    assert cache.get_many(["a", "b"]) == {"a": 1, "b": 2}
+
+
+def test_failed_commit_keeps_batch_buffer(fake_provider, monkeypatch):
+    cache = _cache(fake_provider)
+    batch = cache.batch()
+    batch.set("a", 1)
+
+    def fail(puts, deletes):
+        raise ProviderError("boom")
+
+    original = fake_provider.apply_batch
+    monkeypatch.setattr(fake_provider, "apply_batch", fail)
+    assert batch.commit() == 0
+    assert batch.pending() == 1
+    monkeypatch.setattr(fake_provider, "apply_batch", original)
+    assert batch.commit() == 1
+    assert cache.get("a") == 1
+
+
+def test_namespace_cap_evicts_least_recently_used(fake_provider):
+    cache = _cache(fake_provider)
+    ns = cache.namespace(
+        "bounded", max_entries=2, eviction=EvictionPolicy.LRU
+    )
+    ns.set("a", 1)
+    ns.set("b", 2)
+    assert ns.get("a") == 1
+    ns.set("c", 3)
+    assert ns.get("b", "miss") == "miss"
+    assert ns.get_many(["a", "c"]) == {"a": 1, "c": 3}
+    assert fake_provider.stats().entries == 2
+
+
+def test_namespace_cap_counts_l1_hits(fake_provider):
+    cache = Cache(fake_provider, policy=CachePolicy(background_cleanup=False))
+    ns = cache.namespace("bounded", max_entries=2)
+    ns.set("a", 1)
+    ns.set("b", 2)
+    assert ns.get("a") == 1
+    ns.set("c", 3)
+    assert ns.get("b", "miss") == "miss"
+    assert ns.get("a") == 1
+    assert ns.get("c") == 3

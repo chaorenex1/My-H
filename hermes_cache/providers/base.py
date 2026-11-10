@@ -6,6 +6,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..policy import EvictionPolicy
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderEntry:
@@ -54,7 +56,32 @@ class CacheProvider(Protocol):
 
     def purge_expired(self, now: float, limit: int = 1000) -> int: ...
 
-    def trim_to_bytes(self, max_bytes: int, now: float) -> int: ...
+    def touch(
+        self,
+        namespace: str,
+        key: str,
+        now: float,
+        *,
+        count_hit: bool,
+    ) -> None:
+        """Record one read for LRU (access time) or LFU (hit count)."""
+        ...
+
+    def touch_many(
+        self,
+        namespace: str,
+        keys: Sequence[str],
+        now: float,
+        *,
+        count_hit: bool,
+    ) -> None: ...
+
+    def trim_to_bytes(
+        self,
+        max_bytes: int,
+        now: float,
+        policy: EvictionPolicy = EvictionPolicy.FIFO,
+    ) -> int: ...
 
     def stats(self) -> ProviderStats: ...
 
