@@ -2,7 +2,6 @@
 name: init
 description: "Generate or refresh AGENTS.md for the current codebase."
 toolsets: [file, search, terminal, delegation]
-read_only: false
 max_iterations: 200
 background: false
 skip_memory: true

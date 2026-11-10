@@ -24,7 +24,7 @@ def test_frontmatter_fields_are_typed_and_stripped_from_the_body():
         "name: scout\n"
         "description: demo\n"
         "toolsets: [file, web]\n"
-        "read_only: true\n"
+        "enable_tools: [read_file, web_search]\n"
         "max_iterations: 42\n"
         "model: provider:model\n"
         "reasoning_effort: high\n"
@@ -33,8 +33,8 @@ def test_frontmatter_fields_are_typed_and_stripped_from_the_body():
 
     assert body == "You scout."
     assert meta == {"name": "scout", "description": "demo", "toolsets": ["file", "web"],
-                    "read_only": True, "max_iterations": 42, "model": "provider:model",
-                    "reasoning_effort": "high", "worktree": True}
+                    "enable_tools": ["read_file", "web_search"], "max_iterations": 42,
+                    "model": "provider:model", "reasoning_effort": "high", "worktree": True}
 
 
 def test_a_body_without_frontmatter_has_no_metadata():
@@ -62,7 +62,7 @@ def test_unknown_fields_are_ignored_with_one_warning(caplog):
     ("max_iterations: 0\n", "positive integer"),
     ("max_iterations: true\n", "positive integer"),
     ("reasoning_effort: hgih\n", "unknown reasoning_effort"),
-    ('read_only: "sometimes"\n', "must be a boolean"),
+    ("enable_tools: 3\n", "must be an array"),
 ])
 def test_invalid_fields_fail_closed(block, needle):
     with pytest.raises(DefinitionError, match=needle):
@@ -77,17 +77,17 @@ def test_a_role_selector_is_valid_syntax_and_checked_at_call_time():
 
 def test_caller_beats_definition_beats_default():
     resolved = agent_definitions.resolve(
-        {"read_only": False, "worktree": None, "max_iterations": None},
-        {"read_only": True, "worktree": True, "max_iterations": 42},
-        {"read_only": False, "worktree": False, "max_iterations": 10})
+        {"worktree": None, "max_iterations": None, "enable_tools": []},
+        {"worktree": True, "max_iterations": 42, "enable_tools": ["read_file"]},
+        {"worktree": False, "max_iterations": 10, "enable_tools": []})
 
-    assert resolved == {"read_only": False, "worktree": True, "max_iterations": 42}
+    assert resolved == {"worktree": True, "max_iterations": 42, "enable_tools": []}
 
 
 def test_a_knob_omitted_everywhere_keeps_the_default():
-    resolved = agent_definitions.resolve({"read_only": None}, {}, {"read_only": False})
+    resolved = agent_definitions.resolve({"max_iterations": None}, {}, {"max_iterations": 10})
 
-    assert resolved == {"read_only": False}
+    assert resolved == {"max_iterations": 10}
 
 
 def _bundled_pack() -> Path:
@@ -110,7 +110,7 @@ def test_the_pack_is_found_by_the_one_level_skill_scan():
 
 
 @pytest.mark.parametrize("preset", PRESETS)
-def test_a_shipped_definition_is_valid_and_read_only_safe(preset):
+def test_a_shipped_definition_is_valid_and_has_a_tool_surface(preset):
     text = (_bundled_pack() / f"{preset}.md").read_text(encoding="utf-8")
     meta, body = agent_definitions.parse_definition(text, source=f"{preset}.md")
 
@@ -118,8 +118,10 @@ def test_a_shipped_definition_is_valid_and_read_only_safe(preset):
     assert meta.get("toolsets"), "a preset must pin its tool surface"
     assert all(validate_toolset(name) for name in meta["toolsets"])
     assert isinstance(meta.get("max_iterations"), int) and meta["max_iterations"] > 0
-    if meta.get("read_only"):
-        assert "agents" not in meta["toolsets"], "a read-only preset must not fan out"
+    if meta.get("enable_tools"):
+        assert not {"write_file", "patch"} & set(meta["enable_tools"]), (
+            "an explicit allowlist replaces read_only; mutating tools must not sneak in")
+        assert "agents" not in meta["enable_tools"], "an allowlisted preset must not fan out"
 
 
 def test_init_generates_agents_md_in_the_project():
@@ -127,7 +129,7 @@ def test_init_generates_agents_md_in_the_project():
     meta, body = agent_definitions.parse_definition(text, source="init.md")
 
     assert "delegation" in meta["toolsets"], "init fans out its survey through delegate_task"
-    assert meta["read_only"] is False
+    assert "enable_tools" not in meta, "init keeps its toolsets; no allowlist replaces them"
     assert meta["worktree"] is False, "the document must land in the project, not a branch"
     assert meta["background"] is False, "inline runs can surface the approval prompt"
     assert "AGENTS.md" in body

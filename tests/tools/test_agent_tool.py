@@ -25,7 +25,11 @@ class _FakeAgent:
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        self.tools: list = []
+        self.tools: list = [
+            {"type": "function", "function": {"name": name}}
+            for name in ("read_file", "write_file", "patch")
+        ]
+        self.valid_tool_names = {"read_file", "write_file", "patch"}
         self.closed = False
         self.message = ""
         self.system_message = None
@@ -82,7 +86,9 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
     assert data["answer"] == "the answer"
     assert data["api_calls"] == 2
     assert data["model"] == "fake-model" and data["provider"] == "fake"
-    assert data["toolsets"] == ["*"] and data["all_tools"] is True
+    from agent.prompts.toolsets import DEFAULT_TOOLSETS
+
+    assert data["toolsets"] == list(DEFAULT_TOOLSETS) and data["all_tools"] is False
     assert data["system_prompt_source"] == "argument"
     assert data["transcript_written"] is True
 
@@ -102,7 +108,8 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
     assert agent.message == "Find the cause."
     assert agent.system_message == "You research."
     assert agent.kwargs["platform"] == "subagent"
-    assert agent.kwargs["enabled_toolsets"] is None, "an omitted tool_sets means every tool"
+    assert agent.kwargs["enabled_toolsets"] == list(DEFAULT_TOOLSETS), (
+        "an omitted tool_sets means the default-loaded built-in sets")
     assert agent.kwargs["skip_memory"] is False and agent.kwargs["skip_context_files"] is False
     assert agent.kwargs["skip_background_review"] is True
     assert agent.kwargs["load_soul_identity"] is True
@@ -359,7 +366,6 @@ def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypat
     project = tmp_path / "project"
     _write_definition(project / ".agents", "scout",
                       "toolsets: [file, web]\n"
-                      "read_only: true\n"
                       "max_iterations: 42\n"
                       "skip_memory: true\n"
                       "skip_context_files: true\n"
@@ -722,23 +728,23 @@ def test_a_definition_can_request_worktree_isolation(tmp_path, monkeypatch):
     assert data["worktree"]["requested"] is True and data["worktree"]["created"] is False
 
 
-def test_a_read_only_definition_strips_mutating_tools(tmp_path, monkeypatch):
-    from agent import agent_run
-
+def test_enable_tools_definition_replaces_toolsets_and_filters_the_agent(tmp_path):
     project = tmp_path / "project"
     _write_definition(project / ".agents", "scout",
-                      "read_only: true\ntoolsets: [file, terminal]\n")
-    seen: list = []
-    monkeypatch.setattr(agent_run, "apply_read_only",
-                        lambda agent: seen.append(agent) or ["patch"])
+                      "enable_tools: [read_file]\ntoolsets: [file, terminal]\n")
 
     data = _call(agent_name="scout", user_prompts="go", background=False,
                  project_dir=str(project))
 
-    assert "error" not in data
-    assert seen == [_FakeAgent.instances[-1]], "read_only must reach the runner"
+    assert "error" not in data, data
+    agent = _FakeAgent.instances[-1]
+    assert [tool["function"]["name"] for tool in agent.tools] == ["read_file"]
+    assert agent.valid_tool_names == {"read_file"}
+    assert data["toolsets"] == [] and data["all_tools"] is False
+    assert agent.kwargs["enabled_toolsets"] is None, (
+        "the full surface is built first, then narrowed by the allowlist")
     assert "read_only" not in agent_tool.AGENT_SCHEMA["parameters"]["properties"], (
-        "read_only is definition-owned; the model must not be able to change it")
+        "read_only is gone; enable_tools replaces it")
 
 
 

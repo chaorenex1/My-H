@@ -879,7 +879,7 @@ def _revive_params(session: _Session) -> dict[str, Any]:
         "toolsets": list(spec.get("toolsets") or []),
         "all_tools": bool(spec.get("all_tools")),
         "project_dir": project,
-        "read_only": bool(spec.get("read_only")),
+        "enable_tools": list(spec.get("enable_tools") or []),
         "max_iterations": int(spec.get("max_iterations") or 10),
         "reasoning_effort": spec.get("reasoning_effort") or "",
         "output_schema": spec.get("output_schema"),

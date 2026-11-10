@@ -318,7 +318,7 @@ class PluginAgentLoop:
 
         Keyword parameters are :func:`agent.agent_run.run`'s: ``context``, ``model``,
         ``provider``, ``api_mode``, ``toolsets``, ``system_message``, ``max_iterations``,
-        ``project_dir``, ``all_tools``, ``read_only``, ``history``, ``session_id``, ``layer``,
+        ``project_dir``, ``all_tools``, ``enable_tools``, ``history``, ``session_id``, ``layer``,
         ``history_session``, ``account_task``, ``skip_memory``, ``skip_context_files``,
         ``skip_background_review``, ``load_soul_identity``, ``extra_tools``, ``cache_scope``,
         ``tool_guardrails``, ``meta`` and ``record_history``.

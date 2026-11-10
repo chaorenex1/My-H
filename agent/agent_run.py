@@ -38,7 +38,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from . import run_transcript
 
@@ -58,11 +58,6 @@ _USAGE_KEYS = (
     "reasoning_tokens", "prompt_tokens", "completion_tokens", "total_tokens",
     "estimated_cost_usd", "cost_status", "cost_source",
 )
-
-#: Tools a read-only peer must not hold: it reads and advises, it does not mutate.
-READ_ONLY_DROPPED_TOOLS = frozenset({
-    "write_file", "patch", "agent", "skill_manage",
-})
 
 #: Two runs can land in the same millisecond for the same agent; run ids must still differ.
 _SEQUENCE = itertools.count(1)
@@ -215,8 +210,14 @@ def _with_reasoning(rows: tuple[dict[str, Any], ...],
     return rows + ({"role": "reasoning", "content": text},)
 
 
-def apply_read_only(agent: Any) -> list[str]:
-    """Strip mutating tools from an already-built agent; returns what was removed."""
+def apply_tool_allowlist(agent: Any, tool_names: Iterable[str]) -> list[str]:
+    """Keep only *tool_names* on an already-built agent; returns what was removed.
+
+    ``enable_tools`` is an explicit allowlist that replaces the toolset selection, so it is
+    applied after the agent is built (the allowlist may name plugin/MCP tools that toolset
+    resolution cannot express). Unknown names simply match nothing.
+    """
+    allowed = {str(name).strip() for name in tool_names if str(name).strip()}
     dropped: list[str] = []
     tools = getattr(agent, "tools", None)
     if isinstance(tools, list):
@@ -225,14 +226,14 @@ def apply_read_only(agent: Any) -> list[str]:
             name = ""
             if isinstance(tool, Mapping):
                 name = str((tool.get("function") or {}).get("name") or "")
-            if name in READ_ONLY_DROPPED_TOOLS:
+            if name and name not in allowed:
                 dropped.append(name)
                 continue
             kept.append(tool)
         agent.tools = kept
     names = getattr(agent, "valid_tool_names", None)
     if isinstance(names, (set, frozenset, list)):
-        agent.valid_tool_names = {name for name in names if name not in READ_ONLY_DROPPED_TOOLS}
+        agent.valid_tool_names = {name for name in names if name in allowed}
     return sorted(set(dropped))
 
 
@@ -516,7 +517,8 @@ def continue_run(agent: Any, message: str, *, context: str = "", system_message:
 def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         api_mode: str = "", toolsets: Optional[Sequence[str]] = None,
         system_message: str | Sequence[str] = "", max_iterations: int = MAX_ITERATIONS,
-        project_dir: Optional[str] = None, all_tools: bool = False, read_only: bool = False,
+        project_dir: Optional[str] = None, all_tools: bool = False,
+        enable_tools: Optional[Iterable[str]] = None,
         history: Optional[Sequence[Mapping[str, Any]]] = None, session_id: str = "",
         layer: str = "", history_session: str = "", account_task: str = "",
         agent_session_id: str = "",
@@ -619,7 +621,9 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         model=final_model,
         **knobs,
         session_id=str(session_id or "").strip() or None,
-        enabled_toolsets=None if all_tools else tools,
+        # An explicit allowlist is enforced after the build (``apply_tool_allowlist``), so the
+        # agent must be built with the full surface; ``[]`` here would select zero tools.
+        enabled_toolsets=None if (all_tools or enable_tools) else tools,
         max_iterations=max(1, int(max_iterations or MAX_ITERATIONS)),
         quiet_mode=True,
         platform="subagent",
@@ -641,8 +645,8 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         _begin_run(agent, on_agent)
         if tool_guardrails:
             _configure_tool_guardrails(agent, tool_guardrails)
-        if read_only:
-            apply_read_only(agent)
+        if enable_tools:
+            apply_tool_allowlist(agent, enable_tools)
         peer = _execute_turn(
             agent, message, context=context, conversation=conversation, system=system,
             schema=schema, task_id=task_id, agent_name=agent_name,
@@ -677,9 +681,9 @@ async def run_async(message: str, **kwargs: Any) -> AgentRunResult:
 
 __all__ = [
     "MAX_ITERATIONS",
-    "READ_ONLY_DROPPED_TOOLS",
+
     "AgentRunResult",
-    "apply_read_only",
+    "apply_tool_allowlist",
     "continue_run",
     "run",
     "run_async",

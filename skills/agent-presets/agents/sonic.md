@@ -2,7 +2,6 @@
 name: sonic
 description: "Small mechanical edits and data collection, no design decisions."
 toolsets: [file, terminal, search, web]
-read_only: false
 max_iterations: 100
 background: true
 skip_memory: true

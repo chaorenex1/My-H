@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 #: Boolean fields a definition may set; the caller can override each one.
 BOOL_FIELDS = frozenset({
-    "read_only", "background", "worktree",
+    "background", "worktree",
     "skip_memory", "skip_context_files", "skip_background_review", "load_soul_identity",
     "structured", "read-summarize",
 })
@@ -35,8 +35,9 @@ _FIELD_ALIASES = {"readSummarize": "read-summarize"}
 
 #: Every key the contract knows; anything else is ignored with one warning (forward compatible).
 KNOWN_FIELDS = BOOL_FIELDS | STR_FIELDS | frozenset({"model", "reasoning_effort", "toolsets",
-                                                     "max_iterations", "output", "spawns",
-                                                     "blocking", "autoloadSkills", "advisor"})
+                                                     "enable_tools", "max_iterations", "output",
+                                                     "spawns", "blocking", "autoloadSkills",
+                                                     "advisor"})
 
 
 class DefinitionError(ValueError):
@@ -95,6 +96,24 @@ def _toolsets(value: Any, source: str) -> list[str]:
             # Fail closed: an unknown name must not degrade to the host's full surface.
             raise DefinitionError(f"{source}: unknown toolset {name!r}")
         cleaned.append(name)
+    return cleaned
+
+
+def _enable_tools(value: Any, source: str) -> list[str]:
+    """An explicit tool-name allowlist; non-empty entries are kept in declaration order.
+
+    Names are not resolved here: the registry is live and plugin tools register during
+    discovery, so the runtime intersects this list with the tools actually built. A typo
+    therefore narrows the surface instead of widening it.
+    """
+    names = [value] if isinstance(value, str) else value
+    if not isinstance(names, (list, tuple)):
+        raise DefinitionError(f"{source}: enable_tools must be an array of tool names")
+    cleaned: list[str] = []
+    for item in names:
+        name = str(item).strip()
+        if name and name not in cleaned:
+            cleaned.append(name)
     return cleaned
 
 
@@ -282,6 +301,8 @@ def parse_definition(text: str, *, source: str = "<definition>") -> tuple[dict[s
             metadata[key] = _reasoning_effort(value, source)
         elif key == "toolsets":
             metadata[key] = _toolsets(value, source)
+        elif key == "enable_tools":
+            metadata[key] = _enable_tools(value, source)
         elif key == "max_iterations":
             metadata[key] = _max_iterations(value, source)
         elif key == "output":

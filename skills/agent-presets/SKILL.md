@@ -90,10 +90,11 @@ Override per call when needed — a caller argument always beats the definition:
   is not bypassed by auto-approve, and fails closed on an unattended run. `init` therefore defaults
   to inline (`background: false`) and returns the complete document in its final message when the
   write is refused — approve it, then paste. It must not retry through `patch` or `terminal`.
-- `read_only` is a tool-surface policy, not a sandbox: `write_file`, `patch`, `agent` and
-  `skill_manage` are stripped, but a definition that also grants `terminal` can still mutate the
-  workspace. `scout`, `security-reviewer` and `seance` deliberately omit `terminal`; `reviewer`
-  keeps it for tests and relies on its prompt.
+- `enable_tools` is a tool-surface policy, not a sandbox: the definition lists the exact tools the
+  agent holds, so anything not named (including `write_file`, `patch`, `agent` and `skill_manage`)
+  is dropped. A definition that includes `terminal` can still mutate the workspace; `scout`,
+  `security-reviewer` and `seance` deliberately omit it, while `reviewer` keeps it for tests and
+  relies on its prompt.
 - A project definition shadows a shipped one with the same name. The call payload reports
   `system_prompt_source` (and `definition_shadowed: true`) — check it when the answer matters.
 - `max_iterations` comes from the definition; without it a run stops at the host default of 10

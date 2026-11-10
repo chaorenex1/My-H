@@ -2,7 +2,7 @@
 name: scout
 description: "Read-only codebase reconnaissance and fact gathering."
 toolsets: [file, search, web, session_search]
-read_only: true
+enable_tools: [read_file, search_files, web_search, web_extract, session_search]
 max_iterations: 100
 background: true
 skip_memory: true

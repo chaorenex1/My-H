@@ -1,8 +1,9 @@
 """``agent``: one named in-process agent, with its conversation on disk.
 
 A caller supplies the agent's name, prompts, optional context files and the knobs the host
-normally decides. The run uses the host's model route, the requested toolsets (all tools when
-``tool_sets`` is omitted), and the host's own one-shot runner (:func:`agent.agent_run.run`).
+normally decides. The run uses the host's model route, the requested toolsets (the
+default-loaded built-in sets when ``tool_sets`` is omitted), and the host's own one-shot
+runner (:func:`agent.agent_run.run`).
 Unlike a layer/background task, a custom agent keeps the host's memory and context files and
 loads the operator soul by default; those are the flags the caller can turn off.
 
@@ -35,7 +36,7 @@ order (each ``<name>.md`` or ``<name>``):
    ``skills/*/agents/`` (bundled skills), ``plugins/*/agents/`` (bundled plugins).
 
 A leading YAML front-matter block is an enforced contract (``tools/agent_definitions.py``): it may
-pin ``model`` (``provider:model``, a bare name or ``@role``), ``toolsets``, ``read_only``,
+pin ``model`` (``provider:model``, a bare name or ``@role``), ``toolsets``, ``enable_tools``,
 ``max_iterations``, ``reasoning_effort``, ``worktree`` and the skip flags. It may also declare
 ``output`` (an omp JTD-shaped or JSON Schema output contract, normalized to JSON Schema and
 validated with one bounded retry), ``spawns`` (the named agents this definition may derive, ``*``
@@ -487,7 +488,7 @@ class _Run:
     path: Path
     goal: str
     depth: int
-    read_only: bool
+    enable_tools: list[str]
     max_iterations: int
     reasoning_effort: Any
     worktree: bool
@@ -736,7 +737,7 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "skip_context_files": flags.get("skip_context_files", False),
         "skip_background_review": flags.get("skip_background_review", True),
         "load_soul_identity": flags.get("load_soul_identity", True),
-        "read_only": run.read_only,
+        "enable_tools": list(run.enable_tools),
         "max_iterations": run.max_iterations,
         "reasoning_effort": run.reasoning_effort,
         "worktree": run.worktree,
@@ -775,7 +776,7 @@ class _Call:
     toolsets: list[str]
     all_tools: bool
     background: bool
-    read_only: bool
+    enable_tools: list[str]
     max_iterations: int
     reasoning_effort: Any
     worktree: bool
@@ -802,7 +803,7 @@ _KNOB_DEFAULTS: dict[str, Any] = {
     "skip_context_files": False,
     "skip_background_review": True,
     "load_soul_identity": True,
-    "read_only": False,
+    "enable_tools": [],
     "max_iterations": agent_run.MAX_ITERATIONS,
     "reasoning_effort": "",
     "worktree": False,
@@ -831,6 +832,16 @@ def _caller_knobs(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
             "background", "skip_memory", "skip_context_files", "skip_background_review",
             "load_soul_identity", "worktree")}
     knobs["toolsets"] = toolsets
+    raw_tools = args.get("enable_tools")
+    if raw_tools is not None:
+        if isinstance(raw_tools, str):
+            raw_tools = [raw_tools]
+        if not isinstance(raw_tools, (list, tuple)):
+            raise ValueError("enable_tools must be an array of tool names")
+        knobs["enable_tools"] = [
+            str(name).strip() for name in raw_tools if str(name).strip()]
+    else:
+        knobs["enable_tools"] = None
     knobs["model"] = model or None
     return knobs, all_tools
 
@@ -866,7 +877,7 @@ def _resident_spec(call: _Call) -> dict[str, Any]:
         "toolsets": list(call.toolsets),
         "all_tools": call.all_tools,
         "flags": dict(call.flags),
-        "read_only": call.read_only,
+        "enable_tools": list(call.enable_tools),
         "max_iterations": call.max_iterations,
         "reasoning_effort": call.reasoning_effort or "",
         "project_dir": str(call.project) if call.project else "",
@@ -982,8 +993,16 @@ def _validate(args: dict[str, Any]) -> _Call:
     caller, all_tools = _caller_knobs(args)
     knobs = agent_definitions.resolve(caller, definition.metadata, _KNOB_DEFAULTS)
     route = _model_route(knobs["model"])
+    enable_tools = [str(name) for name in (knobs["enable_tools"] or [])]
     toolsets = [str(name) for name in (knobs["toolsets"] or [])]
-    if not toolsets or "*" in toolsets or "all" in toolsets:
+    if enable_tools:
+        # An explicit tool allowlist replaces the toolset selection entirely.
+        all_tools, toolsets = False, []
+    elif not toolsets and not all_tools:
+        from agent.prompts.toolsets import DEFAULT_TOOLSETS
+
+        toolsets = list(DEFAULT_TOOLSETS)
+    elif "*" in toolsets or "all" in toolsets:
         all_tools, toolsets = True, []
     # Definition-level blocking outranks async execution: the parent waits even when the host
     # default (or the caller) asked for a background run.
@@ -993,7 +1012,7 @@ def _validate(args: dict[str, Any]) -> _Call:
         agent=name, user_prompt=user_prompt, definition=definition,
         provider_name=route.provider, model_name=route.model, toolsets=toolsets,
         all_tools=all_tools, background=background,
-        read_only=bool(knobs["read_only"]),
+        enable_tools=enable_tools,
         max_iterations=max(1, int(knobs["max_iterations"])),
         reasoning_effort=knobs["reasoning_effort"] or route.reasoning_effort,
         worktree=bool(knobs["worktree"]),
@@ -1048,7 +1067,7 @@ def agent_tool(args: dict[str, Any], *, session_id: str = "",
                model_role=call.model_role,
                toolsets=call.toolsets, all_tools=call.all_tools,
                project_dir=project_dir, path=path,
-               goal=_goal(call.user_prompt), depth=depth + 1, read_only=call.read_only,
+               goal=_goal(call.user_prompt), depth=depth + 1, enable_tools=call.enable_tools,
                max_iterations=call.max_iterations, reasoning_effort=call.reasoning_effort,
                worktree=call.worktree, shadowed=call.definition.shadowed, flags=call.flags,
                output_schema=call.output_schema,
@@ -1135,7 +1154,7 @@ AGENT_SCHEMA: dict[str, Any] = {
         "The agent definition is <agent_name>.md (or <agent_name>) searched in the project, "
         "profile and installation .agents//agents/ directories, plugin agents/ directories and "
         "skills/<skill_name>/agents/; agent_name and user_prompts are required. The definition's "
-        "front matter may pin model, toolsets, read_only, max_iterations, reasoning_effort, "
+        "front matter may pin model, toolsets, enable_tools, max_iterations, reasoning_effort, "
         "worktree, output, spawns, blocking and the skip flags; a caller argument overrides it "
         "(blocking: true forces an inline run). By default the "
         "run is background and the answer arrives as a completion; background=false blocks and "
@@ -1183,7 +1202,18 @@ AGENT_SCHEMA: dict[str, Any] = {
             "tool_sets": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Toolsets for this run; omit (or ['*']) for every host tool.",
+                "description": (
+                    "Toolsets for this run, limited to the default-loaded built-in sets; "
+                    "omit for that default, or ['*'] for every host tool."
+                ),
+            },
+            "enable_tools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Explicit tool-name allowlist. When non-empty it replaces tool_sets "
+                    "and the definition's toolsets."
+                ),
             },
             "subject": {
                 "type": "string",

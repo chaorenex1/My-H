@@ -2,7 +2,7 @@
 name: reviewer
 description: "Defect-focused code review with evidence, never edits."
 toolsets: [file, terminal, search, web, session_search]
-read_only: true
+enable_tools: [read_file, search_files, terminal, process_manage, web_search, web_extract, session_search]
 max_iterations: 150
 background: true
 skip_memory: true

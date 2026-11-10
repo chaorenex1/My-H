@@ -1,8 +1,8 @@
 """Verbatim front matter from omp's bundled ``scout``/``reviewer`` definitions.
 
 Kept as fixtures, not shipped presets: omp declares ``tools:`` (unknown to Hermes) and no
-``toolsets``/``read_only``, so installing them as presets would widen the shipped read-only
-contract. These blocks pin the parity acceptance: ``@smol``/``@slow`` selectors, the JTD-shaped
+``toolsets``/``enable_tools``, so installing them as presets would widen the shipped
+tool surface. These blocks pin the parity acceptance: ``@smol``/``@slow`` selectors, the JTD-shaped
 ``output`` normalization, and ``spawns: scout``.
 """
 

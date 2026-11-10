@@ -359,7 +359,7 @@ def test_resident_spec_never_persists_advisor_credentials():
     call = agent_tool._Call(
         agent="ported", user_prompt="go", definition=definition,
         provider_name="fake", model_name="fake", toolsets=[], all_tools=True,
-        background=False, read_only=False, max_iterations=10, reasoning_effort="",
+        background=False, enable_tools=[], max_iterations=10, reasoning_effort="",
         worktree=False, flags={}, project=None, subject="go",
         autoload_skills=("team-rubric",),
         advisor={"model": "gpt-5-mini", "provider": "openai", "selector": "@smol"},
