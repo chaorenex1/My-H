@@ -1,7 +1,7 @@
 ---
 description: Use bare `catch {` when the error binding is unused
 condition: "catch \\(_"
-scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+scope: "tool:patch(*.ts), tool:patch(*.tsx), tool:write_file(*.ts), tool:write_file(*.tsx)"
 interruptMode: never
 ---
 

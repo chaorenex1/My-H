@@ -1,7 +1,7 @@
 ---
 description: "Do not leave `@deprecated` shims behind after refactors — update call sites and remove the old API"
 condition: "@deprecated"
-scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+scope: "tool:patch(*.ts), tool:patch(*.tsx), tool:write_file(*.ts), tool:write_file(*.tsx)"
 interruptMode: never
 ---
 

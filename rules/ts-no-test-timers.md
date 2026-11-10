@@ -4,7 +4,7 @@ condition:
   - "Bun\\.sleep\\("
   - "\\bsetInterval\\("
   - "\\bsetTimeout\\("
-scope: "tool:edit(*.test.ts), tool:write(*.test.ts)"
+scope: "tool:patch(*.test.ts), tool:write_file(*.test.ts)"
 interruptMode: never
 ---
 

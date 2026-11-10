@@ -1,7 +1,7 @@
 ---
 description: "Do not use `await import()` — use static imports unless dynamic loading is unavoidable"
 condition: "await import\\("
-scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+scope: "tool:patch(*.ts), tool:patch(*.tsx), tool:write_file(*.ts), tool:write_file(*.tsx)"
 interruptMode: never
 ---
 

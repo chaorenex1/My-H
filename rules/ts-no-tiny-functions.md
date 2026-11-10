@@ -13,7 +13,7 @@ condition:
   - "(?m)(?:^|[;{}])[ \\t]*(?:const|let|var)\\s+[\\w$]+\\s*=\\s*(?:async\\s+)?(?:function\\b[^(]*\\((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\))*\\)\\s*(?::\\n?(?!\\s*(?:asserts\\s+)?[\\w$]+\\s+is\\s)(?:[^{};=\\n]|=>|\\{[^{}\\n]*\\})*)?|(?:<[^(){};]*>\\s*)?(?:\\((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\))*\\)\\s*(?::\\n?(?!\\s*(?:asserts\\s+)?[\\w$]+\\s+is\\s)(?:[^{};=\\n]|=>|\\{[^{}\\n]*\\})*)?|[a-zA-Z_$][\\w$]*\\s*)=>\\s*)\\{\\s*return [^;{}\\n]+;?\\s*\\}"
   # private class method, getter or arrow field whose body is one return or one expression
   - "(?m)(?:^|[;{}])[ \\t]*(?:(?:private[ \\t]+(?:static[ \\t]+)?(?:async[ \\t]+)?(?:get[ \\t]+)?[\\w$]+|(?:static[ \\t]+)?(?:async[ \\t]+)?(?:get[ \\t]+)?#[\\w$]+)\\s*(?:<[^(){};]*>\\s*)?\\((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\))*\\)\\s*(?::\\n?(?!\\s*(?:asserts\\s+)?[\\w$]+\\s+is\\s)(?:[^{};=\\n]|=>|\\{[^{}\\n]*\\})*)?\\{\\s*return [^;{}\\n]+;?\\s*\\}|(?:private[ \\t]+(?:static[ \\t]+)?(?:readonly[ \\t]+)?[\\w$]+|(?:static[ \\t]+)?(?:readonly[ \\t]+)?#[\\w$]+)\\s*(?::[^=\\n]+)?=\\s*(?:async\\s+)?(?:<[^(){};]*>\\s*)?(?:\\((?:[^()]|\\((?:[^()]|\\([^()]*\\))*\\))*\\)\\s*(?::\\n?(?!\\s*(?:asserts\\s+)?[\\w$]+\\s+is\\s)(?:[^{};=\\n]|=>|\\{[^{}\\n]*\\})*)?|[a-zA-Z_$][\\w$]*\\s*)=>\\s*(?:\\{\\s*return [^;{}\\n]+;?\\s*\\}|[^{\\s][^{\\n]*$))"
-scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+scope: "tool:patch(*.ts), tool:patch(*.tsx), tool:write_file(*.ts), tool:write_file(*.tsx)"
 interruptMode: never
 ---
 
