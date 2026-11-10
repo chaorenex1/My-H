@@ -764,6 +764,8 @@ include = [
   "hermes_graph.*",
   "hermes_codegraph",
   "hermes_codegraph.*",
+  "hermes_cache",
+  "hermes_cache.*",
   "tools",
   "tools.*",
 ]
