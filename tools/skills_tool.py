@@ -5,6 +5,7 @@ scripts/. `skills_list` returns name/description only; `skill_view` returns full
 linked files. Sibling modules (skills_tool_setup / _plugin / _dedup) re-export here."""
 
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -38,6 +39,25 @@ logger = logging.getLogger(__name__)
 # edits, which no directory signature can see.
 _SKILLS_CACHE: dict = {}
 _SKILLS_CACHE_TTL_SECONDS = 30.0
+
+# ADR-18 D8: recent skill-search answers (query + filtered catalog fingerprint), 60 s TTL,
+# stored in the shared cache subsystem; get_cache() resolves the active profile per call. The
+# namespace keeps the 10 most recently used answers.
+_SKILL_SEARCH_TTL_S = 60
+_SKILL_SEARCH_MAX_ENTRIES = 10
+
+
+def _skill_search_cache():
+    from hermes_cache import EvictionPolicy, get_cache
+
+    return get_cache().namespace(
+        "skill_choice",
+        default_ttl=_SKILL_SEARCH_TTL_S,
+        max_entries=_SKILL_SEARCH_MAX_ENTRIES,
+        eviction=EvictionPolicy.LRU,
+    )
+
+
 # Deepest directory the signature descends to below a root (a skill sits at <cat>/<sub>/<skill>/).
 _SIGNATURE_MAX_DEPTH = 6
 
@@ -407,6 +427,23 @@ def skills_list(category: str | None = None, query: str | None = None,
             all_skills = [s for s in all_skills if s.get("category") == category]
         needle = str(query or "").strip()
         if needle:
+            catalog_digest = hashlib.sha1(
+                "\n".join(
+                    f"{s.get('name')}:{s.get('description')}:{s.get('path')}"
+                    for s in all_skills
+                ).encode("utf-8")
+            ).hexdigest()
+            cache_key = json.dumps(
+                [needle, category or "", catalog_digest, _skills_search_setting()],
+                ensure_ascii=False, sort_keys=True,
+            )
+            try:
+                cached = _skill_search_cache().get(cache_key)
+            except Exception as exc:  # health: allow BLE001 -- cache must never break search
+                logger.debug("skill-search cache read failed: %s", exc)
+                cached = None
+            if isinstance(cached, str) and cached:
+                return cached
             path_by_name = {s["load_name"]: s["path"]
                             for s in _skill_catalog() if s.get("load_name")}
             lexical = _skill_lexical_order(needle, all_skills, path_by_name)
@@ -418,10 +455,16 @@ def skills_list(category: str | None = None, query: str | None = None,
         else:
             all_skills = sort_skills(all_skills)
         categories = sorted({s.get("category") for s in all_skills if s.get("category")})
-        return _json({
+        payload = _json({
             "success": True, "skills": all_skills, "categories": categories,
             "count": len(all_skills),
             "hint": "Use skill_view(name) to see full content, tags, and linked files"})
+        if needle:
+            try:
+                _skill_search_cache().set(cache_key, payload)
+            except Exception as exc:  # health: allow BLE001 -- cache must never break search
+                logger.debug("skill-search cache write failed: %s", exc)
+        return payload
     except Exception as e:
         return tool_error(str(e), success=False)
 

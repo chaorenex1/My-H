@@ -9,6 +9,7 @@ silently drops tools); bridge calls route through ``model_tools.handle_function_
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import logging
 import math
@@ -37,6 +38,24 @@ logger = logging.getLogger("tools.tool_search")
 # maps to one gateway request. Describe has no such remote limit.
 _MAX_QUERIES_PER_CALL = 7
 _MAX_DESCRIBE_NAMES_PER_CALL = 10
+
+# ADR-18 D8: recent tool-search answers live in the shared cache subsystem. The namespace
+# isolates them from other purposes; get_cache() resolves the active profile per call, so a
+# multi-profile gateway never serves another profile's connector results. The namespace is
+# capped at the 10 most recently used answers, with the persisted TTL as the staleness bound.
+_TOOL_SEARCH_TTL_S = 300
+_TOOL_SEARCH_MAX_ENTRIES = 10
+
+
+def _tool_search_cache():
+    from hermes_cache import EvictionPolicy, get_cache
+
+    return get_cache().namespace(
+        "tool_choice",
+        default_ttl=_TOOL_SEARCH_TTL_S,
+        max_entries=_TOOL_SEARCH_MAX_ENTRIES,
+        eviction=EvictionPolicy.LRU,
+    )
 
 
 @dataclass(frozen=True)
@@ -497,9 +516,25 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
     limit = (config.search_default_limit if raw_limit is None
              else _clamped_int(raw_limit, config.search_default_limit, 1, config.max_search_limit))
     catalog = build_catalog(_deferrable_in(current_tool_defs))
+    hosted_scope = connections_in_scope(current_tool_defs)
+    catalog_digest = hashlib.sha1(
+        "\n".join(f"{entry.name}:{entry.description}" for entry in catalog).encode("utf-8")
+    ).hexdigest()
+    cache_key = json.dumps(
+        [list(queries), limit, config.judge, config.judge_min_candidates,
+         config.max_questions, catalog_digest, hosted_scope],
+        ensure_ascii=False, sort_keys=True,
+    )
+    try:
+        cached = _tool_search_cache().get(cache_key)
+    except Exception as exc:  # health: allow BLE001 -- cache must never break search
+        logger.debug("tool-search cache read failed: %s", exc)
+        cached = None
+    if isinstance(cached, str) and cached:
+        return cached
     remote_entries: list[list[CatalogEntry]] = [[] for _ in queries]
     hosted_failure: Optional[str] = None
-    if connections_in_scope(current_tool_defs):
+    if hosted_scope:
         remote_entries, hosted_failure = connector_entries_by_group(
             queries, connector_search=connector_search, call=call)
     # Retrieval fetches enough candidates for judgment to run at the default limit; the
@@ -541,7 +576,12 @@ def dispatch_tool_search(args: dict[str, Any], *, current_tool_defs: list[dict[s
         payload["connectors"] = connectors_unavailable(hosted_failure, verb="searched")
     _record_search_metric(current_tool_defs, catalog=catalog, hits=len(tools_map),
                           outcome="connector_unavailable" if hosted_failure else "hits" if tools_map else "no_hits")
-    return json.dumps(payload, ensure_ascii=False)
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    try:
+        _tool_search_cache().set(cache_key, payload_json)
+    except Exception as exc:  # health: allow BLE001 -- cache must never break search
+        logger.debug("tool-search cache write failed: %s", exc)
+    return payload_json
 
 
 def _record_search_metric(current_tool_defs: list[dict[str, Any]], *, hits: int, outcome: str,

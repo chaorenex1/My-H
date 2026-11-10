@@ -1003,6 +1003,52 @@ class TestSearchJudgment:
         assert matches[0] == name_b
         assert set(matches) == {name_a, name_b}
 
+    def test_repeated_search_is_served_from_the_cache(self, monkeypatch):
+        from tools import tool_search
+        from tools.registry import registry
+
+        name = "cache_probe_alpha_tool"
+        schema = _td(name, "Alpha cache capability")
+        registry.register(name=name, handler=lambda args, **kw: "{}",
+                          schema=schema, toolset="mcp-cache-probe")
+        calls: list[int] = []
+        real = tool_search.search_catalog
+        monkeypatch.setattr(
+            tool_search, "search_catalog",
+            lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs))
+        cfg = tool_search.ToolSearchConfig.from_raw({"judge": "off"})
+        first = tool_search.dispatch_tool_search(
+            {"queries": ["alpha"]}, current_tool_defs=[schema], config=cfg)
+        second = tool_search.dispatch_tool_search(
+            {"queries": ["alpha"]}, current_tool_defs=[schema], config=cfg)
+
+        assert first == second
+        assert len(calls) == 1, "the second identical query must come from the cache"
+
+    def test_search_cache_is_bounded_lru(self, monkeypatch):
+        from hermes_cache import EvictionPolicy
+        from tools import tool_search
+
+        seen: dict = {}
+
+        class FakeNamespace:
+            pass
+
+        class FakeCache:
+            def namespace(self, name, **kwargs):
+                seen["name"] = name
+                seen.update(kwargs)
+                return FakeNamespace()
+
+        monkeypatch.setattr("hermes_cache.get_cache", lambda: FakeCache())
+        assert isinstance(tool_search._tool_search_cache(), FakeNamespace)
+        assert seen == {
+            "name": "tool_choice",
+            "default_ttl": tool_search._TOOL_SEARCH_TTL_S,
+            "max_entries": 10,
+            "eviction": EvictionPolicy.LRU,
+        }
+
     def test_default_config_recalls_enough_candidates_for_judgment(self, monkeypatch):
         """The shipped limit (5) is below judge_min_candidates (8), so retrieval must fetch
         the larger pool or judgment would never run (ADR-18 D9)."""
