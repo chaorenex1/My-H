@@ -1,7 +1,7 @@
 ---
 description: Use Future not std::future::Future - it's in the prelude
 condition: "std::future::Future"
-scope: "tool:edit(*.rs), tool:write(*.rs)"
+scope: "tool:patch(*.rs), tool:write_file(*.rs)"
 interruptMode: never
 ---
 
