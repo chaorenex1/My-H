@@ -487,7 +487,11 @@ def select_rules(
     rules: Sequence[Mapping[str, Any]], settings: TtsrSettings, *,
     ast_available: bool = False,
 ) -> tuple[list[TtsrRule], list[tuple[str, str]]]:
-    """Fold by name, apply switches, and split active rules from unsupported ones (ADR-6 D2)."""
+    """Fold by name, apply switches, and split active rules from unsupported ones (ADR-6 D2).
+
+    A rule with only ``globs``/``paths`` stays active as a passive edit reminder (an
+    explicit ``interruptMode`` is honored); without any condition or path it is inert.
+    """
     active: list[TtsrRule] = []
     unsupported: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -508,13 +512,25 @@ def select_rules(
             str(pattern).strip() for pattern in (meta.get("ast_condition") or ())
             if str(pattern).strip())
         question = str(meta.get("question") or "").strip()
-        if not conditions_raw and not ast_conditions and not question:
-            continue
-        interrupt_mode, reason = _resolve_interrupt_mode(
-            meta, settings, question=question)
-        if interrupt_mode is None:
-            unsupported.append((name, str(reason)))
-            continue
+        globs = _raw_tokens(meta, "globs", meta.get("globs") or ())
+        path_only = not conditions_raw and not ast_conditions and not question
+        if path_only:
+            # A rule with only ``globs``/``paths`` fires when a tool edits a matching file
+            # (ECC's corpus is written this way). No condition to match means no interrupt
+            # path; an explicit ``interruptMode`` is still honored and validated.
+            if not globs:
+                continue
+            raw_mode = str(meta.get("interrupt_mode") or "").strip().lower()
+            if raw_mode and raw_mode not in INTERRUPT_MODES:
+                unsupported.append((name, f"interruptMode: {raw_mode}"))
+                continue
+            interrupt_mode, reason = (raw_mode or "never"), None
+        else:
+            interrupt_mode, reason = _resolve_interrupt_mode(
+                meta, settings, question=question)
+            if interrupt_mode is None:
+                unsupported.append((name, str(reason)))
+                continue
         if ast_conditions and not conditions_raw and not question and not ast_available:
             unsupported.append((name, "ast-grep CLI unavailable (hermes pm install ast-grep)"))
             continue
@@ -529,7 +545,7 @@ def select_rules(
             source=str(row.get("source") or ""),
             rule_id=str(row.get("rule_id") or ""),
             scope=parse_scope(_raw_tokens(meta, "scope", meta.get("scope") or ())),
-            globs=_raw_tokens(meta, "globs", meta.get("globs") or ()),
+            globs=globs,
             conditions=compiled,
             ast_conditions=ast_conditions,
             question=question,
@@ -964,7 +980,10 @@ class TtsrCoordinator:
         excerpts: dict[str, str] = {}
         ast_deadline = time.monotonic() + self.ast_budget
         for rule in self.rules:
-            if rule.question or not (rule.conditions or rule.ast_conditions):
+            path_only = not rule.question and not rule.conditions and not rule.ast_conditions
+            if rule.question or (not path_only and not (rule.conditions or rule.ast_conditions)):
+                continue
+            if path_only and not rule.globs:
                 continue
             if not self._can_trigger(rule) or rule.name in self._batch_claimed:
                 continue
@@ -978,6 +997,9 @@ class TtsrCoordinator:
                     continue
                 if rule.globs and not _paths_match(rule.globs, (path,)):
                     continue
+                if path_only:
+                    hit_text = ""
+                    break
                 for condition in rule.conditions:
                     match = condition.search(text)
                     if match is None:

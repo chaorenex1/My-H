@@ -146,6 +146,26 @@ def test_v4a_digest_keeps_added_lines_per_file_and_skips_deletes():
     assert digests == [("a.ts", "new: unknown"), ("b.ts", "const y: any = 2")]
 
 
+def test_paths_only_rule_is_passive_and_fires_on_a_matching_edit():
+    rows, unsupported = select_rules(
+        [_row("---\npaths: ['**/*.go']\n---\nUse io, not ioutil.\n")], TtsrSettings())
+    assert not unsupported
+    assert [rule.interrupt_mode for rule in rows] == ["never"]
+    coordinator = _coordinator(rows)
+    assert coordinator.match_tool_start(
+        "c1", "write_file", {"path": "a.go", "content": "package a"}) == [
+        {"name": "rule", "description": "", "content": "Use io, not ioutil."}]
+    assert coordinator.match_tool_start(
+        "c2", "write_file", {"path": "a.py", "content": "x = 1"}) == []
+
+
+def test_paths_only_rule_honors_an_explicit_interrupt_mode():
+    rows, unsupported = select_rules(
+        [_row("---\npaths: ['**/*.go']\ninterruptMode: always\n---\nbody\n")], TtsrSettings())
+    assert not unsupported
+    assert rows[0].interrupt_mode == "always"
+
+
 def test_alias_scope_and_regex_match_new_string_only():
     rule = _rule(
         "---\n"
