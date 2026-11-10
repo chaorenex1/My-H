@@ -32,17 +32,24 @@ def main():
             pass_session_id=False, session_id="", _emit_status=lambda *args: None,
         )
         fixed_hint = prompt_builder.PLATFORM_HINTS["desktop"]
-        # The original clause is taken from the pinned base, never synthesized.
-        source = subprocess.check_output(
-            ["git", "show", f"{sys.argv[1]}:agent/prompt_builder.py"], cwd=ROOT,
-            text=True, stdin=subprocess.DEVNULL,
-        )
-        import ast
-        tree = ast.parse(source)
-        mapping = next(n.value for n in tree.body if isinstance(n, ast.Assign)
-                       and any(isinstance(t, ast.Name) and t.id == "PLATFORM_HINTS" for t in n.targets))
-        base_hint = next(ast.literal_eval(value) for key, value in zip(mapping.keys, mapping.values)
-                         if isinstance(key, ast.Constant) and key.value == "desktop")
+        # The original clause is taken from the pinned base, never synthesized. New bases
+        # keep it as data (system/platforms/desktop.md); older bases inline the dict literal.
+        try:
+            base_hint = subprocess.check_output(
+                ["git", "show", f"{sys.argv[1]}:agent/prompts/system/platforms/desktop.md"],
+                cwd=ROOT, text=True, stdin=subprocess.DEVNULL,
+            ).rstrip("\n")
+        except subprocess.CalledProcessError:
+            source = subprocess.check_output(
+                ["git", "show", f"{sys.argv[1]}:agent/prompt_builder.py"], cwd=ROOT,
+                text=True, stdin=subprocess.DEVNULL,
+            )
+            import ast
+            tree = ast.parse(source)
+            mapping = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                           and any(isinstance(t, ast.Name) and t.id == "PLATFORM_HINTS" for t in n.targets))
+            base_hint = next(ast.literal_eval(value) for key, value in zip(mapping.keys, mapping.values)
+                             if isinstance(key, ast.Constant) and key.value == "desktop")
         prompt_builder.PLATFORM_HINTS["desktop"] = base_hint
         before = build_system_prompt(agent)
         prompt_builder.PLATFORM_HINTS["desktop"] = fixed_hint

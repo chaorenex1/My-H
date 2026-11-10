@@ -1,0 +1,253 @@
+{
+  "version": 1,
+  "description": "System-prompt section registry (ADR-18 D1/D2). Order is assembly order within a tier; tier is one of stable/context/volatile and is decided here, never by a template.",
+  "tiers": ["stable", "context", "volatile"],
+  "gates": ["always", "tools", "skills", "tool_search", "coding_repo", "subagent", "kanban", "memory", "background_review"],
+  "overrides": {
+    "dir": "agents/<agent_name>/prompts",
+    "additional_communication": "memories/<agent_name>/additionalCommunication.md",
+    "default_agent_name": "default",
+    "scanned": "Override and additionalCommunication text is injected literally (never rendered by Jinja2) and must pass agent.prompt_builder._scan_context_content (ADR-18 D4/D13)."
+  },
+  "sections": [
+    {
+      "key": "rfc2119",
+      "path": "00-rfc2119.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": 400,
+      "truncate": "error",
+      "override": false,
+      "renderer": null,
+      "context_keys": [],
+      "context_types": {}
+    },
+    {
+      "key": "identity",
+      "path": "01-identity.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": null,
+      "truncate": "error",
+      "override": true,
+      "renderer": "identity",
+      "context_keys": ["role", "role_desc", "role_section", "auto_graph", "render_mermaid", "render_svg", "reactions"],
+      "context_types": {
+        "role": "str",
+        "role_desc": "str",
+        "role_section": "str",
+        "auto_graph": "bool",
+        "render_mermaid": "bool",
+        "render_svg": "bool",
+        "reactions": "bool"
+      }
+    },
+    {
+      "key": "safety",
+      "path": "02-safety.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": 2000,
+      "truncate": "error",
+      "override": false,
+      "renderer": null,
+      "context_keys": ["safety_rules", "safety_override"],
+      "context_types": {"safety_rules": "str", "safety_override": "bool"}
+    },
+    {
+      "key": "communication",
+      "path": "03-communication.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": 3000,
+      "truncate": "tail",
+      "override": true,
+      "renderer": null,
+      "context_keys": ["personality", "communication_style", "platform_hint"],
+      "context_types": {
+        "personality": "str",
+        "communication_style": "str",
+        "platform_hint": "str"
+      }
+    },
+    {
+      "key": "additional_communication",
+      "path": null,
+      "source": "memories/<agent_name>/additionalCommunication.md",
+      "tier": "stable",
+      "gate": "background_review",
+      "budget": 1000,
+      "truncate": "drop_oldest_lines",
+      "override": false,
+      "renderer": "additional_communication",
+      "context_keys": [],
+      "context_types": {}
+    },
+    {
+      "key": "internal_urls",
+      "path": "04-internal-urls.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "internal_urls",
+      "context_keys": ["internal_urls", "hermes_help_guidance", "kanban_guidance"],
+      "context_types": {
+        "internal_urls": "list",
+        "hermes_help_guidance": "str",
+        "kanban_guidance": "str"
+      }
+    },
+    {
+      "key": "memories",
+      "path": "05-memories.md",
+      "tier": "volatile",
+      "gate": "memory",
+      "budget": 5000,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "memories",
+      "context_keys": ["memories_guidance", "memories_user", "memories_self", "memories_provider"],
+      "context_types": {
+        "memories_guidance": "str",
+        "memories_user": "str",
+        "memories_self": "str",
+        "memories_provider": "str"
+      }
+    },
+    {
+      "key": "skills",
+      "path": "06-skills.md",
+      "tier": "volatile",
+      "gate": "skills",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "skills",
+      "context_keys": ["skills", "skill_view", "skill_manage", "skills_list"],
+      "context_types": {
+        "skills": "list",
+        "skill_view": "bool",
+        "skill_manage": "bool",
+        "skills_list": "bool"
+      }
+    },
+    {
+      "key": "rules",
+      "path": "07-rules.md",
+      "tier": "stable",
+      "gate": "coding_repo",
+      "budget": null,
+      "truncate": "head_tail",
+      "override": false,
+      "renderer": "rules",
+      "context_keys": ["rules"],
+      "context_types": {"rules": "list"}
+    },
+    {
+      "key": "tool_inventory",
+      "path": "08-tool-inventory.md",
+      "tier": "volatile",
+      "gate": "tool_search",
+      "budget": null,
+      "truncate": "head_tail",
+      "override": false,
+      "renderer": "tool_inventory",
+      "context_keys": ["tool_groups"],
+      "context_types": {"tool_groups": "list"}
+    },
+    {
+      "key": "tool_policy",
+      "path": "09-tool-policy.md",
+      "tier": "stable",
+      "gate": "tools",
+      "budget": 6000,
+      "truncate": "tail",
+      "override": true,
+      "renderer": "tool_policy",
+      "context_keys": [
+        "tool_use_enforcement",
+        "parallel_tool_calls",
+        "tool_guidance",
+        "steer_channel",
+        "google_operational_guidance",
+        "execution_guidance"
+      ],
+      "context_types": {
+        "tool_use_enforcement": "bool",
+        "parallel_tool_calls": "bool",
+        "tool_guidance": "str",
+        "steer_channel": "bool",
+        "google_operational_guidance": "bool",
+        "execution_guidance": "str"
+      }
+    },
+    {
+      "key": "workflow",
+      "path": "10-workflow.md",
+      "tier": "stable",
+      "gate": "coding_repo",
+      "budget": 3000,
+      "truncate": "head_tail",
+      "override": true,
+      "renderer": "workflow",
+      "context_keys": ["coding_brief", "operator_instructions"],
+      "context_types": {"coding_brief": "str", "operator_instructions": "str"}
+    },
+    {
+      "key": "delivery",
+      "path": "11-delivery.md",
+      "tier": "stable",
+      "gate": "tools",
+      "budget": 2000,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": [],
+      "context_types": {}
+    },
+    {
+      "key": "critical",
+      "path": "12-critical.md",
+      "tier": "stable",
+      "gate": "always",
+      "budget": 1000,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": ["subagent"],
+      "context_types": {"subagent": "bool"}
+    },
+    {
+      "key": "project_context",
+      "path": null,
+      "tier": "context",
+      "gate": "always",
+      "budget": null,
+      "truncate": "head_tail",
+      "override": false,
+      "renderer": "project_context",
+      "context_keys": [],
+      "context_types": {}
+    },
+    {
+      "key": "subagent_role",
+      "path": "subagent-role.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_role",
+      "context_keys": ["role", "context", "plan_reference", "peers", "completion"],
+      "context_types": {
+        "role": "str",
+        "context": "str",
+        "plan_reference": "bool",
+        "peers": "str",
+        "completion": "str"
+      }
+    }
+  ]
+}

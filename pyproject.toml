@@ -774,6 +774,7 @@ include = [
 # Judgment decision tables, contracts, and prompt assets are runtime data shipped in wheels.
 agent = [
   "prompts/**/*.md",
+  "prompts/system/*.json",
   "prompts/judge/*.json",
   "judgment/prompts/*.md",
   "judgment/schemas/*.json",

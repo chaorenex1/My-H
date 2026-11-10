@@ -1,0 +1,9 @@
+{
+  "kanban_intent": {
+    "instructions": "The `message` in state is the user's first message in a new session. Answer true when it asks to use the shared Kanban board — creating, claiming, dispatching, reviewing, unblocking, commenting on, or checking cards/tasks/work items on the board. Answer false for ordinary planning or to-do requests that do not name the board.",
+    "criteria": {
+      "true": "The message asks to use the Kanban board or its cards, dispatcher, review, or task lifecycle.",
+      "false": "The message is ordinary planning, a to-do list, or a task that does not involve the Kanban board."
+    }
+  }
+}

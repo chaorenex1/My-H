@@ -21,6 +21,9 @@ from hermes_constants import (
 )
 
 from agent.model_metadata import CHARS_PER_TOKEN
+from agent.prompts.hermes_help import hermes_agent_help_guidance
+from agent.prompts.kanban import kanban_guidance
+from agent.prompts.platforms import load_platform_hints
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS,
@@ -169,27 +172,17 @@ DEFAULT_AGENT_IDENTITY = (
     "it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default."
 )
 
-HERMES_AGENT_HELP_GUIDANCE = (
-    # Injected only when skill_view exists AND the hermes-agent skill is installed (system_prompt.py slot
-    # resolution). No "when the two differ" clause: docs-are-authoritative already carries the precedence.
-    # Names Hermes Agent without restating identity: SOUL.md line 1 already says who you are, while a custom
-    # persona (no Hermes identity line) still learns from "Hermes Agent itself" + "your own features" what it runs on.
-    "For help with Hermes Agent itself — configuring, setting up, using, extending, or troubleshooting it — "
-    "or to understand your own features, tools, or capabilities, the documentation at "
-    "https://hermes-agent.nousresearch.com/docs is your "
-    "authoritative reference and always holds the latest, most up-to-date information. The `hermes-agent` "
-    "skill has the actual commands and proven workflows — load it with skill_view(name='hermes-agent') "
-    "before configuring, modifying, or troubleshooting Hermes so you don't guess or invent workarounds."
-)
+# Injected only when skill_view exists AND the hermes-agent skill is installed (system_prompt.py slot
+# resolution). No "when the two differ" clause: docs-are-authoritative already carries the precedence.
+# Names Hermes Agent without restating identity: SOUL.md line 1 already says who you are, while a custom
+# persona (no Hermes identity line) still learns from "Hermes Agent itself" + "your own features" what it runs on.
+# Text is data: agent/prompts/system/hermes-agent-help-guidance.md (also appended to internal URLs
+# when the first user message asks about Hermes itself).
+HERMES_AGENT_HELP_GUIDANCE = hermes_agent_help_guidance()
 
 # Variant for sessions without the skills toolset (e.g. Blank Slate): naming skill_view() there would dangle.
-HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS = (
-    "For help with Hermes Agent itself — configuring, setting up, using, extending, or troubleshooting it — "
-    "or to understand your own features, tools, or capabilities, the documentation at "
-    "https://hermes-agent.nousresearch.com/docs is the "
-    "authoritative reference and always holds the latest, most up-to-date information. Point the user there "
-    "(or read it yourself if you have a way to fetch web content)."
-)
+# Text is data: agent/prompts/system/hermes-agent-help-guidance-no-skills.md.
+HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS = hermes_agent_help_guidance(with_skills=False)
 
 
 # Keep the every-session memory scope even when task knowledge cannot be saved as a skill.
@@ -261,86 +254,8 @@ SESSION_SEARCH_GUIDANCE = (
 # (agent/context_compressor_tail.py::with_skill_safety_rule): fresh sessions no longer pay for it.
 SKILLS_GUIDANCE = "When you work out a non-trivial workflow, record it with skill_manage for future reuse."
 
-KANBAN_GUIDANCE = (
-    "# Kanban task execution protocol\n"
-    "You have been assigned ONE task from the shared board at `~/.hermes/kanban.db`. Your task id is in "
-    "`$HERMES_KANBAN_TASK`; your workspace is `$HERMES_KANBAN_WORKSPACE`. The `kanban_*` tools in your schema are your "
-    "primary coordination surface — they write directly to the shared SQLite DB and work regardless of terminal "
-    "backend (local/docker/modal/ssh).\n"
-    "\n"
-    "## Lifecycle\n\n"
-    "1. **Orient.** Call `kanban_show()` first (no args — it defaults to your task). The response includes title, "
-    "body, parent-task handoffs (summary + metadata), any prior attempts on this task if you're a retry, the full "
-    "comment thread, and a pre-formatted `worker_context` you can treat as ground truth.\n"
-    "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before any file operations. The workspace is "
-    "yours for this run. Don't modify files outside it unless the task explicitly asks.\n"
-    "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` every few minutes during long subprocesses "
-    "(training, encoding, crawling). Skip heartbeats for short tasks. **If your task may run longer than 1 hour, you "
-    "MUST call `kanban_heartbeat` at least once an hour** — the dispatcher reclaims tasks running past "
-    "`kanban.dispatch_stale_timeout_seconds` (default 4 hours) when no heartbeat has arrived in the last hour. A "
-    "reclaim re-queues the task as `ready` without penalty (no failure counter tick), but you lose your current run's "
-    "progress.\n"
-    "4. **Block on genuine ambiguity.** If you need a human decision you cannot infer (missing credentials, UX choice, "
-    "paywalled source, peer output you need first), call `kanban_block(reason=\"...\")` and stop. Don't guess. The "
-    "user will unblock with context and the dispatcher will respawn you.\n"
-    "5. **Finish with the review model encoded by the task graph.** Always include the structured handoff (`summary`, "
-    "`metadata`) on the lifecycle transition itself; never put secrets, tokens, or raw PII in these durable fields. If "
-    "`kanban_show()` lists child IDs, inspect those cards with `kanban_show(task_id=...)` before choosing the terminal "
-    "action. When any pre-created review, QA, or release child depends on your task, call `kanban_complete`: your "
-    "implementation phase is done, and completion is what releases those children. Never sticky-block that parent for "
-    "`review-required` and never request same-card review as well — either choice would strand or duplicate the "
-    "downstream lane. Otherwise, when this same task needs review before it is final, call "
-    "`kanban_request_review(summary=..., metadata=..., reviewer=<optional-profile>)`. The reviewer approves with "
-    "`kanban_complete`, returns actionable rework with `kanban_request_changes`, or uses `kanban_block` only for a "
-    "genuine external escalation. Review is not a block, so repeated review cycles do not trip unblock-loop "
-    "detection.\n"
-    "6. **If follow-up work appears, create it; don't do it.** Use `kanban_create(title=..., assignee=<right-profile>, "
-    "parents=[your-task-id])` to spawn a child task for the appropriate specialist profile instead of scope-creeping "
-    "into the next thing.\n"
-    "7. **Flag collision hotspots; don't pile on.** If your change keeps colliding with sibling branches in one file, "
-    "or a file your diff touches shows up in other cards' recent comments, do not silently add more to it: leave a "
-    "`kanban_comment` starting with `hotspot: <path> — <one-line reason>` on your card and repeat the flag in your "
-    "completion metadata, so the orchestrator can decompose that file before more work lands on it.\n"
-    "\n"
-    "## Orchestrator mode\n\n"
-    "If your task is itself a decomposition task (e.g. a planner profile given a high-level goal), use `kanban_create` "
-    "to fan out into child tasks — one per specialist, each with an explicit `assignee` and `parents=[...]` to express "
-    "dependencies. Then `kanban_complete` your own task with a summary of the decomposition. Do NOT execute the work "
-    "yourself; your job is routing, not implementation.\n"
-    "\n"
-    "**Decision ownership.** Design decisions belong to you, the orchestrator, not to workers — settle naming schemes, "
-    "schemas, file formats, and API shapes before fanning out. Never let two subtree cards decide the same question: "
-    "if two tasks would each pick one, decide it yourself and write the decision into BOTH card bodies. Every child "
-    "card body must carry the decisions it depends on, because workers cannot see sibling context.\n"
-    "\n"
-    "## Reference details that change outcomes\n\n"
-    "- **Workspace.** `cd $HERMES_KANBAN_WORKSPACE` first. For a `worktree` kind with no `.git`, `git worktree add "
-    "<path> ${HERMES_KANBAN_BRANCH:-wt/$HERMES_KANBAN_TASK}` from the main repo, then cd there. For a project-linked "
-    "task the workspace is a fresh `<repo>/.worktrees/<task-id>` and `$HERMES_KANBAN_BRANCH` a deterministic "
-    "`<project-slug>/<task-id>` — the main repo is two levels up, so run `git worktree add` from there.\n"
-    "- **Deliverables.** Files a human wants go in `kanban_complete(artifacts=[<absolute paths>])` (top-level param; "
-    "paths in `metadata` are NOT uploaded). Files must exist at completion.\n"
-    "- **Attachments.** Attach real downloadable artifacts instead of pasting links in comments: `kanban_attach` "
-    "(base64) or `kanban_attach_url` (server-side public http(s) fetch); 25 MB cap, `kanban_attachments` lists them. "
-    "Workers may only attach to their own task.\n"
-    "- **Created cards.** List ids in `kanban_complete(created_cards=[...])` ONLY when captured from a successful "
-    "`kanban_create` return — never invent or paste ids; the kernel rejects the completion on any phantom id.\n"
-    "- **Orchestrating: discover profiles first.** The dispatcher SILENTLY drops a card with an unknown assignee (it "
-    "sits in `ready` forever). Ground every assignee in a real profile (`hermes profile list`, or ask the user), and "
-    "express dependencies via `parents=[...]` on `kanban_create`, not prose.\n"
-    "\n"
-    "## Do NOT\n\n"
-    "- Do not shell out to `hermes kanban <verb>` for board operations. Use the `kanban_*` tools — they work across "
-    "all terminal backends.\n"
-    "- Do not complete a task you didn't actually finish. Block it.\n"
-    "- Do not call `clarify` to ask questions. You are running headless — there is no live user to answer. The call "
-    "will time out and the task will sit silently in `running` with no signal to the operator. Instead: "
-    "`kanban_comment` the context, then `kanban_block(reason=...)` so the task surfaces on the board as needing "
-    "input.\n"
-    "- Do not assign follow-up work to yourself. Assign it to the right specialist profile.\n"
-    "- Do not call `delegate_task` as a board substitute. `delegate_task` is for short reasoning subtasks inside your "
-    "own run; board tasks are for cross-agent handoffs that outlive one API loop."
-)
+# Text is data: agent/prompts/system/kanban-guidance.md.
+KANBAN_GUIDANCE = kanban_guidance()
 
 TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "# Tool-use enforcement\n"
@@ -682,59 +597,8 @@ DEVELOPER_ROLE_MODELS = ("gpt-5", "codex")
 
 # Hints for core surfaces only. A messaging platform's hint ships with its plugin
 # (``PlatformEntry.platform_hint``, read by agent/system_prompt._default_platform_hint).
-PLATFORM_HINTS = {
-    "cron": (
-        "You are running as a scheduled cron job. There is no user present — you cannot ask questions, "
-        "request clarification, or wait for follow-up. Execute the task fully and autonomously, making "
-        "reasonable decisions where needed. Your final response is automatically delivered to the job's "
-        "configured destination — put the primary content directly in your response."
-    ),
-    "cli": (
-        # Maintainer-verified live: the CLI prints raw text.
-        "You are in a plain terminal (CLI). Markdown does NOT render — asterisks, headers, and fences appear as "
-        "literal characters, so write plain text (indentation and blank lines are your only layout tools). Files: "
-        "there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — "
-        # The cron local-only delivery caveat lives in cronjob_manage's deliver description (deferred: paid
-        # only when the tool is loaded), not in every CLI/TUI prompt.
-        "deliver a file by stating its absolute path or URL in plain text; the user opens it themselves."
-    ),
-    "tui": (
-        # Same file-delivery reality as the CLI: no MEDIA: interception in tui/.
-        "You are in the Hermes terminal UI (TUI). Files: there is no attachment channel and MEDIA:/path tags "
-        "are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path "
-        "or URL in plain text."
-    ),
-    "desktop": (
-        # Every claim verified against the shipping renderer (inline-preview-directive.tsx). Widget text is
-        # recipe-first: HOW (an inline widget IS a ::preview'd HTML file) and WHY (the frame injects the theme
-        # prelude first; width adopts the first measured span). setup_mcp is taught by its own tool schema.
-        "You are chatting inside the Hermes desktop app, a graphical chat surface. Markdown renders with full GitHub "
-        "flavor (tables, syntax-highlighted code, math via $...$, task lists, callouts). Deliver files by writing "
-        "MEDIA:/absolute/path/to/file — any file type: images/audio/video render inline, everything else becomes a "
-        "card with Download and preview buttons. Remote image URLs render via ![alt](url); local files ONLY via MEDIA: "
-        "(local markdown images are blocked). Inline widget/chart (living IN the chat): write an HTML file, then put "
-        "::preview{file=\"path.html\"} alone on its own line (plugins can register more ::name{...} directives). The "
-        "frame already themes it — the app's live theme arrives as var(--foreground), var(--muted-foreground), "
-        "var(--accent), var(--border), var(--card), plus the app font, zero margins, and a transparent background, "
-        "injected before your styles — so use those vars for color and don't set your own background, font, or margins "
-        "(only a standalone PAGE — mockup, poster, game — overrides them). The frame sizes itself to your content: "
-        "height live, width from the content's first measured span — lay content flush left with no centering wrappers "
-        "or it measures full-bleed. Widgets talk back: data-hermes-send=\"prompt\" on any clickable element (or "
-        "window.hermes.send(\"prompt\")) sends that prompt as a hidden user turn — answer it by updating the widget's "
-        "file, not with prose."
-    ),
-    "api_server": (
-        "You're responding through an API server. The rendering layer is unknown — assume plain text. No markdown "
-        "formatting (no asterisks, bullets, headers, code fences). Treat this like a conversation, not a document. "
-        "Keep responses brief and natural. File/media delivery: images referenced as MEDIA:/absolute/path tags "
-        "(.png/.jpg/.jpeg/.gif/.webp/.bmp, up to 5MB) are inlined as base64 data URLs in responses on the chat, "
-        "completions, and responses endpoints. Non-image files are NOT intercepted anywhere, and the runs endpoint "
-        "intercepts nothing — a MEDIA: tag there renders as literal text exposing a raw host filesystem path. For "
-        "those cases, state the plain file path in your response text instead of a MEDIA: tag."
-    ),
-    # No "webui" hint on purpose: nothing constructs platform="webui" (the dashboard chat resolves to
-    # 'desktop' or 'tui'). If a real WebUI chat surface ships, write a hint from its actual renderer.
-}
+# The default texts are data: agent/prompts/system/platforms/<platform>.md.
+PLATFORM_HINTS = load_platform_hints()
 
 # Telegram rich-messages extension — injected only with
 # ``platforms.telegram.extra.rich_messages: true`` (gateway.* or top-level).

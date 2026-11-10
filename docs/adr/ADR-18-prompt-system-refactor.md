@@ -1,13 +1,14 @@
 # ADR-18：提示词系统章节化与能力判定搜索（omp prompt-system 对齐）
 
-**状态**：提议（2026-11-08）。分阶段：**P0** 章节注册表（零行为）；**P1** 常量迁移与预算；
-**P2** 新章节；**P3** 统一 LRU 与判定搜索；**P4** 默认范围与工具清单；**P5** 清理与文档。
+**状态**：提议（2026-11-08；2026-11-10 修订：渲染引擎定为 Jinja2，新增 D13）。分阶段：
+**P0** 章节注册表与渲染引擎（零行为）；**P1** 常量迁移与预算；**P2** 新章节；
+**P3** 统一 LRU 与判定搜索；**P4** 默认范围与工具清单；**P5** 清理与文档。
 
 **决策摘要**：
 
-1. 系统提示词从 Python 常量改为“**章节注册表 + Markdown 叶子文本 + Python renderer**”。
+1. 系统提示词从 Python 常量改为“**章节注册表 + Markdown/Jinja2 叶子模板 + Python 装配器**”。
    装配入口仍是 `build_system_prompt_parts()`，仍返回 `stable/context/volatile` 三档。
-2. 章节集合采用 `prmpt-system.md` 的 16 节，但**不采用它的 tier 顺序**：tier 由 Hermes 的
+2. 章节集合采用 `docs/prompt-system.md` 的 16 节，但**不采用它的 tier 顺序**：tier 由 Hermes 的
    缓存语义决定，`<project-context>` 不作为字面缓存断点。
 3. 每节字符预算进 `config.yaml` 的 `prompts.budgets`；默认值先用实测上限，再按 eval 下调，
    不直接采用 omp 的 400/2400/2000/1000。
@@ -17,10 +18,13 @@
    `tool_search` 增加判定路径，`skills_list` 增加可选 `query` 参数，`judrg` 增加 ≤5 候选词
    扩展；全部可回退 BM25/rg。
 6. 新增统一 LRU：上限、purpose 隔离、LRU/LFU/FIFO/TTL 策略、批量淘汰；`judrg` /
-   `tool_search` / `skills_list(query=...)` 使用 `cap=10, evict=("lfu", 3)`；不替代判定
+   `tool_search` / `skills_list(query=...)` 使用 `cap=10, evict=("lru", 3)`；不替代判定
    答案 SQLite 缓存。
 7. **P0/P1 必须让 `tests/ci/test_prompt_surface.py` 快照逐字节不变**；P2 起任何 prompt
    字节变化必须同 PR 重新生成快照并附维护者批准。
+8. 渲染引擎统一为 **Jinja2**（`jinja2==3.1.6`，已是核心依赖，不新增依赖）：模板只做插值与对
+   预构造上下文的循环/条件；章节选择、tier、预算、截断、override 与注入扫描仍在 Python
+   （D13）。用户可写的 override/additionalCommunication 按字面文本注入，**不经过 Jinja2**。
 
 **关联**：ADR-4（eval prelude 明确不移植）、ADR-5（compaction/recap）、ADR-6（TTSR）、
 ADR-11/ADR-17（judgment 旁路）、ADR-12（omp 工作流消费者）；
@@ -28,15 +32,18 @@ ADR-11/ADR-17（judgment 旁路）、ADR-12（omp 工作流消费者）；
 `tests/ci/test_prompt_surface.py`、`scripts/ci/prompt_surface.py`。
 
 **取证口径**：设计源 `C:\Users\zarag\Documents\prmpt-system.md`；Hermes 当前工作树
-（2026-11-08）。字符数用仓库 `.venv` 直接导入 `agent.prompt_builder` / `agent.coding_context`
-测得；omp 行为只作为设计输入，不作为 Hermes 现有实现的证据。
+（2026-11-08；Jinja2 依赖状态 2026-11-10 核对）。字符数用仓库 `.venv` 直接导入
+`agent.prompt_builder` / `agent.coding_context` 测得；omp 行为只作为设计输入，不作为
+Hermes 现有实现的证据。Jinja2 版本以 `pyproject.toml` 的 `jinja2==3.1.6` 为准，仓库内暂无
+Jinja2 消费者；既有 Handlebars 方言渲染器为 `agent/judgment/rendering.py`（2026-11-10 核对）。
 
 **范围**：
 
 - **做**：系统提示词章节化、预算、override、请求级注入的边界确认、tool/skill/judrg 的判定
   路由、统一 LRU、默认技能与工具清单、持久化与缓存不变量、CI 快照门。
 - **不做**：新增通用 `judge` 模型工具；把请求级提醒搬进系统提示；迁移所有历史 ad-hoc 缓存；
-  改变主 provider 路由；消息平台/Desktop/ACP 的专属 prompt 设计；eval prelude 本体。
+  改变主 provider 路由；消息平台/Desktop/ACP 的专属 prompt 设计；eval prelude 本体；
+  `agent/judgment/rendering.py` 的方言渲染器与其 prompts（保持 omp 字节兼容，统一另立 ADR）。
 
 ---
 
@@ -112,16 +119,16 @@ tier”，但 `agent/system_prompt.py` 把 `skills_prompt` 放进 `volatile_part
 | 选项 | 结论 | 理由 |
 |---|---|---|
 | A. 只改文案，不建章节/预算 | 否 | 无法满足预算、override、章节 gating 的需求；每节改动仍是代码 diff |
-| B. 全量照搬 omp 章节顺序与模板引擎 | 否 | 破坏 Hermes 三档缓存与 6 处持久化解析器；引入 Handlebars 依赖；预算与实测冲突 |
+| B. 全量照搬 omp 章节顺序与 Handlebars 模板 | 否 | 破坏 Hermes 三档缓存与 6 处持久化解析器；Handlebars 需额外运行时，语法与转义语义又和已存在的 Jinja2 不同；模板不应拥有 tier/gate 决策（D13） |
 | C. 分阶段：先零行为章节化，再迁移内容，再上判定搜索（本 ADR） | **采用** | P0/P1 可保持快照逐字节不变；P2 起每步都有可审的真实 prompt diff；判定搜索可独立回退 |
 
 ---
 
 ## 决策
 
-### D1. 章节注册表：Markdown 叶子文本 + Python renderer
+### D1. 章节注册表：Markdown/Jinja2 叶子模板 + Python 装配器
 
-新增 `agent/prompts/system/` 与 `agent/prompt_sections.py`：
+新增 `agent/prompts/system/`、`agent/prompts/prompt_sections.py` 与 `agent/prompts/renderer.py`：
 
 ```text
 agent/prompts/system/
@@ -140,7 +147,17 @@ agent/prompts/system/
   12-critical.md
   subagent-role.md
   manifest.json
+  platforms/
+    cli.md
+    tui.md
+    desktop.md
+    api_server.md
+    cron.md
+    omp-ui.md
 ```
+
+核心平台默认提示词是数据文件（`platforms/<platform>.md`，由
+`agent/prompts/platforms.py::load_platform_hints` 加载）；消息平台提示词仍随插件。
 
 ```python
 @dataclass(frozen=True)
@@ -153,15 +170,17 @@ class PromptSection:
     override: bool = False
     truncate: str = "tail"    # tail | head_tail | drop_oldest_lines | error
     renderer: str | None = None
+    context_keys: tuple[str, ...] = ()   # Jinja2 上下文白名单（D13）
 ```
 
 规则：
 
 - **静态正文在 md**；动态内容（技能索引、记忆内容、工具清单、internal URLs、项目上下文）
-  仍由 Python renderer 产出，md 只放包装与引导。
-- 复用 `agent/advisor_prompts.py:142` 的 `render_system_prompt()` 模式：有序 block 列表，
-  空块直接省略。**不引入 Handlebars**；文档的 `{{#if}}/{{#each}}` 编译为 Python gate 与
-  renderer，md 只保留叶子文本。
+  由 Python renderer 产出字符串（或 `list[str]`），作为该节模板的上下文，md 只放包装与引导。
+- 复用 `agent/advisor_prompts.py:142` 的 `render_system_prompt()` 的空块省略约定，但**渲染
+  交给 Jinja2**（D13），不是 Handlebars：文档的 `{{#if}}/{{#each}}` 映射为 `{% if %}`/
+  `{% for %}`，且只允许作用于该节已构造好的上下文。章节的选择、tier、预算、截断与 override
+  判定仍由 Python registry 决定，模板不能自行决定某节是否出现。
 - md 文件**进程内只读一次**，保证字节稳定；预算从 config 读取，改动在下一会话生效。
 - `build_system_prompt_parts()` 签名与返回结构不变，`_cached_system_prompt_static`、
   `reconstruct_static_prefix()`、插件段恢复无需重写。
@@ -173,16 +192,16 @@ class PromptSection:
 | RFC 2119 | stable | always | 固定 400 字符，永不截断 |
 | identity | stable | always | SOUL.md 或 `DEFAULT_AGENT_IDENTITY` |
 | safety | stable | always | 策略性约束，不复述工具 schema |
-| communication/personality | stable | always | 人格与输出风格；SOUL.md 可覆盖 |
+| communication | stable | always | 人格（变量、无默认）、交流风格（默认可被变量覆盖）、平台命中（变量、无默认） |
 | override communication | stable | override 存在时 | 完全替换上一节 |
 | additionalCommunication | stable | `auxiliary.background_review.enabled` | 按行淘汰 |
-| internal URLs | stable | always | 只放路径，不放内容 |
-| rules | stable | coding_repo | TTSR 规则的名称、描述、路径 |
+| internal URLs | stable | always | `§ Runtime` 下；代码内固定列举 `$HERMES_HOME` 子目录（home 本身只写在引言），渲染器不接受外部目录列表；首次输入经 `prompts/judge/hermes-agent-help.json` 判定为 Hermes 自身求助时附加 `system/hermes-agent-help-guidance.md`；安全节禁止泄露这些位置 |
+| rules | stable | coding_repo | `§ Runtime` 下；内置规则全量加载不被覆盖，`$HERMES_HOME/rules` 按项目语言附加；语言检测用 `rg --files` 后缀计数 >1，非编程项目不渲染 |
 | tool policy | stable | tools | 现有 guidance 归并 |
 | workflow | stable | always | coding brief 与工作流约束 |
 | delivery / critical | stable | always | 现有完成度约束归并、去重 |
 | memories | volatile | memory enabled | `<memories>` 包装；内容冻结快照 |
-| skills index | volatile | skills tools | 保持现状（代码为准，文档待修正） |
+| skills | volatile | skills tools | 三部分：技能向导（固定）/ 内置技能列表（`skills` 列表变量，name: description；默认由 `get_bundled_skills_dir()` 发现）/ 额外搜索向导（固定）；`§ Runtime` 由渲染器加在块首 |
 | tool inventory | volatile | tools + tool_search 激活 | 只列延迟/门控工具组，避免重复计费 |
 | project context | context | always | 现有 `.hermes.md` / AGENTS.md / CLAUDE.md / `.cursorrules` |
 | subagent role | context | subagent | 由 `system_message` 或 agent 定义提供 |
@@ -206,8 +225,8 @@ class PromptSection:
 
 | 策略 | 适用 | 行为 |
 |---|---|---|
-| `error` | RFC 2119、identity 的固定部分 | 超限直接拒绝构建并诊断，不静默截断 |
-| `tail` | safety、communication、tool policy、delivery | 保留头部，尾部加 `[...truncated N chars...]` |
+| `error` | RFC 2119、identity 的固定部分、safety（含自定义规则） | 超限直接拒绝构建并诊断，不静默截断 |
+| `tail` | communication、tool policy、delivery | 保留头部，尾部加 `[...truncated N chars...]` |
 | `head_tail` | workflow、大段 rules | 头 70% + 标记 + 尾 20%（复用 `_truncate_content` 的比例） |
 | `drop_oldest_lines` | additionalCommunication | 从首行开始丢弃，直到满足预算 |
 
@@ -294,8 +313,8 @@ class PurposeCache:
 
 - 进程内、线程安全；按 **profile home + purpose** 隔离（一个进程服务多个 profile）。
 - `judrg` / `tool_search` / `skills_list(query=...)` 使用
-  `CachePolicy(max_entries=10, eviction="lfu", evict_batch=3)`，即文档的“最近 10 条、
-  淘汰命中次数最少的 3 条”；同分按最久未使用淘汰。
+  `CachePolicy(max_entries=10, eviction="lru", evict_batch=3)`，即文档的“最近 10 条、
+  淘汰最久未使用的 3 条”；同分按最久未使用淘汰。
 - 键包含查询、cwd/scope、配置指纹；**必须带 TTL 或文件 mtime 指纹**（建议 `ttl_s=60`），
   否则改文件后返回陈旧搜索结果，这是文档漏掉的正确性风险。缓存命中也记录来源，诊断可见。
 - 不与 `agent/judgment/cache.py` 混用：那是 SQLite 判定答案缓存（`max_states=50_000`），
@@ -381,8 +400,8 @@ prompts:
   budgets:
     rfc2119: 400
     identity: 2400          # P1 实测后可能上调
-    safety: 1000
-    communication: 1200
+    safety: 2000            # 含 <safety-policy> 包装开销；默认渲染 1025
+    communication: 3000      # 默认 882 + desktop 平台提示 1406
     additional_communication: 1000
     memories: 5000          # 与 MEMORY 2200 + USER 1375 + guidance 1036 对齐
     tool_policy: 6000       # P1 实测后收紧
@@ -408,8 +427,8 @@ tools:
 cache:
   purposes:
     find:        {max_entries: 10, eviction: lfu, evict_batch: 3, ttl_s: 60}
-    tool_choice: {max_entries: 10, eviction: lfu, evict_batch: 3, ttl_s: 300}
-    skill_choice:{max_entries: 10, eviction: lfu, evict_batch: 3, ttl_s: 60}
+    tool_choice: {max_entries: 10, eviction: lru, evict_batch: 3, ttl_s: 300}
+    skill_choice:{max_entries: 10, eviction: lru, evict_batch: 3, ttl_s: 60}
 ```
 
 新增的顶层键会被 `tests/ci/test_docs_drift.py` 的 ratchet 检查。**每个引入新键的阶段**
@@ -417,14 +436,83 @@ cache:
 `skills.index` / `skills.search`）都必须在同一 PR 更新
 `website/docs/user-guide/configuration.md` 并运行该测试，否则 PR 红。
 
+### D13. Jinja2 渲染引擎
+
+**依赖**：`jinja2==3.1.6` 已精确 pin 在 `pyproject.toml` 的 `dependencies`（核心依赖列表
+统一带 `python_version >= '3.14'` 标记，即 Hermes 的实际支持面），因此本决策**不新增依赖、
+不改 `uv.lock`**。仓库内目前没有 Jinja2 消费者，本决策是首个。升级 Jinja2 必须单独 PR，
+并在同一 PR 重新生成 9 个 surface 快照。
+
+**单例环境**（新 `agent/prompt_template.py`）：
+
+```python
+def build_environment(sources: Mapping[str, str]) -> Environment:
+    return Environment(
+        loader=DictLoader(sources),      # 只含 manifest 登记的模板，进程内读一次
+        autoescape=False,                # prompt 是纯文本；HTML 转义会改字节
+        undefined=StrictUndefined,       # 缺键在构建期失败，不静默变空
+        trim_blocks=False,
+        lstrip_blocks=False,
+        keep_trailing_newline=True,      # 默认 False 会丢尾换行
+        newline_sequence="\n",           # Windows 上也输出 LF
+        extensions=[],
+    )
+
+_RENDER_ENV = build_environment(_load_registered_templates())
+```
+
+- `DictLoader` 只装 manifest 列出的文件：`{% include %}` / `{% extends %}` 指向未登记模板
+  会在渲染时抛 `TemplateNotFound`，跨节耦合无从发生；也没有 mtime/`auto_reload` 语义，天然
+  满足 D1 的“进程内只读一次”。`build_environment()` 可注入 `sources` 供测试构造反例。
+- 空白由模板内的 `{%-` / `-%}` 显式控制，不依赖环境级 trim 开关；最终字节仍由快照门裁定。
+- 模板正文不得含 Jinja2 之外的字面 `{{` / `{%`。`agent/prompt_builder.py`、
+  `agent/system_prompt.py`、`agent/ttsr_prompts.py` 已核对无命中；但仓库内其他提示词常量仍有
+  字面量（如 `agent/agent_runtime_helpers.py:104` 的 `_TRAJECTORY_SYSTEM_PROMPT` 用双花括号给
+  `.format()` 转义）。这些不在本 ADR 迁移范围；**任何**迁入 `agent/prompts/system/` 的文本必须
+  先扫描分隔符，命中则包进 `{% raw %}` 或改为上下文注入。
+- 机械门：每个登记模板都用其 `context_keys` 的最小样例渲染一次；遗漏的 `{{ ... }}` 会以
+  `UndefinedError` 暴露，而不是静默产出错误字节。
+- 并发：`DictLoader` 与 `Environment` 共用进程内 `LRUCache`（默认 `cache_size=400`），其读写
+  由 `LRUCache._wlock` 保护；`Template.render` 不修改模板或环境状态，多会话并发渲染安全。
+  miss 时并发首次加载最多重复编译一次，不影响输出字节，不新增缓存。
+
+**职责边界**（防止模板变成第二套决策层）：
+
+| 层 | 负责 |
+|---|---|
+| `manifest.json` + `agent/prompts/prompt_sections.py` | 章节集合、顺序、tier、gate、budget、truncate、override 是否存在 |
+| Python renderer（`agent/prompt_builder.py`） | 动态内容：identity、skills 行、memories 块、rules 行、inventory 分组、internal URLs、project context；产出 `str` 或 `list[str]` |
+| Jinja2 模板 | 只做该节的插值，以及对上述已构造值的 `{% for %}` / `{% if %}`；不读文件、配置、环境变量、网络或进程状态 |
+| `agent/system_prompt.py` | 三档拼接、`\n\n` 连接、缓存与持久化（现状不变） |
+| `agent/judgment/rendering.py` | **不在本 ADR 范围**：自研 `if`/`unless`/`each`/`@last`/`raw` 方言，渲染 `agent/judgment/prompts/*.md` 与 question instructions，保持 omp 字节兼容；Jinja2 不接管，统一另立 ADR |
+
+**上下文契约**：每节只传入显式 dict，键集合由 `PromptSection.context_keys` 声明，值类型限于
+`str | int | bool | list[str]`；`StrictUndefined` 保证漏键即失败。禁止传对象、`Path` 或回调，
+避免模板属性访问绕过 Python 的可审计边界。
+
+**安全**：模板源只来自包内只读文件（受代码评审与 wheel 完整性约束）。`$HERMES_HOME` 下的
+override 与 additionalCommunication 是用户可写内容，**按字面文本插入**，即使包含 `{{ ... }}`
+也不求值；两者仍走 `_scan_context_content`。若未来要让 override 支持变量，必须改用
+`SandboxedEnvironment`，并在扫描阶段直接拒绝 `{%` / `{{`，不得复用本节的环境。
+
+**测试**（新 `tests/agent/test_prompt_template.py`）：
+
+1. 同一上下文连续渲染两次字节相同，输出不含 `\r`；
+2. 缺失 context key 抛 `UndefinedError`；
+3. 含 `{{ ... }}` 的 override 文件按字面输出，不求值；
+4. 已登记模板 `{% include %}` 未登记名称时抛 `TemplateNotFound`；
+5. 每个登记模板用其 `context_keys` 的最小样例渲染通过（字面分隔符会以 `UndefinedError` 暴露）；
+6. P0/P1 由 `tests/ci/test_prompt_surface.py` 的 9 个 surface 逐字节快照兜底。
+
 ---
 
 ## 协议与实现落点
 
 | 组件 | 文件 | 内容 |
 |---|---|---|
-| 章节注册表 | 新 `agent/prompt_sections.py` | `PromptSection`、manifest 加载、预算、截断、gate |
-| 章节正文 | 新 `agent/prompts/system/*.md` + `manifest.json` | 叶子文本与顺序 |
+| 章节注册表 | 新 `agent/prompts/prompt_sections.py` | `PromptSection`、manifest 加载、预算、截断、gate |
+| 章节正文 | 新 `agent/prompts/system/*.md` + `manifest.json` | Jinja2 叶子模板（语法见 D13）与顺序 |
+| 模板引擎 | 新 `agent/prompt_template.py` | `build_environment()`、`DictLoader`、`StrictUndefined`、按节渲染与诊断 |
 | 装配 | `agent/system_prompt.py` | 保持三档返回；改为调用 registry |
 | 渲染器 | `agent/prompt_builder.py` | identity、skills、memory、context、internal URLs、rules、inventory |
 | 统一缓存 | 新 `agent/cache/lru.py` | `PurposeCache`、`CachePolicy` |
@@ -436,7 +524,7 @@ cache:
 | 背景 review | `agent/background_review.py` | 产出 additionalCommunication，按预算裁剪 |
 | 打包 | `pyproject.toml` | `prompts/system/*.md`、`prompts/system/*.json` |
 | 文档 | `website/docs/developer-guide/prompt-assembly.md` | 修正 skills tier 漂移；补章节表 |
-| 测试 | `tests/ci/test_prompt_surface.py`、新 `tests/agent/test_prompt_sections.py`、`tests/agent/test_lru_cache.py`、`tests/tools/test_skills_tool.py` | 快照、预算、缓存、回退 |
+| 测试 | `tests/ci/test_prompt_surface.py`、新 `tests/agent/test_prompt_sections.py`、`tests/agent/test_prompt_template.py`、`tests/agent/test_lru_cache.py`、`tests/tools/test_skills_tool.py` | 快照、预算、Jinja2 契约、缓存、回退 |
 
 **不再保留**：迁移完成后删除 `agent/prompt_builder.py` 中被 md 取代的章节常量与
 `agent/ttsr_prompts.py` 的模板字符串（保留渲染函数）；不保留 re-export shim。
@@ -447,10 +535,10 @@ cache:
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P0 | 章节注册表 + md loader；内容仍用现有常量渲染；快照不变 | `test_prompt_surface` 的 9 个 surface 通过；新增单测覆盖 subagent/kanban/no-tools 章节选择；无内容 diff |
-| P1 | 常量迁移到 `agent/prompts/system/*.md`；预算配置面（先只告警）；修正 prompt-assembly 文档 | 快照逐字节不变；预算报告列出每节实测/上限；文档与代码 tier 一致；新增 `prompts.*` 已在 `website/docs` 文档化，`tests/ci/test_docs_drift.py` 通过 |
+| P0 | 章节注册表 + Jinja2 环境/loader；内容仍用现有常量渲染；快照不变 | `test_prompt_surface` 的 9 个 surface 通过；新增单测覆盖 subagent/kanban/no-tools 章节选择与 `test_prompt_template` 的确定性/`StrictUndefined`/`TemplateNotFound`；无内容 diff |
+| P1 | 常量迁移到 `agent/prompts/system/*.md`（Jinja2 模板）；预算配置面（先只告警）；修正 prompt-assembly 文档 | 快照逐字节不变；逐节核对无字面 `{{`/`{%`（必要时 `{% raw %}`）；预算报告列出每节实测/上限；文档与代码 tier 一致；新增 `prompts.*` 已在 `website/docs` 文档化，`tests/ci/test_docs_drift.py` 通过 |
 | P2 | 新章节：RFC、safety、communication/override、additionalCommunication、internal URLs、rules、delivery、critical；预算生效 | 同 PR 提交重新生成的快照；override 文件过注入扫描；截断策略测试；旧会话重放不变 |
-| P3 | 统一 LRU + `tool_search` 判定 + `skills_list(query=...)` + `judrg` 候选扩展 | judge 不可用/报错 100% 回退；purpose 隔离；10/LFU-3 测试；成本门生效；`skills_list` 可选参数改动同 PR 更新工具快照；`tools.tool_search.judge` / `cache.purposes` 已文档化且 `test_docs_drift` 通过 |
+| P3 | 统一 LRU + `tool_search` 判定 + `skills_list(query=...)` + `judrg` 候选扩展 | judge 不可用/报错 100% 回退；purpose 隔离；10/LRU 测试；成本门生效；`skills_list` 可选参数改动同 PR 更新工具快照；`tools.tool_search.judge` / `cache.purposes` 已文档化且 `test_docs_drift` 通过 |
 | P4 | tool inventory + 默认技能范围 + codegraph/rules gating | token 增量有实测；agent 自建技能仍以名称行可见；非编码仓库不拼 codegraph/rules；快照更新；`skills.index` / `skills.search` 已文档化且 `test_docs_drift` 通过 |
 | P5 | 删除旧常量/模板字符串；ADR/docs 收尾；清理测试 | `python scripts/check` 通过；无重复文案；无死代码 |
 
@@ -469,7 +557,7 @@ cache:
 5. tool_search 在 judge 缺失、超时、解析失败时返回 BM25 结果；`skills_list(query=...)` 在无
    judge 时返回 rg/词法结果；judrg 在 aux LLM 失败时回退 `search_terms()`。
 6. 三个搜索的缓存 purpose 分别为 `find` / `tool_choice` / `skill_choice`；容量 10、
-   LFU-3、TTL 生效；命中计数可观测。
+   LRU、TTL 生效；命中计数可观测。
 7. `_stored_prompt_matches_runtime`、`reconstruct_static_prefix`、插件段恢复、workspace 恢复
    在旧 prompt 与新 prompt 两种布局下都有测试；旧会话不因重构而重建。
 8. 默认技能范围下，agent 创建的技能仍以名称行出现在 `<available_skills>`；`skill_view` 可加载。
@@ -478,6 +566,13 @@ cache:
     可加载。
 11. 新增 `prompts.*` / `skills.index` / `skills.search` / `cache.purposes` 在 `website/docs`
     有对应条目，`tests/ci/test_docs_drift.py` 通过。
+12. 所有章节由 D13 的单一 Jinja2 环境渲染：`tests/agent/test_prompt_template.py` 覆盖两次
+    渲染字节一致（输出无 `\r`）、缺失 context key 抛 `UndefinedError`、未登记
+    `{% include %}` 抛 `TemplateNotFound`；P0/P1 快照逐字节不变。
+13. override 与 additionalCommunication 中的 `{{ ... }}` 按字面输出，不被求值，且仍被
+    `_scan_context_content` 扫描；Jinja2 环境只加载 manifest 登记的模板。
+14. `agent/judgment/rendering.py` 与其 `agent/judgment/prompts/*.md` 字节不变，仍由
+    `tests/agent/test_judgment_rendering.py` 覆盖；本 ADR 不把 judgment 模板切到 Jinja2。
 
 ---
 
@@ -499,6 +594,14 @@ cache:
    否则持久化恢复会静默退化。
 9. **`skills_list` schema 变化**。`query` 是可选参数，但 `tools[]` 快照仍会变化；P3 必须
    同 PR 重新生成 `prompt_surface` 快照。
+10. **模板字节不确定性**。空白、换行与 `keep_trailing_newline` 任一项变化都会改变 static
+    前缀；D13 的环境参数、精确 pin 与快照门是唯一防线。渲染结果不得再经 `.strip()` 或
+    平台默认换行处理。
+11. **模板注入（SSTI）**。用户可写 override 一旦进入 Jinja2，`{{ ... }}` 就是任意属性访问
+    的入口；`_scan_context_content` 不识别模板语法，所以“override 按字面注入”是设计约束，
+    不是可回退的取舍。未来若支持变量，必须 `SandboxedEnvironment` + 扫描阶段拒绝 `{%`/`{{`。
+12. **模板与 manifest 漂移**。`DictLoader` 只装登记文件，遗漏模板会启动即失败。这是刻意的
+    fail-fast；不要加“缺模板用空串”的回退，否则 snapshot 与线上 prompt 会静默分叉。
 
 ---
 
@@ -506,8 +609,13 @@ cache:
 
 - **照搬 omp 章节顺序与 `<project-context>` 字面断点**：与 Hermes 三档缓存和 6 处解析器
   冲突；收益只是形状一致。
-- **引入 Handlebars/模板引擎**：`agent/advisor_prompts.py` 已证明有序 block + Python
-  renderer 足够；新依赖增加字节不确定性。
+- **引入 Handlebars**：需要额外运行时，语法与转义语义又和已存在的 Jinja2 不一致；叶子模板
+  统一用 Jinja2（D13），章节决策仍留在 Python。仓库里已有的 Handlebars 方言是
+  `agent/judgment/rendering.py`（`if`/`unless`/`each`/`@last`/`raw`），为 omp 字节兼容保留，
+  **不在本 ADR 统一范围**。
+- **让模板拥有 tier/gate/预算/截断决策**：这些必须留在注册表与 Python 中，才能被快照工具、
+  诊断与测试覆盖；模板只做叶子渲染。
+- **把用户 override 当 Jinja 渲染**：直接新增 SSTI 面；override 只做字面注入 + 注入扫描。
 - **直接采用文档预算数字**：会截断 identity/coding/tool policy/memory 的现有内容。
 - **把请求级提醒（memory recall、recap、surface note、LSP notice）并入系统提示**：
   破坏缓存前缀，且与现有通道重复。
@@ -522,6 +630,31 @@ cache:
   `query` 参数即可，新增常驻 schema 违反 narrow-waist 规则。
 - **首轮 date-cwd 提醒**：日期与 cwd 已在系统提示与 runtime env 中；再加一层会重复并破坏
   字节稳定。
+
+### D14. 工具面与 `§ Runtime` 的条件渲染
+
+- **agent definition 字段**：删除 `read_only`；新增 `enable_tools`（工具名 allowlist）。
+  非空时覆盖 `toolsets`；runner 先按全量面构建 agent，再用
+  `agent/agent_run.py::apply_tool_allowlist` 收窄，避免 `enabled_toolsets=[]` 构建出零工具
+  agent。随 `read_only` 一起删除的是它唯一的消费者 `apply_read_only`。
+- **默认工具集**：`agent/prompts/toolsets.py::DEFAULT_TOOLSETS` 按文档 15 组定义；`toolsets`
+  省略时使用该集合，显式传入时必须是内置 toolset（插件/MCP 名称不允许），未知名称 fail
+  closed。
+- **渲染器输入**：`render_runtime(..., toolsets=..., enable_tools=...)`；工具名集合由
+  `resolve_tool_names()` 得出，`enable_tools` 覆盖 `toolsets`。
+- **06-skills**：按 `skill_view` / `skill_manage` / `skills_list` 分别条件渲染；三者都不可用
+  时整节不出现，只有部分可用时只渲染对应引导/列表/搜索向导。
+- **internal URLs 的 Hermes help guidance**：是否附加仍由首输入判定；文本变体按
+  `skill_view` 是否存在选择（`system/hermes-agent-help-guidance.md` 与
+  `...-no-skills.md`）。
+- **08-tool-inventory**：位于 `§ Runtime` 末尾，两层结构（工具集描述 + 每个可用工具的名称与
+  描述），只列该 agent 实际可用的工具；`codegraph` 仅编程项目列出。
+- **Kanban guidance**：`system/kanban-guidance.md`（同一文本供 identity slot）只在
+  `prompts/judge/kanban.json` 判定首输入有 Kanban 意图 **且** 允许工具里存在 `kanban_*` 时，
+  追加到 internal URLs 块；判定按首输入 memoize。
+- **修订 D7 的“不在 prompt 中列 eager 工具”**：D14 按用户指令改为列出 agent 实际可用的
+  默认工具集与工具（`enable_tools` 额外命名、非默认工具集的工具按注册工具集分组），
+  `tool_search` 仍只负责 schema 延迟；列清单带来的 token 重复是明确接受的取舍。
 
 ---
 
