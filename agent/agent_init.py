@@ -421,7 +421,7 @@ _CONTROL_STATE: dict[str, Any] = {
     "_executing_tools": False,  # lets _vprint print while tools run with stream consumers on
     "_trim_after_tool_batch": False,  # a >=1 MB tool result was committed; trim once the batch unwinds
     "_tool_guardrails": ToolCallGuardrailController,
-    "_tool_guardrail_halt_decision": None,
+    "_tool_guardrail_halt_decision": None, "_yield_state": None,
     # Interrupts. Hard cancellation is separate from redirect/message state; the Event makes
     # the cause atomic for auxiliary stream pollers.
     "_interrupt_requested": False,

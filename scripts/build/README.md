@@ -365,7 +365,7 @@ All supplied filesystem input paths must be absolute and exist. `repo` and
 | `env` | No | Additional environment values in the reference-placement command map |
 
 Recognized resource names are `skills`, `optional-skills`, `plugins`, `locales`,
-and `optional-mcps`. Distribution adapters supply the required resources.
+`optional-mcps`, and `bundled_agents`. Distribution adapters supply the required resources.
 The generic assembler does not infer a missing resource mapping. TUI inputs
 require `dist/entry.js` and `package.json`. Web inputs require `index.html`.
 

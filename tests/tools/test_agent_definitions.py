@@ -12,7 +12,10 @@ from tools import agent_definitions
 from tools.agent_definitions import DefinitionError
 from toolsets import validate_toolset
 
-PRESETS = ("init", "scout", "sonic", "reviewer", "security-reviewer", "seance")
+PRESETS = ("init", "scout", "sonic", "reviewer", "security-reviewer", "seance", "task")
+
+#: omp's ``task``/``sonic`` definitions deliberately grant the default built-in toolset.
+DEFAULT_SURFACE = {"task", "sonic"}
 
 
 def _parse(block: str, body: str = "body\n", source: str = "x.md"):
@@ -115,9 +118,13 @@ def test_a_shipped_definition_is_valid_and_has_a_tool_surface(preset):
     meta, body = agent_definitions.parse_definition(text, source=f"{preset}.md")
 
     assert body.strip(), "the prompt body would be empty"
-    assert meta.get("toolsets"), "a preset must pin its tool surface"
-    assert all(validate_toolset(name) for name in meta["toolsets"])
-    assert isinstance(meta.get("max_iterations"), int) and meta["max_iterations"] > 0
+    if preset not in DEFAULT_SURFACE:
+        assert meta.get("toolsets") or meta.get("enable_tools"), (
+            "a preset must pin its tool surface")
+    if meta.get("toolsets"):
+        assert all(validate_toolset(name) for name in meta["toolsets"])
+    if "max_iterations" in meta:
+        assert isinstance(meta["max_iterations"], int) and meta["max_iterations"] > 0
     if meta.get("enable_tools"):
         assert not {"write_file", "patch"} & set(meta["enable_tools"]), (
             "an explicit allowlist replaces read_only; mutating tools must not sneak in")
@@ -128,12 +135,12 @@ def test_init_generates_agents_md_in_the_project():
     text = (_bundled_pack() / "init.md").read_text(encoding="utf-8")
     meta, body = agent_definitions.parse_definition(text, source="init.md")
 
-    assert "delegation" in meta["toolsets"], "init fans out its survey through delegate_task"
+    assert "agents" in meta["toolsets"], "init fans out its survey through the agent tool"
     assert "enable_tools" not in meta, "init keeps its toolsets; no allowlist replaces them"
     assert meta["worktree"] is False, "the document must land in the project, not a branch"
     assert meta["background"] is False, "inline runs can surface the approval prompt"
     assert "AGENTS.md" in body
-    assert "delegate_task" in body and "write_file" in body
+    assert "agent(tasks=[" in body and "write_file" in body
     assert "approval" in body, "the protected-write refusal must have a documented fallback"
 
 

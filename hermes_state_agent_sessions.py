@@ -44,12 +44,14 @@ class SessionAgentSessionsMixin:
     def begin_agent_session(
         self, *, agent_session_id: str, agent_name: str, subject: str,
         transcript_path: str, parent_session_id: str = "", model_role: str = "",
-        metadata: Any = None,
+        metadata: Any = None, short_name: str = "",
     ) -> str:
         """Insert the row before dispatch; returns the subject actually stored.
 
         ``subject`` is unique across agent sessions, so a collision is disambiguated here (the
         caller gets the stored value back and reports it) rather than failing the insert.
+        ``short_name`` is the profile-unique address (unique index, ``''`` = unaddressed);
+        the caller checks it first so a duplicate is a refused call, not a lost row.
         ``metadata`` is the rebuild spec a wake/revive needs (definition source, toolsets, flags,
         model selector); it never carries credentials.
         """
@@ -69,17 +71,19 @@ class SessionAgentSessionsMixin:
             # REPLACE delete the row that legitimately owns that subject.
             conn.execute(
                 "INSERT INTO agent_session (agent_session_id, agent_name, parent_session_id, "
-                "subject, transcript_path, artifact_manifest, final_response, status, "
+                "subject, short_name, transcript_path, artifact_manifest, final_response, status, "
                 "last_activity_at, parked_at, model_role, metadata_json, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, NULL, NULL, 'running', ?, NULL, ?, ?, ?, ?) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 'running', ?, NULL, ?, ?, ?, ?) "
                 "ON CONFLICT(agent_session_id) DO UPDATE SET agent_name=excluded.agent_name, "
                 "parent_session_id=excluded.parent_session_id, subject=excluded.subject, "
+                "short_name=excluded.short_name, "
                 "transcript_path=excluded.transcript_path, status='running', "
                 "last_activity_at=excluded.last_activity_at, parked_at=NULL, "
                 "model_role=excluded.model_role, metadata_json=excluded.metadata_json, "
                 "updated_at=excluded.updated_at",
                 (str(agent_session_id), str(agent_name or ""), str(parent_session_id or ""),
-                 stored, str(transcript_path or ""), now, str(model_role or ""), spec, now, now),
+                 stored, str(short_name or ""), str(transcript_path or ""), now,
+                 str(model_role or ""), spec, now, now),
             )
             return stored
 
@@ -218,4 +222,13 @@ class SessionAgentSessionsMixin:
 
     def get_agent_session_by_subject(self, subject: str) -> Optional[dict[str, Any]]:
         row = self._read_one("SELECT * FROM agent_session WHERE subject=?", (clean_subject(subject),))
+        return _decode(row) if row else None
+
+    def get_agent_session_by_name(self, name: str) -> Optional[dict[str, Any]]:
+        """The session addressed by its profile-unique short name; ``''`` never matches."""
+        short_name = str(name or "").strip()
+        if not short_name:
+            return None
+        row = self._read_one(
+            "SELECT * FROM agent_session WHERE short_name=?", (short_name,))
         return _decode(row) if row else None

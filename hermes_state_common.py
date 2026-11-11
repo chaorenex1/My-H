@@ -923,6 +923,7 @@ CREATE TABLE IF NOT EXISTS agent_session (
     agent_name TEXT NOT NULL,
     parent_session_id TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL,
+    short_name TEXT NOT NULL DEFAULT '',  -- profile-unique address (agent_message/agent_out)
     transcript_path TEXT NOT NULL,
     artifact_manifest TEXT,
     final_response TEXT,

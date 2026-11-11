@@ -23,7 +23,7 @@ _HERMES_CORE_TOOLS = [
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
-    "agent", "agent_out",
+    "agent", "agent_out", "agent_message",
     "cronjob_manage",
     "kanban_show", "kanban_list",
     "kanban_complete", "kanban_block", "kanban_request_review",
@@ -175,12 +175,16 @@ TOOLSETS = {
     ),
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),
-    "delegation": _ts("Spawn subagents with isolated context for complex subtasks", ["delegate_task"]),
+    "delegation": _ts(
+        "Legacy batch delegation and live control. New delegation work uses `agents`: the "
+        "`agent` tool renders one named agent or a `tasks[]` batch with its own prompt/tools/"
+        "model and `agent_out` artifacts. `delegate_task` keeps `action=list/steer/stop` and "
+        "legacy batch callers.",
+        ["delegate_task"]),
     "agents": _ts(
         "Run named in-process agents with their own system prompt, tool surface and JSONL "
-        "conversation under HERMES_HOME/sessions/<agent>/",
-        ["agent", "agent_out"],
-    ),
+        "conversation under HERMES_HOME/sessions/<agent>/, read them back, and message peers",
+        ["agent", "agent_out", "agent_message"]),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "
         "the kanban dispatcher (HERMES_KANBAN_TASK env set). The dispatcher runs "

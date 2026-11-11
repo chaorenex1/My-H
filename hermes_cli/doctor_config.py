@@ -360,7 +360,7 @@ def _validate_agent_sessions_config(config_path, issues: list) -> None:
     for key, value in sorted(block.items()):
         if key not in known:
             continue
-        if key == "keep_alive":
+        if key in ("keep_alive", "yield_tool"):
             if not isinstance(value, bool):
                 bad.append(f"{key}={value!r} (expected true/false)")
             continue

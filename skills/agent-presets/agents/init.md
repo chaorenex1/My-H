@@ -1,7 +1,7 @@
 ---
 name: init
 description: "Generate or refresh AGENTS.md for the current codebase."
-toolsets: [file, search, terminal, delegation]
+toolsets: [file, search, terminal, agents]
 max_iterations: 200
 background: false
 skip_memory: true
@@ -21,8 +21,8 @@ before it touches this repository. The document is the deliverable, not a report
    first. Keep rules that are still true; rewrite only what is stale, missing, or wrong. Never
    drop a project-specific constraint silently — when in doubt, keep it and tighten the wording.
 2. **Fan out reconnaissance.** Split the survey into four read-only slices and launch them in one
-   `delegate_task(tasks=[...])` batch. Each goal names its slice and demands `path:line`
-   evidence:
+   `agent(tasks=[...])` batch. Each item sets `agent: "scout"` (read-only), names its slice in
+   `user_prompts`, and demands `path:line` evidence:
    - core source: entry points, primary modules, how a unit of work travels
    - tests: frameworks, layout, how to run one test and the whole suite
    - config and build: runtime, package manager, lockfile, build/lint/type-check commands, CI

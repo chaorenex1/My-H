@@ -166,6 +166,14 @@ let
     filter = path: _type: !(lib.hasInfix "/__pycache__/" path);
   };
 
+  # Converted omp agent definitions live in the agent-presets skill
+  # (docs/bundled-agents → skills/agent-presets/agents/). Same bare-data-dir
+  # case as optional-mcps: the wrapper exports HERMES_BUNDLED_AGENTS.
+  bundledAgents = lib.cleanSourceWith {
+    src = ../skills/agent-presets/agents;
+    filter = path: _type: !(lib.hasInfix "/__pycache__/" path);
+  };
+
   # Tools come from pm/lock.json, the same builds `hermes pm install`
   # provisions elsewhere. git and openssh are nixpkgs': the lock pins them for
   # win32 only. hermesNpmLib.nodejs is the pinned node with the pinned npm.
@@ -225,6 +233,7 @@ let
         plugins = toString bundledPlugins;
         locales = toString bundledLocales;
         optional-mcps = toString bundledOptionalMcps;
+        bundled_agents = toString bundledAgents;
       };
       frontends = {
         tui = "${hermesTui}/lib/hermes-tui";

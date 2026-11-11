@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import json
 import logging
 import os
 import time
@@ -88,6 +89,11 @@ class AgentRunResult:
     #: ``output`` contract outcome: ``None`` when the definition carried no schema.
     output_schema_valid: Optional[bool] = None
     output_schema_errors: tuple[str, ...] = ()
+    #: Named-agent explicit completion (``yield``): the structured value, a terminal error, and
+    #: the incremental sections recorded this turn. All empty on a legacy handoff.
+    yield_data: Any = None
+    yield_error: str = ""
+    yield_sections: tuple[dict[str, Any], ...] = ()
     #: Structural summaries collected during this run (ADR-16 D4). Carried here because
     #: ``run()`` clears the run-scoped buffer in ``finally`` before any settle callback runs.
     summary_sources: tuple[dict[str, Any], ...] = ()
@@ -111,6 +117,14 @@ class AgentRunResult:
                 data["validated"] = False
         if self.worktree:
             data["worktree"] = dict(self.worktree)
+        if self.yield_data is not None or self.yield_error or self.yield_sections:
+            data["yielded"] = True
+            if self.yield_data is not None:
+                data["yield_data"] = self.yield_data
+            if self.yield_error:
+                data["yield_error"] = self.yield_error
+            if self.yield_sections:
+                data["yield_sections"] = [dict(section) for section in self.yield_sections]
         return data
 
 
@@ -215,9 +229,12 @@ def apply_tool_allowlist(agent: Any, tool_names: Iterable[str]) -> list[str]:
 
     ``enable_tools`` is an explicit allowlist that replaces the toolset selection, so it is
     applied after the agent is built (the allowlist may name plugin/MCP tools that toolset
-    resolution cannot express). Unknown names simply match nothing.
+    resolution cannot express). Unknown names simply match nothing. Host-owned ``extra_tools``
+    (a named agent's ``yield``, an advisor's own handler) are never narrowed away: their names
+    are not registry tools, so an allowlist could not name them even if the caller wanted to.
     """
     allowed = {str(name).strip() for name in tool_names if str(name).strip()}
+    allowed.update(getattr(agent, "_extra_tool_handlers", None) or ())
     dropped: list[str] = []
     tools = getattr(agent, "tools", None)
     if isinstance(tools, list):
@@ -268,12 +285,16 @@ def _attach_worktree(project_dir: str, agent_name: str) -> Optional[dict[str, st
         return None
 
 
-def _finalize_worktree(info: dict[str, str]) -> dict[str, Any]:
-    """Inspect/prune/archive after the run; an inspection failure is reported, never raised."""
+def _finalize_worktree(info: dict[str, str], *, apply: str = "off") -> dict[str, Any]:
+    """Inspect/apply/prune/archive after the run; a failure is reported, never raised.
+
+    ``apply="auto"`` is only passed by the success path: a run that died mid-flight must never
+    merge its half-finished edits into the parent workspace.
+    """
     from tools import subagent_worktree
 
     try:
-        return subagent_worktree.finalize_subagent_worktree(info)
+        return subagent_worktree.finalize_subagent_worktree(info, apply=apply)
     except Exception as exc:  # health: allow BLE001 -- the answer stands; the tree is kept
         logger.warning("agent_run: worktree finalize failed: %s", exc, exc_info=True)
         return subagent_worktree.unproven_worktree_payload(info, f"finalize raised: {exc}")
@@ -365,25 +386,27 @@ def _release_run(agent: Any, *, keep_alive: bool,
 
 
 def _validate_output_turn(agent: Any, result: dict[str, Any], schema: dict[str, Any],
-                          task_id: str) -> tuple[bool, tuple[str, ...]]:
+                          task_id: str) -> tuple[bool, tuple[str, ...], bool]:
     """Validate the answer and, when it misses the contract, run ONE bounded retry turn.
 
     Mirrors ``delegate_task`` exactly: the errors go back verbatim, the schema is not re-pasted,
-    and a second failure returns the raw answer with the errors, never a silent pass.
+    and a second failure returns the raw answer with the errors, never a silent pass. The third
+    return value says whether a retry turn ran, so a caller can tell a re-answered result from
+    the first answer.
     """
     from tools.delegation_output_schema import build_retry_message, validate_output
 
     first_text = str(result.get("final_response") or "")
     valid, errors = validate_output(first_text, schema)
     if valid or not first_text.strip() or result.get("interrupted"):
-        return valid, tuple(errors)
+        return valid, tuple(errors), False
     retry: Any = None
     try:
         retry = agent.run_conversation(build_retry_message(errors), task_id=task_id)
     except Exception:  # health: allow BLE001 -- the first answer still stands
         logger.warning("agent_run: output schema retry failed", exc_info=True)
     if not isinstance(retry, Mapping):
-        return valid, tuple(errors)
+        return valid, tuple(errors), False
     retry_text = str(retry.get("final_response") or "")
     if retry_text.strip():
         result["final_response"] = retry_text
@@ -398,7 +421,7 @@ def _validate_output_turn(agent: Any, result: dict[str, Any], schema: dict[str, 
         if retry.get(key) is not None:
             result[key] = retry[key]
     valid, errors = validate_output(retry_text, schema)
-    return valid, tuple(errors)
+    return valid, tuple(errors), True
 
 
 def _prepare_run_context(context: str, *, task_id: str, agent_name: str,
@@ -427,34 +450,125 @@ def _prepare_run_context(context: str, *, task_id: str, agent_name: str,
     return context
 
 
+def _subagent_prompts(system: str, context: str, message: str, *, wrap_assignment: bool,
+                      structured: bool = False,
+                      output_schema: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
+    """Render the child Role/Coop/Completion prompt and wrap an assignment.
+
+    A run without a definition body keeps the legacy shape (context appended to the user turn)
+    so a bare prompt is never wrapped in an empty ``§ Role`` block. A broken template must not
+    fail the run: the fallback is the same legacy shape.
+    """
+    if not str(system or "").strip():
+        return system, _prompt(message, context)
+    try:
+        from agent.prompts.renderer import (
+            render_subagent_system_prompt,
+            render_subagent_user_prompt,
+        )
+
+        rendered_system = render_subagent_system_prompt(
+            agent=str(system), context=context,
+            structured=bool(structured),
+            has_output_schema=bool(output_schema),
+            yield_schema=(json.dumps(dict(output_schema), ensure_ascii=False)
+                          if output_schema else ""))
+        rendered_message = (render_subagent_user_prompt(assignment=message)
+                            if wrap_assignment else message)
+        return rendered_system, rendered_message
+    except Exception:  # health: allow BLE001 -- the prompt must never fail a run
+        logger.warning("agent_run: subagent prompt rendering failed", exc_info=True)
+        return system, _prompt(message, context)
+
+
+def _yield_snapshot(agent: Any) -> Any:
+    """The turn's yield result, or ``None`` when this agent has no yield tool or yielded nothing."""
+    state = getattr(agent, "_yield_state", None)
+    snapshot = getattr(state, "snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        value = snapshot()
+    except Exception:  # health: allow BLE001 -- a broken yield must not lose the run
+        logger.warning("agent_run: yield snapshot failed", exc_info=True)
+        return None
+    return None if value is None or getattr(value, "empty", False) else value
+
+
+def _validate_output_text(text: str, schema: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
+    from tools.delegation_output_schema import validate_output
+
+    valid, errors = validate_output(text, schema)
+    return bool(valid), tuple(str(item) for item in errors)
+
+
 def _execute_turn(agent: Any, message: str, *, context: str,
                   conversation: Optional[list[dict[str, Any]]], system: str,
                   schema: Optional[dict[str, Any]], task_id: str, agent_name: str,
                   agent_session_id: str, model: str, provider: str,
                   toolsets: Sequence[str], all_tools: bool, history_key: str,
                   account_task: str, record_history: bool,
-                  transcript_path: str = "") -> AgentRunResult:
+                  transcript_path: str = "", wrap_assignment: bool = True) -> AgentRunResult:
     """Run one conversation turn on an already-built agent and package its answer.
 
     Shared by :func:`run` (fresh agent per call) and :func:`continue_run` (a resident session's
     wake turn on its kept agent), so both paths produce the same transcript, usage and
     ``output`` validation.
     """
+    system, prompt = _subagent_prompts(
+        system, context, message, wrap_assignment=wrap_assignment,
+        structured=getattr(agent, "_yield_state", None) is not None,
+        output_schema=schema)
     result = agent.run_conversation(
-        _prompt(message, context), system_message=system or None,
+        prompt, system_message=system or None,
         conversation_history=conversation or None, task_id=task_id)
+    # A named agent's ``yield`` is its completion contract. The turn loop already ended the
+    # turn with this payload; take the data before schema validation so the answer recorded,
+    # validated and settled is the yielded value, not a later assistant message.
+    yield_snapshot = _yield_snapshot(agent)
+    if yield_snapshot is not None and yield_snapshot.text:
+        result["final_response"] = yield_snapshot.text
     schema_valid: Optional[bool] = None
     schema_errors: tuple[str, ...] = ()
     if schema is not None:
-        schema_valid, schema_errors = _validate_output_turn(agent, result, schema, task_id)
+        if yield_snapshot is not None and yield_snapshot.terminal:
+            if yield_snapshot.error and yield_snapshot.data is None:
+                # The agent reported failure instead of an output; a strict caller must see it.
+                schema_valid, schema_errors = False, (
+                    f"yield error: {yield_snapshot.error}",)
+            else:
+                # ``yield`` already returned bounded tool errors for schema misses; validate
+                # the final payload here instead of spending a whole extra turn.
+                schema_valid, schema_errors = _validate_output_text(
+                    yield_snapshot.text, schema)
+        else:
+            schema_valid, schema_errors, retried = _validate_output_turn(
+                agent, result, schema, task_id)
+            after = _yield_snapshot(agent)
+            if after is not None:
+                yield_snapshot = after
+                if after.text:
+                    result["final_response"] = after.text
+                schema_valid, schema_errors = _validate_output_text(after.text, schema)
+            elif retried:
+                # The retry answered without yielding: its assistant message is the handoff.
+                yield_snapshot = None
     messages = _with_reasoning(
         _transcript(result), result.get("reasoning_content") or result.get("reasoning"))
     if not messages:
         # The host normally returns the loop's messages; keep at least the prompt and the
         # answer so the history still answers "what did this agent do?".
-        messages = ({"role": "user", "content": message},
+        messages = ({"role": "user", "content": prompt},
                     {"role": "assistant",
                      "content": str(result.get("final_response") or "")})
+    elif yield_snapshot is not None and yield_snapshot.text:
+        # The yielded value is the answer. The turn loop appended it for a terminal yield;
+        # an assembled sections-only result still needs its assistant row.
+        last_assistant = next(
+            (row for row in reversed(messages) if row.get("role") == "assistant"), None)
+        if last_assistant is None or \
+                str(last_assistant.get("content") or "").strip() != yield_snapshot.text.strip():
+            messages = messages + ({"role": "assistant", "content": yield_snapshot.text},)
     usage = _usage(result)
     peer = AgentRunResult(
         answer=(result.get("final_response") or "").strip(),
@@ -467,6 +581,9 @@ def _execute_turn(agent: Any, message: str, *, context: str,
         usage=usage,
         output_schema_valid=schema_valid,
         output_schema_errors=schema_errors,
+        yield_data=yield_snapshot.data if yield_snapshot is not None else None,
+        yield_error=yield_snapshot.error if yield_snapshot is not None else "",
+        yield_sections=(yield_snapshot.sections if yield_snapshot is not None else ()),
     )
     if record_history:
         path, written = _record_history(agent_name, agent_session_id, messages,
@@ -510,7 +627,7 @@ def continue_run(agent: Any, message: str, *, context: str = "", system_message:
         schema=schema, task_id=task_id or agent_session_id, agent_name=agent_name,
         agent_session_id=agent_session_id, model=model, provider=provider,
         toolsets=toolsets, all_tools=all_tools, history_key=history_key,
-        account_task=account_task, record_history=True)
+        account_task=account_task, record_history=True, wrap_assignment=False)
     return replace(peer, model_role=str(model_role or ""))
 
 
@@ -520,7 +637,9 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         project_dir: Optional[str] = None, all_tools: bool = False,
         enable_tools: Optional[Iterable[str]] = None,
         history: Optional[Sequence[Mapping[str, Any]]] = None, session_id: str = "",
-        layer: str = "", history_session: str = "", account_task: str = "",
+        parent_session_id: str = "",
+        layer: str = "", agent_name: str = "",
+        history_session: str = "", account_task: str = "",
         agent_session_id: str = "",
         skip_memory: bool = True, skip_context_files: bool = True,
         skip_background_review: bool = True, load_soul_identity: bool = False,
@@ -535,6 +654,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         autoload_skills: Optional[Sequence[str]] = None,
         advisor: Any = None,
         read_summarize: Optional[bool] = None,
+        definition_metadata: Optional[Mapping[str, Any]] = None,
         on_agent: Optional[Callable[[Any], None]] = None,
         on_settled: Optional[Callable[[], None]] = None,
         keep_alive: bool = False,
@@ -549,9 +669,11 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
 
     ``history`` is the prior conversation a caller explicitly continues from; system rows are
     dropped (the host owns the system prompt). ``session_id`` keeps this run's host session
-    distinct from the caller's; an empty value lets the host mint one. ``agent_session_id`` is the
-    identifier the transcript, the ``agent_session`` row and ``agent_out`` are keyed on; an empty
-    value mints one. ``layer`` names the agent and ``meta`` carries identifiers only. ``all_tools`` passes every host tool; otherwise
+    distinct from the caller's; an empty value lets the host mint one. ``parent_session_id`` is
+    the session that dispatched the run, so nested named agents record the exact lineage
+    ``agent_message`` authorization checks. ``agent_session_id`` is the identifier the
+    transcript, the ``agent_session`` row and ``agent_out`` are keyed on; an empty value mints
+    one. ``layer`` names the agent and ``meta`` carries identifiers only. ``all_tools`` passes every host tool; otherwise
     ``toolsets`` is the exact surface (an empty list is "no tools"). ``reasoning_effort`` pins a
     level when given (it outranks config for this run). ``worktree`` runs in a fresh git worktree
     off HEAD: the run's tools start there, and the tree is inspected, pruned or archived after.
@@ -586,7 +708,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
                     if isinstance(row, Mapping) and str(row.get("role") or "") != "system"]
     segments = _system_segments(system_message)
     system = "\n\n".join(segments)
-    agent_name = str(layer or (meta or {}).get("agent") or "agent").strip() or "agent"
+    agent_name = str(agent_name or layer or (meta or {}).get("agent") or "agent").strip() or "agent"
     history_key = str(history_session or session_id or "").strip()
     agent_session_id = (str(agent_session_id or "").strip()
                         or f"{agent_name}-{int(time.time() * 1000)}-{next(_SEQUENCE)}")
@@ -621,6 +743,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         model=final_model,
         **knobs,
         session_id=str(session_id or "").strip() or None,
+        parent_session_id=str(parent_session_id or "").strip() or None,
         # An explicit allowlist is enforced after the build (``apply_tool_allowlist``), so the
         # agent must be built with the full surface; ``[]`` here would select zero tools.
         enabled_toolsets=None if (all_tools or enable_tools) else tools,
@@ -636,6 +759,10 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
                      if isinstance(tool, Mapping)],
         cache_scope=str(cache_scope or "").strip(),
     )
+    # The definition's front matter is the per-agent source for prompt policy switches
+    # (``delegation_bias``, ``eager_tasks``, ...). Section 09 reads it back through
+    # ``agent.system_prompt._tool_policy_part``; without this the definition never applies.
+    agent._agent_definition_metadata = dict(definition_metadata or {})
     finalized = False
     if advisor:
         # Consumed by advisor_session_kind/AdvisorSession; a spawned peer is otherwise
@@ -656,7 +783,7 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
             transcript_path=str(transcript_path or ""))
         peer = replace(peer, model_role=str(model_role or ""))
         if worktree_info is not None:
-            worktree_result = _finalize_worktree(worktree_info)
+            worktree_result = _finalize_worktree(worktree_info, apply="auto")
             finalized = True
         if worktree_result is not None:
             peer = replace(peer, worktree=worktree_result)

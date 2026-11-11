@@ -21,6 +21,7 @@ conversation's archived tool output (ADR-4 D15) by ``session_id`` + ``tool_call_
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -34,18 +35,20 @@ logger = logging.getLogger(__name__)
 
 #: The transcript is returned as text; past this budget the payload points at the file instead.
 MAX_HISTORY_CHARS = 40_000
-MODES = ("history", "artifact", "ast_summary", "inbox")
+MODES = ("history", "artifact", "ast_summary", "inbox", "context_files")
 ARTIFACT_KINDS = ("report", "tool", "all")
 
 
-def _resolve(row_id: str, subject: str) -> Optional[dict[str, Any]]:
-    """The one row the identity names; both forms are accepted, neither guesses."""
+def _resolve(row_id: str = "", subject: str = "", name: str = "") -> Optional[dict[str, Any]]:
+    """The one row the identity names, resolved id → name → subject; never guesses."""
     from hermes_state_registry import acquire, release_or_close
 
     db = acquire()
     try:
         if row_id:
             return db.get_agent_session(row_id)
+        if name:
+            return db.get_agent_session_by_name(name)
         return db.get_agent_session_by_subject(subject)
     finally:
         release_or_close(db)
@@ -69,6 +72,7 @@ def _identity(row: dict[str, Any]) -> dict[str, Any]:
     identity = {
         "agent_session_id": row.get("agent_session_id"),
         "subject": row.get("subject"),
+        "name": row.get("short_name") or "",
         "agent_name": row.get("agent_name"),
         "status": row.get("status"),
         "created_at": row.get("created_at"),
@@ -107,20 +111,24 @@ def _read_text(path: Optional[str]) -> Optional[str]:
 
 
 def _identity_error() -> str:
-    return "pass exactly one of agent_session_id or subject"
+    return "pass exactly one of agent_session_id, name or subject"
 
 
 def _inbox_payload(row: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
-    from tools.agent_inbox import INBOX_PAGE, count_inbox, read_inbox, session_lifecycle
+    from tools.agent_inbox import (
+        INBOX_PAGE, count_inbox, live_named_sessions, read_inbox, session_lifecycle)
 
     session = str(row.get("agent_session_id") or "")
     pending = read_inbox(session, status="pending", limit=INBOX_PAGE)
     delivered = read_inbox(session, status="delivered", limit=INBOX_PAGE)
     lifecycle = session_lifecycle(row)
+    parent = str(row.get("parent_session_id") or "")
+    peers = [peer for peer in live_named_sessions()
+             if str(peer.get("parent_session_id") or "") == parent]
     payload = {**identity, "mode": "inbox", "pending": pending, "delivered": delivered,
                "pending_count": count_inbox(session, status="pending"),
                "delivered_count": count_inbox(session, status="delivered"),
-               **lifecycle}
+               "peers": peers, **lifecycle}
     if not pending and not delivered:
         payload["note"] = "this agent session has no inbox records"
     elif pending:
@@ -350,6 +358,58 @@ def _ast_payload(identity: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _context_inputs_payload(row: dict[str, Any], identity: dict[str, Any],
+                            args: dict[str, Any]) -> dict[str, Any]:
+    """The supplied files as recorded at spawn: spelling, real path, size and hash.
+
+    ``include_content=true`` re-reads each file through the same resolver the spawn used, so a
+    file that moved outside the project/profile roots is reported, never read. Content stays
+    inside the spawn-time budgets.
+    """
+    from tools.agent_context_inputs import (
+        MAX_CONTEXT_BYTES,
+        MAX_CONTEXT_FILE_BYTES,
+        resolve_path,
+    )
+
+    metadata = row.get("metadata_json") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    recorded = metadata.get("context_inputs") or []
+    inputs = [dict(item) for item in recorded if isinstance(item, dict)]
+    payload = {**identity, "mode": "context_files", "context_files": inputs,
+               "count": len(inputs)}
+    if not args.get("include_content"):
+        return payload
+    project_raw = str(metadata.get("project_dir") or "").strip()
+    project = Path(project_raw) if project_raw else None
+    total = 0
+    detailed: list[dict[str, Any]] = []
+    for item in inputs:
+        entry = dict(item)
+        raw = str(item.get("raw") or "")
+        try:
+            path = resolve_path(raw, project=project)
+            size = path.stat().st_size
+            if size > MAX_CONTEXT_FILE_BYTES:
+                raise ValueError(f"file is larger than {MAX_CONTEXT_FILE_BYTES} bytes")
+            if total + size > MAX_CONTEXT_BYTES:
+                raise ValueError(f"content exceeds the {MAX_CONTEXT_BYTES}-byte budget")
+            data = path.read_bytes()
+            if b"\x00" in data:
+                raise ValueError("binary files are not accepted as context")
+            total += size
+            entry["content"] = data.decode("utf-8", "replace")
+            entry["resolved_now"] = str(path)
+            entry["unchanged"] = (str(path) == str(item.get("resolved"))
+                                  and hashlib.sha256(data).hexdigest() == item.get("sha256"))
+        except (OSError, ValueError) as exc:
+            entry["error"] = str(exc)
+        detailed.append(entry)
+    payload["context_files"] = detailed
+    return payload
+
+
 def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
                    task_id: Optional[str] = None, **_: Any) -> str:
     """Read one agent session's transcript, artifacts, ast summary or inbox."""
@@ -360,10 +420,11 @@ def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
         return tool_error(f"artifact kind must be one of {', '.join(ARTIFACT_KINDS)}")
     row_id = str(args.get("agent_session_id") or "").strip()
     subject = str(args.get("subject") or "").strip()
+    name = str(args.get("name") or "").strip()
     kind = str(args.get("kind") or "report").strip() or "report"
-    if row_id and subject:
+    if sum(bool(value) for value in (row_id, subject, name)) > 1:
         return tool_error(_identity_error())
-    agent_identity = bool(row_id or subject)
+    agent_identity = bool(row_id or subject or name)
     if mode == "artifact" and kind == "tool" and not agent_identity:
         # ADR-4 D15: a main conversation has no agent bundle; read its recorded tool archive.
         conversation = str(args.get("session_id") or session_id or "").strip()
@@ -376,7 +437,7 @@ def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
     if not agent_identity:
         return tool_error(_identity_error())
     try:
-        row = _resolve(row_id, subject)
+        row = _resolve(row_id, subject, name)
     except Exception as exc:  # health: allow BLE001 -- the tool reports, it does not crash the turn
         logger.warning("agent_out: lookup failed: %s", exc, exc_info=True)
         return tool_error(f"agent session lookup failed: {exc}")
@@ -385,7 +446,8 @@ def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
             return tool_error(
                 f"artifact mode reads named agent sessions only; {row_id!r} is a conversation "
                 "session with no agent bundle")
-        which = f"agent_session_id={row_id}" if row_id else f"subject={subject!r}"
+        which = (f"agent_session_id={row_id}" if row_id else
+                 f"name={name!r}" if name else f"subject={subject!r}")
         return tool_error(f"no agent session for {which}")
     identity = _identity(row)
     if mode == "inbox":
@@ -394,6 +456,8 @@ def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
         return json.dumps(_artifact_payload(identity, args), ensure_ascii=False)
     if mode == "ast_summary":
         return json.dumps(_ast_payload(identity), ensure_ascii=False)
+    if mode == "context_files":
+        return json.dumps(_context_inputs_payload(row, identity, args), ensure_ascii=False)
     try:
         kept, truncated, total = _history_text(row)
     except Exception as exc:  # health: allow BLE001 -- an unreadable file is reported, not raised
@@ -410,16 +474,18 @@ def agent_out_tool(args: dict[str, Any], *, session_id: str = "",
 AGENT_OUT_SCHEMA: dict[str, Any] = {
     "name": "agent_out",
     "description": (
-        "Read a named agent run back by agent_session_id or subject. mode=history (default) "
-        "returns the session's JSONL transcript; artifact returns the settle-time files — "
-        "kind=report (the verbatim final report), kind=tool (step + tool_name, the archived "
-        "output and its pre-truncation original when it existed) or kind=all (the file list); "
-        "ast_summary returns the structural summary written at settle; inbox returns the "
-        "messages queued for the session plus the most recent deliveries. Use the identity the "
-        "agent tool returned. artifact kind=tool also reads a main conversation's archived tool "
-        "output with session_id plus tool_call_id (or step + tool_name); the archived path or "
-        "the result's stdout_spill_path, never a guessed path. Other artifact kinds and all "
-        "other modes serve named agent sessions only."
+        "Read a named agent run back by agent_session_id, name or subject. mode=history "
+        "(default) returns the session's JSONL transcript; artifact returns the settle-time "
+        "files — kind=report (the verbatim final report), kind=tool (step + tool_name, the "
+        "archived output and its pre-truncation original when it existed) or kind=all (the "
+        "file list); ast_summary returns the structural summary written at settle; inbox "
+        "returns the messages queued for the session plus the most recent deliveries; "
+        "context_files returns the files supplied at spawn (path, size, sha256), adding their "
+        "content only with include_content=true. Use the identity the agent tool returned. "
+        "artifact kind=tool also reads a main conversation's archived tool output with "
+        "session_id plus tool_call_id (or step + tool_name); the archived path or the result's "
+        "stdout_spill_path, never a guessed path. Other artifact kinds and all other modes "
+        "serve named agent sessions only."
     ),
     "parameters": {
         "type": "object",
@@ -436,6 +502,16 @@ AGENT_OUT_SCHEMA: dict[str, Any] = {
             "subject": {
                 "type": "string",
                 "description": "The agent session's unique subject; alternative to the id.",
+            },
+            "name": {
+                "type": "string",
+                "description": ("The session's profile-unique short name; alternative to the "
+                                "id and subject."),
+            },
+            "include_content": {
+                "type": "boolean",
+                "description": ("mode=context_files: read each recorded file's current content "
+                                "(default false returns path, size and sha256 only)."),
             },
             "kind": {
                 "type": "string",

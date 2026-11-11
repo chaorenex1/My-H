@@ -495,6 +495,12 @@ def get_bundled_skills_dir(default: Path | None = None) -> Path:
     return _packaged_dir("HERMES_BUNDLED_SKILLS", default, "skills")
 
 
+def get_bundled_agents_dir(default: Path | None = None) -> Path:
+    """Return the converted bundled-agent definitions, honoring ``HERMES_BUNDLED_AGENTS``."""
+    return _packaged_dir("HERMES_BUNDLED_AGENTS", default,
+                         "skills/agent-presets/agents")
+
+
 def get_hermes_dir(new_subpath: str, old_name: str, *, home: Path | None = None) -> Path:
     """Resolve a Hermes subdirectory, honouring a populated legacy ``<old_name>/`` (no migration).
 

@@ -159,6 +159,10 @@ def test_a_settled_session_takes_pending_messages_and_agent_out_reads_them():
     assert inbox["pending_count"] == 1
     assert inbox["pending"][0]["body"] == "next step"
     assert inbox["pending"][0]["status"] == "pending"
+    assert inbox["pending"][0]["sender"] == "owner"
+    assert inbox["pending"][0]["kind"] == "message"
+    assert inbox["pending"][0]["progress"] is False
+    assert inbox["pending"][0]["reply_to"] is None
 
 
 def test_a_foreign_conversation_cannot_queue_into_another_sessions_inbox():

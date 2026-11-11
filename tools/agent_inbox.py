@@ -6,15 +6,21 @@ the next tool boundary — the *aside* queue. When no run is live, the text is p
 drains it later. Every body is escaped with :func:`agent.ttsr_prompts.escape_harness_tags`, so a
 message can never close or forge a harness tag.
 
-Delivery is owner-scoped: the caller must be the session that started the named agent
-(``agent_session.parent_session_id``, matching ``delegate_task``'s durable lineage rule), which is
-the same authority ``delegate_task(action="steer")`` already enforces.
+Delivery is scoped by the durable lineage: a named target accepts its owning conversation, a
+sibling under the same parent, or its own child; a main conversation accepts only a named child
+it dispatched (and only while a live surface holds its lease, so an offline owner is reported
+``pending`` instead of a fake delivery). That is the same authority ``delegate_task`` already
+enforces, extended one step in each direction so peer coordination is genuinely bidirectional.
 """
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from agent.ttsr_prompts import escape_harness_tags
@@ -30,6 +36,72 @@ logger = logging.getLogger(__name__)
 
 #: How many rows of each state ``agent_out(mode="inbox")`` shows.
 INBOX_PAGE = 20
+
+#: The delivered message's own id is the value the recipient passes back as ``reply_to``.
+_ENVELOPE_OPEN_RE = re.compile(r"<(?=\s*/?\s*agent_message(?![\w-]))", re.IGNORECASE)
+
+
+def _attr(value: Any) -> str:
+    """One envelope attribute value: quotes escaped, newlines flattened, never a second line."""
+    return html.escape(" ".join(str(value or "").split()), quote=True)
+
+
+def _escape_body(text: str) -> str:
+    """Escape harness tags and the envelope's own tag so a body can never close the envelope."""
+    return _ENVELOPE_OPEN_RE.sub("&lt;", escape_harness_tags(str(text or "")))
+
+
+def agent_message_envelope(*, sender: str, sender_subject: str = "", inbox_id: str,
+                           body: str, reply_to: str = "", progress: bool = False) -> str:
+    """One model-facing peer message: server-resolved identity around escaped text.
+
+    ``reply_to`` is this delivery's own inbox id (what the recipient passes back to answer);
+    ``in_reply_to`` names the record this message itself answers, when the sender supplied one.
+    """
+    attrs = [f'from="{_attr(sender)}"', f'from_subject="{_attr(sender_subject)}"',
+             f'reply_to="{_attr(inbox_id)}"', f'progress="{"true" if progress else "false"}"']
+    if reply_to:
+        attrs.append(f'in_reply_to="{_attr(reply_to)}"')
+    return f"<agent_message {' '.join(attrs)}>\n{_escape_body(body)}\n</agent_message>"
+
+
+def _envelope_enabled() -> bool:
+    """``agent_messages.envelope`` rollout switch; unreadable config keeps the envelope on."""
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+
+        value = cfg_get(load_config_readonly(), "agent_messages", "envelope", default=True)
+    except Exception:  # health: allow BLE001 -- config must not decide whether delivery works
+        logger.debug("agent_message envelope: config unreadable", exc_info=True)
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off", ""}
+    return value is not False
+
+
+def _delivery_text(*, sender: str, sender_subject: str, inbox_id: str, body: str,
+                   reply_to: str = "", progress: bool = False) -> str:
+    """The model-facing text: the envelope, or the escaped body when the switch is off."""
+    if not _envelope_enabled():
+        # No envelope around it, but the body must still not be able to *forge* one.
+        return _escape_body(body)
+    return agent_message_envelope(
+        sender=sender, sender_subject=sender_subject, inbox_id=inbox_id,
+        body=body, reply_to=reply_to, progress=progress)
+
+
+def envelope_inbox_row(row: Mapping[str, Any], *, profile: str = "") -> str:
+    """The envelope for one persisted inbox row (a wake joining raw bodies)."""
+    if not _envelope_enabled():
+        return _escape_body(str(row.get("body") or ""))
+    return agent_message_envelope(
+        sender=str(row.get("sender") or ""),
+        sender_subject=_sender_subject(str(row.get("sender") or ""), profile=profile),
+        inbox_id=str(row.get("id") or ""),
+        body=str(row.get("body") or ""),
+        reply_to=str(row.get("reply_to") or ""),
+        progress=bool(row.get("progress")),
+    )
 
 
 def capture_steer_authority() -> dict[str, Any]:
@@ -146,6 +218,118 @@ def deliver_owner_message(agent_session_id: str, text: str, *, parent_agent: Any
             "note": note}
 
 
+def deliver_peer_message(agent_session_id: str, text: str, *, sender_session_id: str,
+                         progress: bool = False, reply_to: str = "",
+                         profile: str = "") -> dict[str, Any]:
+    """Deliver a message between named agent sessions, or from a named child to its owner.
+
+    Named targets accept their owner, a sibling under the same parent, or their own child.
+    The owning *conversation* (a ``sessions`` row, not an ``agent_session``) accepts only its
+    own child, and only while a live surface holds its lease: its delivery goes through
+    ``completion_queue``; an offline owner gets an explicit ``pending`` instead of a fake
+    "delivered". An unauthorized or unknown target returns ``{}``.
+    """
+    body = escape_harness_tags(str(text or "").strip())
+    if not body:
+        raise ValueError("message must not be empty")
+    target_id = str(agent_session_id or "").strip()
+    sender = str(sender_session_id or "").strip()
+    if not target_id or not sender or sender == target_id:
+        return {}
+    target = _session_row(target_id, profile=profile)
+    sender_row = _session_row(sender, profile=profile)
+    if target is not None:
+        if str(target.get("status") or "") == "cancelled":
+            return {}
+        target_parent = str(target.get("parent_session_id") or "")
+        is_owner = sender == target_parent
+        same_parent = bool(sender_row) and str(
+            sender_row.get("parent_session_id") or "") == target_parent
+        is_child = bool(sender_row) and str(
+            sender_row.get("parent_session_id") or "") == target_id
+        if not (is_owner or same_parent or is_child):
+            return {}
+        return _deliver_to_named(target_id, body, target=target, sender=sender,
+                                 sender_row=sender_row, progress=progress, reply_to=reply_to,
+                                 profile=profile)
+    # A named child may address the conversation that dispatched it. That owner has no
+    # agent_session row, so both the target and the authorization resolve through `sessions`.
+    owner_row = _conversation_row(target_id, profile=profile)
+    if owner_row is None:
+        return {}
+    if not sender_row or str(sender_row.get("parent_session_id") or "") != target_id:
+        return {}
+    return _deliver_to_owner(target_id, body, owner_row=owner_row, sender=sender,
+                             sender_row=sender_row, progress=progress, reply_to=reply_to,
+                             profile=profile)
+
+
+def _deliver_to_named(target_id: str, body: str, *, target: Mapping[str, Any], sender: str,
+                      sender_row: Optional[Mapping[str, Any]], progress: bool,
+                      reply_to: str, profile: str = "") -> dict[str, Any]:
+    inbox_id = f"inbox-{uuid.uuid4().hex}"
+    enveloped = _delivery_text(
+        sender=sender, sender_subject=_row_subject(sender_row), inbox_id=inbox_id,
+        body=body, reply_to=reply_to, progress=progress)
+
+    def record(status: str) -> None:
+        _record(target_id, sender, body, status=status, progress=progress,
+                reply_to=reply_to, inbox_id=inbox_id, profile=profile)
+
+    if steer_subagent(target_id, enveloped):
+        record("delivered")
+        return {"agent_session_id": target_id, "inbox_id": inbox_id, "status": "delivered",
+                "note": "delivered to the live run; it lands at the next tool boundary."}
+    from agent.agent_session_runtime import AgentSessionQueueFull, runtime
+
+    try:
+        outcome = runtime().deliver(target_id, enveloped, sender=sender, row=target)
+    except AgentSessionQueueFull as exc:
+        record("pending")
+        return {"agent_session_id": target_id, "inbox_id": inbox_id, "status": "pending",
+                "queue_full": True,
+                "note": f"{exc}; the message is kept as pending."}
+    if outcome is None:
+        record("pending")
+        return {"agent_session_id": target_id, "inbox_id": inbox_id, "status": "pending",
+                "note": "queued in the target's inbox; read it with agent_out mode=inbox."}
+    status = str(outcome.get("status") or "")
+    record("pending" if status == "pending" else "delivered")
+    return {"agent_session_id": target_id, "inbox_id": inbox_id, **outcome}
+
+
+def _deliver_to_owner(owner_id: str, body: str, *, owner_row: Mapping[str, Any], sender: str,
+                      sender_row: Optional[Mapping[str, Any]], progress: bool,
+                      reply_to: str, profile: str = "") -> dict[str, Any]:
+    inbox_id = f"inbox-{uuid.uuid4().hex}"
+    enveloped = _delivery_text(
+        sender=sender, sender_subject=_row_subject(sender_row), inbox_id=inbox_id,
+        body=body, reply_to=reply_to, progress=progress)
+    # Gateway leases and queue routing use the composited ``agent:...`` session key; CLI/TUI
+    # use the conversation id. Queue the key the surface actually polls.
+    session_key = str(owner_row.get("session_key") or owner_id)
+    if not _owner_is_live(owner_id, session_key, profile=profile):
+        return {"agent_session_id": owner_id, "inbox_id": inbox_id, "status": "pending",
+                "note": "the owner conversation has no live surface; the message was not queued."}
+    try:
+        from tools.process_registry import process_registry
+
+        process_registry.completion_queue.put({
+            "type": "agent_message", "role": "agent_message",
+            "session_key": session_key, "agent_session_id": sender,
+            "from": sender, "from_subject": _row_subject(sender_row),
+            "inbox_id": inbox_id, "reply_to": inbox_id, "progress": bool(progress),
+            "text": enveloped, "content": body,
+        })
+    except Exception:  # health: allow BLE001 -- a broken queue must not claim delivery
+        logger.warning("agent inbox: owner queue failed for %s", owner_id, exc_info=True)
+        return {"agent_session_id": owner_id, "inbox_id": inbox_id, "status": "pending",
+                "note": "the owner's delivery queue is unavailable; the message was not queued."}
+    return {"agent_session_id": owner_id, "inbox_id": inbox_id, "status": "delivered",
+            "session_key": session_key,
+            "note": "queued for the owner's next turn boundary."}
+
+
 def stop_named_session(agent_session_id: str, *, parent_agent: Any,
                        reason: str = "stopped by the owner") -> Optional[dict[str, Any]]:
     """Cancel an owned named session that has no live roster record (idle/parked/older process).
@@ -202,11 +386,60 @@ def count_inbox(agent_session_id: str, *, status: str) -> int:
         release_or_close(db)
 
 
-def _session_row(agent_session_id: str) -> Optional[dict[str, Any]]:
+def _row_subject(row: Optional[Mapping[str, Any]]) -> str:
+    return str((row or {}).get("subject") or "")
+
+
+def _sender_subject(sender: str, *, profile: str = "") -> str:
+    """The sender's subject for the envelope; an owner conversation has none."""
+    return _row_subject(_session_row(sender, profile=profile)) if sender else ""
+
+
+def _conversation_row(session_id: str, *, profile: str = "") -> Optional[dict[str, Any]]:
+    """The main conversation row a child addresses; the row carries its routable session_key."""
     from hermes_state_registry import acquire, release_or_close
 
+    db_path = (Path(profile) / "state.db") if str(profile or "").strip() else None
     try:
-        db = acquire()
+        db = acquire(db_path)
+    except Exception:  # health: allow BLE001 -- an unreadable store rejects the delivery
+        return None
+    try:
+        return db.get_session(session_id)
+    except Exception:  # health: allow BLE001 -- an unreadable store rejects the delivery
+        logger.debug("agent inbox: conversation lookup failed for %s", session_id, exc_info=True)
+        return None
+    finally:
+        release_or_close(db)
+
+
+def _owner_is_live(session_id: str, session_key: str = "", *, profile: str = "") -> bool:
+    """True when a live surface holds the conversation's lease; unprovable counts as offline.
+
+    Gateway leases are keyed on the composited ``agent:...`` session key while CLI/TUI leases
+    use the conversation id, so either marker proves the owner is reachable.
+    """
+    wanted = {str(session_id or ""), str(session_key or "")} - {""}
+    if not wanted:
+        return False
+    try:
+        from hermes_cli.active_sessions import active_session_registry_snapshot
+
+        registry_home = Path(profile) if str(profile or "").strip() else None
+        return any(str(entry.get("session_id") or "") in wanted
+                   for entry in active_session_registry_snapshot(registry_home))
+    except Exception:  # health: allow BLE001 -- never claim delivery on an unprovable owner
+        logger.debug("agent inbox: owner liveness unreadable for %s", session_id, exc_info=True)
+        return False
+
+
+def _session_row(agent_session_id: str, *, profile: str = ""
+                 ) -> Optional[dict[str, Any]]:
+    from hermes_state_registry import acquire, release_or_close
+
+    db_path = (Path(profile) / "state.db") if str(profile or "").strip() else None
+    try:
+        db = acquire(db_path)
     except Exception:  # health: allow BLE001 -- lookup failure rejects the delivery
         logger.debug("agent inbox: no store for %s", agent_session_id, exc_info=True)
         return None
@@ -254,19 +487,23 @@ def session_lifecycle(row: Mapping[str, Any]) -> dict[str, Any]:
             "parked": str(row.get("status") or "") == "parked"}
 
 
-def _record(agent_session_id: str, sender: str, body: str, *, status: str) -> str:
+def _record(agent_session_id: str, sender: str, body: str, *, status: str,
+            progress: bool = False, reply_to: str = "", inbox_id: str = "",
+            profile: str = "") -> str:
     """Persist one delivery record; a failed write is logged, never raised into the turn."""
     from hermes_state_registry import acquire, release_or_close
 
+    db_path = (Path(profile) / "state.db") if str(profile or "").strip() else None
     try:
-        db = acquire()
+        db = acquire(db_path)
     except Exception:  # health: allow BLE001 -- the delivery itself already succeeded
         logger.debug("agent inbox: no store to record %s", agent_session_id, exc_info=True)
         return ""
     try:
         return db.add_agent_inbox(agent_session_id=agent_session_id, sender=sender,
                                   recipient=agent_session_id, body=body, kind="message",
-                                  status=status)
+                                  reply_to=reply_to, progress=progress, status=status,
+                                  inbox_id=inbox_id)
     except Exception:  # health: allow BLE001 -- a lost audit row must not lose the message
         logger.warning("agent inbox: write failed for %s", agent_session_id, exc_info=True)
         return ""
@@ -276,9 +513,12 @@ def _record(agent_session_id: str, sender: str, body: str, *, status: str) -> st
 
 __all__ = [
     "INBOX_PAGE",
+    "agent_message_envelope",
     "capture_steer_authority",
     "count_inbox",
     "deliver_owner_message",
+    "deliver_peer_message",
+    "envelope_inbox_row",
     "live_named_sessions",
     "owns_agent_session",
     "parked_named_sessions",

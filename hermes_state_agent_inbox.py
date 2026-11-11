@@ -29,14 +29,15 @@ class SessionAgentInboxMixin:
     def add_agent_inbox(
         self, *, agent_session_id: str, sender: str, recipient: str, body: str,
         kind: str = "message", reply_to: str = "", broadcast: bool = False,
-        progress: bool = False, status: str = "pending",
+        progress: bool = False, status: str = "pending", inbox_id: str = "",
     ) -> str:
         """Insert one delivery record and return its id.
 
         The id is minted here, outside the write callback, so a lock-retry replays an identical
-        INSERT instead of stacking a second row.
+        INSERT instead of stacking a second row. A caller that must put the id in the delivered
+        envelope first passes ``inbox_id``; the replay is still identical.
         """
-        inbox_id = f"inbox-{uuid.uuid4().hex}"
+        inbox_id = str(inbox_id or "") or f"inbox-{uuid.uuid4().hex}"
         now = time.time()
         row = (inbox_id, str(agent_session_id), str(sender or ""), str(recipient or ""),
                str(body), str(kind), str(reply_to or "") or None, int(bool(broadcast)),

@@ -86,6 +86,23 @@ def _refund_execute_code_only(agent: Any, assistant_message: Any) -> None:
         agent.iteration_budget.refund()
 
 
+def _terminal_yield(agent: Any, messages: Any) -> Any:
+    """Append and emit a named agent's terminal ``yield`` answer; ``None`` when it did not yield."""
+    state = getattr(agent, "_yield_state", None)
+    if state is None or state.payload is None:
+        return None
+    snapshot = state.snapshot()
+    final_response = snapshot.text if snapshot is not None else ""
+    append_message(messages, {"role": "assistant", "content": final_response})
+    if final_response:
+        agent._safe_print(f"\n{final_response}\n")
+        if agent.stream_delta_callback and not getattr(agent, "_hold_stream", False):
+            with suppress(Exception):
+                agent.stream_delta_callback(final_response)
+                agent.stream_delta_callback(None)
+    return snapshot
+
+
 def _persist_tool_turn(agent: Any, messages: Any, conversation_history: Any) -> Any:
     """Flush the staged tool-call turn before any side effect; classify a failure."""
     try:
@@ -232,6 +249,14 @@ def run_tool_round(
         _turn_exit_reason = "session_persistence_failed"
         final_response = ""
         failed = True
+        return _verdict("break")
+
+    # Explicit completion: a named agent's ``yield`` recorded a terminal payload while its
+    # tools ran. End the turn with that data instead of asking the model for another message.
+    _yield = _terminal_yield(agent, messages)
+    if _yield is not None:
+        _turn_exit_reason = "yielded"
+        final_response = _yield.text
         return _verdict("break")
 
     # ADR-12 D5 / ADR-17 P5: the one-shot prewalk handoff fires at this batch boundary, never

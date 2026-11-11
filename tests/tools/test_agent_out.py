@@ -28,7 +28,8 @@ class _FakeAgent:
     def run_conversation(self, message, system_message=None, conversation_history=None,
                          task_id=None):
         self.history = conversation_history
-        prompt = message.split("\n\n--- context ---")[0]
+        prompt = message.split("Complete assignment thoroughly:\n\n", 1)[-1]
+        prompt = prompt.split("\n\n--- context ---")[0]
         return {
             "final_response": f"answered: {prompt}",
             "api_calls": 1,
@@ -413,3 +414,22 @@ def test_settle_writes_the_structured_output_sidecar(tmp_path):
     assert manifest is not None and manifest["structured_output_written"] is True
     assert json.loads(Path(manifest["structured_output_path"]).read_text(encoding="utf-8")) \
         == {"x": 3}
+
+
+def test_inbox_roster_is_scoped_to_the_spawn_tree(monkeypatch):
+    from tools import agent_inbox
+
+    monkeypatch.setattr(agent_inbox, "live_named_sessions", lambda: [
+        {"agent_session_id": "sibling", "parent_session_id": "parent"},
+        {"agent_session_id": "foreign", "parent_session_id": "other-parent"},
+    ])
+    monkeypatch.setattr(agent_inbox, "read_inbox", lambda *_a, **_k: [])
+    monkeypatch.setattr(agent_inbox, "count_inbox", lambda *_a, **_k: 0)
+    monkeypatch.setattr(agent_inbox, "session_lifecycle",
+                        lambda _row: {"live": False, "parked": False})
+
+    payload = agent_out_tool._inbox_payload(
+        {"agent_session_id": "self", "parent_session_id": "parent"},
+        {"agent_session_id": "self"})
+
+    assert [peer["agent_session_id"] for peer in payload["peers"]] == ["sibling"]

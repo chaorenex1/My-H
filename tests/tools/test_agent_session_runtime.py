@@ -47,7 +47,8 @@ class _FakeAgent:
                          task_id=None):
         if type(self).block:
             self.release.wait(10)
-        prompt = message.split("\n\n--- context ---")[0]
+        prompt = message.split("Complete assignment thoroughly:\n\n", 1)[-1]
+        prompt = prompt.split("\n\n--- context ---")[0]
         self.history = conversation_history
         self.turns.append(prompt)
         return {
@@ -178,6 +179,9 @@ def test_a_settled_resident_session_parks_on_the_idle_ttl_and_revives_on_a_messa
     contents = [str(row.get("content") or "") for row in (rebuilt.history or [])]
     assert "long task" in contents and "answered: long task" in contents, (
         "a revive rebuilds the conversation from the bundle transcript")
+    rebuilt_tools = [tool["name"] for tool in rebuilt.kwargs.get("extra_tools") or ()]
+    assert "yield" in rebuilt_tools, "a revived named agent keeps its completion tool"
+    assert rebuilt._yield_state.__class__.__name__ == "YieldState"
     report = _out(mode="artifact", agent_session_id=session_id)
     assert report["content"] == "answered: next step", (
         "a wake turn refreshes the bundle report")
@@ -350,6 +354,19 @@ def test_revive_params_carry_the_ported_definition_fields(tmp_path):
     assert params["read_summarize"] is True
 
 
+def test_revive_params_carry_lineage_and_the_owning_depth():
+    session = agent_session_runtime._Session(
+        agent_session_id="scout-1", profile="", agent_name="scout", subject="go",
+        transcript_path="", parent_session_id="main-session",
+        spec={"spawns": ["reviewer"], "spawn_depth": 2, "system_prompt": "You scout."})
+
+    params = agent_session_runtime._revive_params(session)
+
+    assert params["session_id"] == "scout-1"
+    assert params["parent_session_id"] == "main-session"
+    assert params["meta"] == {"agent": "scout", "parent": "main-session", "depth": 2}
+
+
 def test_resident_spec_never_persists_advisor_credentials():
     definition = agent_tool._Definition(body="You port.", source="ported.md", metadata={
         "advisor": "@smol",
@@ -365,8 +382,87 @@ def test_resident_spec_never_persists_advisor_credentials():
         advisor={"model": "gpt-5-mini", "provider": "openai", "selector": "@smol"},
         read_summarize=True)
 
-    spec = agent_tool._resident_spec(call)
+    spec = agent_tool._resident_spec(call, depth=0)
 
     assert spec["autoload_skills"] == ["team-rubric"]
     assert spec["read_summarize"] is True
     assert "api_key" not in json.dumps(spec)
+
+
+def _idle(runtime: agent_session_runtime.AgentSessionRuntime, session_id: str) -> None:
+    runtime.open_session(agent_session_id=session_id, agent_name="scout",
+                         subject=session_id, transcript_path="", parent_session_id="owner",
+                         spec={})
+    runtime.finish(session_id)
+
+
+def test_wake_chain_stops_two_idle_peers_ping_ponging(monkeypatch):
+    runtime = agent_session_runtime.AgentSessionRuntime(limits={
+        "keep_alive": True, "idle_ttl_seconds": 1800, "max_runtime_seconds": 0,
+        "max_live": 8, "max_parked": 64, "wake_queue": 32, "max_wake_turns": 1})
+    _idle(runtime, "peer-a")
+    _idle(runtime, "peer-b")
+    # The wake worker is irrelevant here: only the admission decision is under test.
+    monkeypatch.setattr(runtime, "_ensure_worker_locked", lambda session: None)
+
+    first = runtime.deliver("peer-b", "hi", sender="peer-a")
+    assert first["status"] == "woken" and first["hops"] == 1
+    assert runtime._sessions["peer-b"].chain_id
+
+    second = runtime.deliver("peer-a", "back", sender="peer-b")
+    assert second["status"] == "pending" and second["hops"] == 2
+    assert "wake chain limit" in second["note"]
+
+    # An owner message starts a fresh chain and may wake again.
+    third = runtime.deliver("peer-a", "from owner", sender="owner-conversation")
+    assert third["status"] == "woken" and third["hops"] == 0
+    assert runtime._sessions["peer-a"].chain_id == ""
+    runtime.close()
+
+
+def test_revive_refuses_past_the_wake_chain_limit(monkeypatch):
+    runtime = agent_session_runtime.AgentSessionRuntime(limits={
+        "keep_alive": True, "idle_ttl_seconds": 1800, "max_runtime_seconds": 0,
+        "max_live": 8, "max_parked": 64, "wake_queue": 32, "max_wake_turns": 1})
+    _idle(runtime, "peer-a")
+    runtime._sessions["peer-a"].chain_id = "chain-shared"
+    runtime._sessions["peer-a"].hops = 1
+    monkeypatch.setattr(runtime, "_ensure_worker_locked", lambda session: None)
+
+    outcome = runtime._revive(
+        {"agent_session_id": "parked-1", "status": "parked", "metadata_json": {},
+         "agent_name": "scout", "subject": "parked", "transcript_path": "",
+         "parent_session_id": "owner"},
+        "wake up", sender="peer-a")
+
+    assert outcome["status"] == "pending" and outcome["hops"] == 2
+    assert "parked-1" not in runtime._sessions
+    runtime.close()
+
+
+def test_a_wake_answer_relays_through_the_peer_chain(monkeypatch):
+    runtime = agent_session_runtime.AgentSessionRuntime(limits={
+        "keep_alive": True, "idle_ttl_seconds": 1800, "max_runtime_seconds": 0,
+        "max_live": 8, "max_parked": 64, "wake_queue": 32, "max_wake_turns": 1})
+    _idle(runtime, "peer-a")
+    _idle(runtime, "peer-b")
+    calls: list[tuple[str, str, str]] = []
+    monkeypatch.setattr("tools.agent_inbox.deliver_peer_message",
+                        lambda target, text, **kw: calls.append(
+                            (target, text, kw["sender_session_id"])))
+
+    session = runtime._sessions["peer-a"]
+    session.last_sender = "peer-b"
+    runtime._notify_sender(session, "the answer")
+
+    assert calls == [("peer-b", "the answer", "peer-a")], (
+        "the relay goes through the same envelope/chain path as any peer message")
+    runtime.close()
+
+
+def test_session_limits_expose_the_yield_rollout_switch():
+    assert agent_session_runtime.session_limits({"agent_sessions": {"yield_tool": False}})[
+        "yield_tool"] is False
+    assert agent_session_runtime.session_limits({"agent_sessions": {"yield_tool": "off"}})[
+        "yield_tool"] is False
+    assert agent_session_runtime.session_limits({})["yield_tool"] is True

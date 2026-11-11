@@ -27,6 +27,7 @@ import itertools
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ DEFAULT_LIMITS: dict[str, Any] = {
     "max_parked": 64,
     "wake_queue": 32,
     "max_wake_turns": 1,
+    "yield_tool": True,
 }
 
 #: Watchdog cadence; a short TTL shortens the scan so a test-sized park does not wait a minute.
@@ -91,10 +93,11 @@ class _Session:
     last_activity: float = field(default_factory=time.time)
     pending_bodies: list[str] = field(default_factory=list)
     last_sender: str = ""
-    #: Wake turns since the last external delivery. One owner message triggers exactly one wake
-    #: turn (its queued bodies are joined), so this stays 1 on the owner path; the relay path
-    #: (P5) carries it forward to stop two idle peers ping-ponging past ``max_wake_turns``.
-    wake_turns: int = 0
+    #: Wake-chain accounting shared by owner and peer deliveries. An idle session may be woken
+    #: only while its hop count (the number of relay wakes already in this chain) stays within
+    #: ``agent_sessions.max_wake_turns``; one owner message starts a fresh chain.
+    chain_id: str = ""
+    hops: int = 0
     worker: bool = False
     stopped: bool = False
     timed_out: bool = False
@@ -108,6 +111,15 @@ def _number(value: Any, default: float, *, minimum: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
     return max(minimum, float(value))
+
+
+def _flag(value: Any, default: bool) -> bool:
+    """A boolean config value; strings use the same spelling as the other flags."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off", ""}
+    return default
 
 
 def session_limits(config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
@@ -126,11 +138,8 @@ def session_limits(config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]
             config = {}
     block = (config or {}).get("agent_sessions")
     block = block if isinstance(block, Mapping) else {}
-    keep = block.get("keep_alive", DEFAULT_LIMITS["keep_alive"])
-    if isinstance(keep, str):
-        keep = keep.strip().lower() not in {"0", "false", "no", "off", ""}
     return {
-        "keep_alive": bool(keep),
+        "keep_alive": _flag(block.get("keep_alive"), DEFAULT_LIMITS["keep_alive"]),
         "idle_ttl_seconds": _number(block.get("idle_ttl_seconds"),
                                     DEFAULT_LIMITS["idle_ttl_seconds"], minimum=0.0),
         "max_runtime_seconds": _number(block.get("max_runtime_seconds"),
@@ -142,6 +151,7 @@ def session_limits(config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]
                                   minimum=1.0)),
         "max_wake_turns": int(_number(block.get("max_wake_turns"),
                                       DEFAULT_LIMITS["max_wake_turns"], minimum=1.0)),
+        "yield_tool": _flag(block.get("yield_tool"), DEFAULT_LIMITS["yield_tool"]),
     }
 
 
@@ -410,10 +420,13 @@ class AgentSessionRuntime:
 
     def deliver(self, agent_session_id: str, body: str, *, sender: str = "",
                 row: Optional[Mapping[str, Any]] = None) -> Optional[dict[str, Any]]:
-        """Deliver one owner message; ``None`` means "no resident session", so the caller queues.
+        """Deliver one message; ``None`` means "no resident session", so the caller queues.
 
-        A running turn takes it as a steer; an idle session wakes; a parked row revives. Raises
-        :class:`AgentSessionQueueFull` when the session's wake queue or the live pool is full.
+        A running turn takes it as a steer; an idle session wakes; a parked row revives. A peer
+        delivery inherits the sender's wake chain and increments its hop count; past
+        ``max_wake_turns`` the message is left pending instead of waking (two idle peers can no
+        longer ping-pong forever). Raises :class:`AgentSessionQueueFull` when the session's wake
+        queue or the live pool is full.
         """
         session_id = str(agent_session_id)
         text = str(body or "")
@@ -423,6 +436,7 @@ class AgentSessionRuntime:
         with self._lock:
             session = self._sessions.get(session_id)
             if session is not None:
+                chain_id, hops = self._chain_for_sender_locked(sender)
                 session.last_sender = str(sender or "")
                 if session.state == "running" and session.agent is not None:
                     try:
@@ -434,24 +448,42 @@ class AgentSessionRuntime:
                     except Exception:  # health: allow BLE001 -- fall through to the wake queue
                         logger.debug("agent_sessions: live steer failed for %s", session_id,
                                      exc_info=True)
+                if hops > self._max_wake_turns_locked():
+                    session.chain_id, session.hops = chain_id, hops
+                    return {"status": "pending", "chain_id": chain_id, "hops": hops,
+                            "note": "wake chain limit reached "
+                                    f"({self._max_wake_turns_locked()} wake turn(s)); the "
+                                    "message stays pending for a new chain."}
                 limit = int(self._limits.get("wake_queue") or 1)
                 if len(session.pending_bodies) >= limit:
                     raise AgentSessionQueueFull(
                         f"agent session {session_id} has {limit} message(s) waiting for a wake "
                         "turn; wait for the current turn or raise agent_sessions.wake_queue")
+                session.chain_id, session.hops = chain_id, hops
                 session.pending_bodies.append(text)
                 session.last_activity = time.time()
-                session.wake_turns = 0
                 thread = self._ensure_worker_locked(session)
         if thread is not None:
             self._start_thread(thread)
         if session is not None:
-            return {"status": "woken",
+            return {"status": "woken", "chain_id": session.chain_id, "hops": session.hops,
                     "note": "queued for a wake turn; the answer lands in the session transcript "
                             "and its inbox as a wake_relay row."}
         if row is None or str(row.get("status") or "") != "parked":
             return None
         return self._revive(row, text, sender=sender)
+
+    def _max_wake_turns_locked(self) -> int:
+        return int(self._limits.get("max_wake_turns") or 1)
+
+    def _chain_for_sender_locked(self, sender: str) -> tuple[str, int]:
+        """``(chain_id, hops)`` for a delivery from *sender*; owner/unknown starts a fresh chain."""
+        session = self._sessions.get(str(sender or ""))
+        if session is None:
+            return "", 0
+        if not session.chain_id:
+            session.chain_id = f"chain-{uuid.uuid4().hex}"
+        return session.chain_id, session.hops + 1
 
     def _revive(self, row: Mapping[str, Any], body: str, *, sender: str = ""
                 ) -> dict[str, Any]:
@@ -459,10 +491,17 @@ class AgentSessionRuntime:
         where = str(get_hermes_home())
         thread: Optional[threading.Thread] = None
         with self._lock:
+            chain_id, hops = self._chain_for_sender_locked(sender)
+            if hops > self._max_wake_turns_locked():
+                return {"status": "pending", "chain_id": chain_id, "hops": hops,
+                        "note": "wake chain limit reached "
+                                f"({self._max_wake_turns_locked()} wake turn(s)); the session "
+                                "was not revived."}
             existing = self._sessions.get(session_id)
             if existing is not None:
                 # Another delivery revived it between our lookup and this lock: enqueue instead
                 # of replacing the live entry.
+                existing.chain_id, existing.hops = chain_id, hops
                 existing.pending_bodies.append(body)
                 existing.last_sender = str(sender or "")
                 existing.last_activity = time.time()
@@ -477,7 +516,7 @@ class AgentSessionRuntime:
                     transcript_path=str(row.get("transcript_path") or ""),
                     parent_session_id=str(row.get("parent_session_id") or ""),
                     spec=_spec_from_row(row), state="idle", pending_bodies=[body],
-                    last_sender=str(sender or ""))
+                    last_sender=str(sender or ""), chain_id=chain_id, hops=hops)
                 self._sessions[session_id] = session
                 thread = self._ensure_worker_locked(session)
                 self._ensure_watchdog_locked()
@@ -486,6 +525,7 @@ class AgentSessionRuntime:
             _revive_row(session_id, profile=where)
         self._start_thread(thread)
         return {"status": "revived" if revived else "woken",
+                "chain_id": chain_id, "hops": hops,
                 "note": "the session is rebuilding from its transcript; the answer will be "
                         "appended there and in its inbox (agent_out)."}
 
@@ -519,12 +559,18 @@ class AgentSessionRuntime:
                     return
                 bodies = list(session.pending_bodies)
                 session.pending_bodies.clear()
+                if not session.chain_id:
+                    session.chain_id = f"chain-{uuid.uuid4().hex}"
+                    session.hops = 0
                 session.state = "running"
                 session.started_at = time.time()
             rows = _take_pending(session_id, int(self._limits.get("wake_queue") or 1),
                                  profile=session.profile)
+            from tools.agent_inbox import envelope_inbox_row
+
             message = "\n\n".join(
-                [str(item.get("body") or "") for item in rows] + [body for body in bodies]
+                [envelope_inbox_row(row, profile=session.profile) for row in rows]
+                + [body for body in bodies]
             ).strip()
             if not message:
                 if self._settle_idle(session):
@@ -571,48 +617,68 @@ class AgentSessionRuntime:
         from agent import agent_run
         from tools.agent_inbox import register_live_session, unregister_live_session
 
-        if session.agent is not None:
-            register_live_session(agent_session_id=session.agent_session_id, agent=session.agent,
-                                  owner_session_id=session.parent_session_id,
-                                  goal=session.subject, depth=0,
-                                  authority=session.authority or None)
+        depth = int(session.spec.get("spawn_depth") or 0)
+        from tools.agent_tool import nested_spawn_policy
+
+        # A wake/revive is the same logical run: restore its spawn allow-list and recursion
+        # depth so a nested ``agent`` call is checked exactly as during the initial turn.
+        with nested_spawn_policy(session.spec.get("spawns"), depth):
+            if session.agent is not None:
+                if not getattr(session.agent, "_agent_definition_metadata", None):
+                    session.agent._agent_definition_metadata = dict(
+                        session.spec.get("definition_metadata") or {})
+                register_live_session(agent_session_id=session.agent_session_id,
+                                      agent=session.agent,
+                                      owner_session_id=session.parent_session_id,
+                                      goal=session.subject, depth=depth,
+                                      authority=session.authority or None)
+                try:
+                    return agent_run.continue_run(
+                        session.agent, message, task_id=session.agent_session_id,
+                        agent_name=session.agent_name,
+                        agent_session_id=session.agent_session_id,
+                        model=str(session.spec.get("model_name") or ""),
+                        provider=str(session.spec.get("provider_name") or ""),
+                        toolsets=list(session.spec.get("toolsets") or []),
+                        all_tools=bool(session.spec.get("all_tools")),
+                        history_key=session.parent_session_id,
+                        output_schema=session.spec.get("output_schema"),
+                        model_role=str(session.spec.get("model_role") or ""),
+                        read_summarize=session.spec.get("read_summarize"))
+                finally:
+                    unregister_live_session(session.agent_session_id, session.agent)
+            params = _revive_params(session)
+            from tools.agent_yield_tool import YieldState, build_yield_tool
+
+            # A rebuilt agent gets the same per-run completion surface as its first run.
+            yield_state = (YieldState(schema=params.get("output_schema"))
+                           if session_limits().get("yield_tool", True) else None)
+            if yield_state is not None:
+                params["extra_tools"] = [
+                    *(params.get("extra_tools") or ()), build_yield_tool(yield_state)]
+            conversation = _history(session.agent_name, session.agent_session_id,
+                                    profile=session.profile,
+                                    transcript_path=session.transcript_path)
+
+            def _on_agent(agent: Any) -> None:
+                if yield_state is not None:
+                    agent._yield_state = yield_state
+                _configure_tool_archive(session, agent)
+                self.note_agent(session.agent_session_id, agent)
+                register_live_session(agent_session_id=session.agent_session_id, agent=agent,
+                                      owner_session_id=session.parent_session_id,
+                                      goal=session.subject, depth=depth,
+                                      authority=session.authority or None)
+
             try:
-                return agent_run.continue_run(
-                    session.agent, message, task_id=session.agent_session_id,
-                    agent_name=session.agent_name,
-                    agent_session_id=session.agent_session_id,
-                    model=str(session.spec.get("model_name") or ""),
-                    provider=str(session.spec.get("provider_name") or ""),
-                    toolsets=list(session.spec.get("toolsets") or []),
-                    all_tools=bool(session.spec.get("all_tools")),
-                    history_key=session.parent_session_id,
-                    output_schema=session.spec.get("output_schema"),
-                    model_role=str(session.spec.get("model_role") or ""),
-                    read_summarize=session.spec.get("read_summarize"))
+                return agent_run.run(message, history=conversation,
+                                     agent_session_id=session.agent_session_id,
+                                     on_agent=_on_agent,
+                                     on_settled=lambda: unregister_live_session(
+                                         session.agent_session_id, session.agent),
+                                     **params)
             finally:
                 unregister_live_session(session.agent_session_id, session.agent)
-        params = _revive_params(session)
-        conversation = _history(session.agent_name, session.agent_session_id,
-                                profile=session.profile,
-                                transcript_path=session.transcript_path)
-
-        def _on_agent(agent: Any) -> None:
-            _configure_tool_archive(session, agent)
-            self.note_agent(session.agent_session_id, agent)
-            register_live_session(agent_session_id=session.agent_session_id, agent=agent,
-                                  owner_session_id=session.parent_session_id,
-                                  goal=session.subject, depth=0,
-                                  authority=session.authority or None)
-
-        try:
-            return agent_run.run(message, history=conversation,
-                                 agent_session_id=session.agent_session_id,
-                                 on_agent=_on_agent,
-                                 on_settled=lambda: unregister_live_session(
-                                     session.agent_session_id, session.agent),
-                                 **params)
-        finally:
-            unregister_live_session(session.agent_session_id, session.agent)
 
     def _after_turn(self, session: _Session, value: Any) -> bool:
         answer = str(getattr(value, "answer", "") or "")
@@ -621,7 +687,6 @@ class AgentSessionRuntime:
                 return False
             if session.timed_out:
                 return False
-            session.wake_turns += 1
             session.state = "idle"
             session.started_at = 0.0
             session.last_activity = time.time()
@@ -634,20 +699,22 @@ class AgentSessionRuntime:
         return True
 
     def _notify_sender(self, session: _Session, answer: str) -> None:
-        """Wake a live *named* sender; an ordinary conversation reads the relay row instead."""
+        """Relay a wake answer to a live *named* sender through the same peer chain.
+
+        Routing it through :func:`deliver_peer_message` (instead of a bare queue event) gives the
+        sender the same envelope, inbox record, and ``max_wake_turns`` check as any other
+        peer message: past the cap the answer is persisted as pending, not silently dropped.
+        An ordinary conversation sender reads the relay row instead.
+        """
         sender = str(session.last_sender or "")
         if not sender or not self.is_live(sender):
             return
         try:
-            from tools.process_registry import process_registry
+            from tools.agent_inbox import deliver_peer_message
 
-            process_registry.completion_queue.put({
-                "type": "async_delegation", "session_key": sender,
-                "agent_session_id": session.agent_session_id,
-                "subject": session.subject, "status": "completed",
-                "summary": answer, "goal": session.subject, "goals": [session.subject],
-                "role": "agent",
-            })
+            deliver_peer_message(sender, answer,
+                                 sender_session_id=session.agent_session_id,
+                                 profile=session.profile)
         except Exception:  # health: allow BLE001 -- a lost notification must not lose the run
             logger.warning("[agent_sessions] relay notification failed", exc_info=True)
 
@@ -853,7 +920,8 @@ def _spec_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(raw, Mapping):
         return dict(raw)
     return {"model_selector": str(row.get("model_role") or ""),
-            "system_prompt": "", "toolsets": [], "all_tools": False, "flags": {}}
+            "system_prompt": "", "toolsets": [], "all_tools": False, "flags": {},
+            "definition_metadata": {}}
 
 
 def _revive_params(session: _Session) -> dict[str, Any]:
@@ -861,6 +929,7 @@ def _revive_params(session: _Session) -> dict[str, Any]:
     spec = session.spec or {}
     body = str(spec.get("system_prompt") or "")
     project = str(spec.get("project_dir") or "")
+    definition_metadata = dict(spec.get("definition_metadata") or {})
     try:
         from pathlib import Path
 
@@ -870,6 +939,7 @@ def _revive_params(session: _Session) -> dict[str, Any]:
             Path(project) if project else None, session.agent_name,
             str(spec.get("skill_name") or ""), body)
         body = definition.body or body
+        definition_metadata = {**definition_metadata, **dict(definition.metadata or {})}
     except Exception:  # health: allow BLE001 -- the stored body still runs the session
         logger.warning("agent_sessions: definition re-read failed for %s",
                        session.agent_session_id, exc_info=True)
@@ -886,9 +956,13 @@ def _revive_params(session: _Session) -> dict[str, Any]:
         "autoload_skills": list(spec.get("autoload_skills") or []),
         "advisor": spec.get("advisor"),
         "read_summarize": spec.get("read_summarize"),
+        "definition_metadata": definition_metadata,
         "layer": session.agent_name,
         "history_session": session.parent_session_id,
-        "meta": {"agent": session.agent_name, "depth": 0},
+        "session_id": session.agent_session_id,
+        "parent_session_id": session.parent_session_id,
+        "meta": {"agent": session.agent_name, "parent": session.parent_session_id,
+                 "depth": int(spec.get("spawn_depth") or 0)},
         "keep_alive": True,
         "skip_memory": bool(flags.get("skip_memory", False)),
         "skip_context_files": bool(flags.get("skip_context_files", False)),

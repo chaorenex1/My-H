@@ -746,6 +746,11 @@ DEFAULT_CONFIG = {
     # Resident named-agent sessions (ADR-15 D7): a settled background `agent` run keeps its live
     # slot until the idle TTL parks it; wake/revive runs use this pool, never agent_loop.
     "agent_sessions": _agent_sessions(),
+    # Rollout switch for the ``<agent_message ...>`` envelope on peer/inbox delivery.
+    # false delivers the escaped body alone (no from/reply_to attributes).
+    "agent_messages": {
+        "envelope": True,
+    },
     "auxiliary": auxiliary_defaults(),
     "judgment": judgment_defaults(),
     "ttsr": ttsr_defaults(),
@@ -1266,6 +1271,15 @@ DEFAULT_CONFIG = {
     # Subagent delegation: `backend` = task-routing strategy ("default": keys below), `backends.<name>` = its settings.
     "delegation": {
         "backend": "default",
+        # Policy switches rendered into the tool-policy chapter (ADR-18). "bias" only shapes
+        # the prompt: "gated" = no subagents unless requested, "eager" = preferred.
+        "bias": "eager",
+        "eager_tasks": False,
+        "eager_tasks_always": False,
+        "inline_first": True,
+        # Rollout switch for the text shorthand ``agent(spawn="spawn:@<name>\n<body>")``.
+        # false keeps the structured ``agent_name`` + ``user_prompts`` form only.
+        "spawn_directive": True,
         "backends": {},
         "model": "",  # e.g. "google/gemini-3-flash-preview" (empty = inherit parent)
         "provider": "",  # e.g. "openrouter" (empty = inherit parent provider + credentials)
