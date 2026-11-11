@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field, fields
@@ -956,6 +957,11 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     stamp_prompt_epoch(agent, refresh_epoch)
 
 
+def _root_key(path: str) -> str:
+    """Comparison form of a workspace root (Windows case-folded, trailing separators dropped)."""
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     """Return False when the persisted runtime-identity lines are stale."""
     # Model/provider identity, then cwd drift.  A cwd change is a real content change (context
@@ -980,6 +986,23 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     stored_cwd = runtime_host_value(prompt, "Current working directory")
     if stored_cwd and stored_cwd != str(resolve_agent_cwd()):
         return False
+    # Additional workspace roots (`/add-dir`) are prompt content too: restoring a prompt whose
+    # block omits a root the session now holds would hide that root from the model. Only a
+    # session with a store can answer; an agent without one (subagent, test double) keeps its
+    # bytes, and an absent block plus no roots agree, so the feature's absence never rebuilds.
+    db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", "")
+    if db is not None and isinstance(session_id, str) and session_id:
+        try:
+            from agent.system_prompt import persisted_workspace_roots
+            from agent.workspace_dirs import prompt_roots
+            stored_roots = [_root_key(root) for root in persisted_workspace_roots(prompt)]
+            current_roots = [_root_key(root) for root in
+                             prompt_roots(session_id, db=db, cwd=resolve_agent_cwd())]
+        except Exception:  # health: allow BLE001 -- a failed probe must not force a rebuild per turn
+            logger.debug("workspace-root drift probe failed (session=%s)", session_id, exc_info=True)
+            return True
+        if stored_roots != current_roots:
+            return False
     # Platform is deliberately NOT an identity field: a surface switch does not invalidate the
     # stored bytes, it only makes their interface section out of date, and that is corrected by
     # agent.surface_switch.stage_surface_switch_note without touching the cached prefix (#104414).

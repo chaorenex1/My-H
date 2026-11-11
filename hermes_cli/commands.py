@@ -112,6 +112,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("worktree", "Show, list, create, or prune isolated git worktrees", "Session",
                cli_only=True, args_hint="[new [name]|list|prune [--dry-run]]",
                subcommands=("new", "list", "prune"), desktop="terminal"),
+    # Additional workspace roots of a local session (TUI/Desktop run them through the owner's
+    # handler). `cli_only` keeps them out of messaging menus: a chat's workspace is its own.
+    CommandDef("add-dir", "Add a workspace directory to this session (multi-root)", "Session",
+               cli_only=True, args_hint="<path>", desktop=None),
+    CommandDef("remove-dir", "Remove a workspace directory from this session", "Session",
+               cli_only=True, args_hint="<path>", desktop=None),
+    CommandDef("dirs", "Show this session's workspace directories (cwd and additional roots)", "Session",
+               cli_only=True, busy_policy="dispatch", desktop=None),
     CommandDef("compress", "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen)", "Session",
                aliases=("compact",), args_hint="[here [N] | focus topic | --preview|--dry-run]"),
     CommandDef("rollback", "List or restore filesystem checkpoints (restores keep your hand-edits; --all overrides)", "Session",

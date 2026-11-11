@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "Cancelar"
     prompt_other: "✏️ Outro (digitar resposta)"
     prompt_expired: ⌛ Essa solicitação não está mais aguardando resposta. Envie sua resposta como uma mensagem normal.
+workspace_dirs:
+  usage_add: "Uso: /add-dir <caminho>"
+  usage_remove: "Uso: /remove-dir <caminho>"
+  not_found: "O diretório não existe: {path}"
+  already_cwd: "O diretório de trabalho já é a raiz principal do espaço de trabalho desta sessão."
+  already: "Já está no espaço de trabalho: {path}"
+  added: "{path} adicionado."
+  missing: "Não é um diretório do espaço de trabalho: {path}"
+  removed: "{path} removido."
+  cwd_removal: "Não é possível remover o diretório de trabalho; use /worktree ou uma nova sessão."
+  local_only: "Este comando gerencia o espaço de trabalho de uma sessão local e não está disponível nesta plataforma."
+  listing_header: "Diretórios do espaço de trabalho:"
+  listing_cwd: "  {path} (diretório de trabalho)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Retroceder a um prompt anterior para editá-lo e reenviá-lo, ou bifurcar a partir dali (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "Ramificar a sessão atual (novo tópico no Discord/Telegram/Slack/Matrix; --here permanece aqui)"
   worktree:
     description: "Mostrar, listar, criar ou limpar worktrees git isolados"
+  add-dir:
+    description: "Adiciona um diretório ao espaço de trabalho desta sessão (multi-raiz)"
+  remove-dir:
+    description: "Remove um diretório do espaço de trabalho desta sessão"
+  dirs:
+    description: "Mostra os diretórios do espaço de trabalho desta sessão (cwd e raízes adicionais)"
   compress:
     description: "Comprimir o contexto da conversa (adicione 'here [N]' para manter os N turnos recentes; --preview mostra o que aconteceria)"
   rollback:

@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "取消"
     prompt_other: "✏️ 其他（輸入答案）"
     prompt_expired: ⌛ 該提示已不再等待回答。請以一般訊息傳送您的回覆。
+workspace_dirs:
+  usage_add: "用法：/add-dir <路徑>"
+  usage_remove: "用法：/remove-dir <路徑>"
+  not_found: "目錄不存在：{path}"
+  already_cwd: "工作目錄已經是此會話的主要工作區根目錄。"
+  already: "已在此工作區中：{path}"
+  added: "已新增 {path}。"
+  missing: "不是工作區目錄：{path}"
+  removed: "已移除 {path}。"
+  cwd_removal: "無法移除工作目錄；請用 /worktree 或新會話變更它。"
+  local_only: "此命令管理本機會話的工作區，在目前平台無法使用。"
+  listing_header: "工作區目錄："
+  listing_cwd: "  {path}（工作目錄）"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "回溯至先前的提示以編輯並重新傳送,或從該處分支 (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "分支目前工作階段（在 Discord/Telegram/Slack/Matrix 開新討論串；--here 留在原處）"
   worktree:
     description: "顯示、列出、建立或清理隔離的 git 工作樹"
+  add-dir:
+    description: "將工作區目錄新增到此會話（多根）"
+  remove-dir:
+    description: "從此會話移除工作區目錄"
+  dirs:
+    description: "顯示此會話的工作區目錄（目前目錄與額外根目錄）"
   compress:
     description: "壓縮對話上下文（加上 'here [N]' 保留最近 N 回合；--preview 預覽結果）"
   rollback:

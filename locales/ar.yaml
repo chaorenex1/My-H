@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "إلغاء"
     prompt_other: "✏️ غير ذلك (اكتب الإجابة)"
     prompt_expired: ⌛ لم يعد هذا الطلب ينتظر إجابة. أرسل ردك كرسالة عادية.
+workspace_dirs:
+  usage_add: "الاستخدام: /add-dir <المسار>"
+  usage_remove: "الاستخدام: /remove-dir <المسار>"
+  not_found: "الدليل غير موجود: {path}"
+  already_cwd: "دليل العمل هو بالفعل الجذر الأساسي لمساحة عمل هذه الجلسة."
+  already: "موجود بالفعل في مساحة العمل: {path}"
+  added: "أُضيف {path}."
+  missing: "ليس دليل مساحة عمل: {path}"
+  removed: "أُزيل {path}."
+  cwd_removal: "لا يمكن إزالة دليل العمل؛ استخدم /worktree أو جلسة جديدة."
+  local_only: "يدير هذا الأمر مساحة عمل جلسة محلية وهو غير متاح على هذه المنصة."
+  listing_header: "أدلة مساحة العمل:"
+  listing_cwd: "  {path} (دليل العمل)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "الإرجاع إلى موجّه سابق لتعديله وإعادة إرساله، أو التفريع من هناك (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "تفريع الجلسة الحالية (سلسلة جديدة على Discord/Telegram/Slack/Matrix؛ --here يبقيها هنا)"
   worktree:
     description: "عرض أو سرد أو إنشاء أو تنظيف git worktrees معزولة"
+  add-dir:
+    description: "يضيف دليل مساحة عمل إلى هذه الجلسة (متعدد الجذور)"
+  remove-dir:
+    description: "يزيل دليل مساحة عمل من هذه الجلسة"
+  dirs:
+    description: "يعرض أدلة مساحة عمل هذه الجلسة (cwd والجذور الإضافية)"
   compress:
     description: "ضغط سياق المحادثة (أضف 'here [N]' للاحتفاظ بآخر N أدوار؛ --preview يعرض ما سيحدث)"
   rollback:

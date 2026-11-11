@@ -34,10 +34,10 @@ def _watch_reviewer(cli, _arg):
 
 
 # Reports the owner already lays out (main's own line builders): printed as is.
-_VERBATIM = frozenset({"toolsets"})
+_VERBATIM = frozenset({"toolsets", "dirs", "add-dir", "remove-dir"})
 GATEWAY_SETTINGS = {"personality": None, "busy": _mirror_busy, "approvals": None, "footer": None, "fast": None,
                     "refine": None, "review": _watch_reviewer, "cron": None,
-                    "toolsets": None}
+                    "toolsets": None, "dirs": None, "add-dir": None, "remove-dir": None}
 
 
 def _unbounded(canonical, arg):

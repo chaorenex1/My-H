@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "İptal"
     prompt_other: "✏️ Diğer (yanıt yazın)"
     prompt_expired: ⌛ Bu istem artık yanıt beklemiyor. Yanıtınızı normal bir mesaj olarak gönderin.
+workspace_dirs:
+  usage_add: "Kullanım: /add-dir <yol>"
+  usage_remove: "Kullanım: /remove-dir <yol>"
+  not_found: "Dizin mevcut değil: {path}"
+  already_cwd: "Çalışma dizini zaten bu oturumun birincil çalışma alanı kökü."
+  already: "Zaten çalışma alanında: {path}"
+  added: "{path} eklendi."
+  missing: "Çalışma alanı dizini değil: {path}"
+  removed: "{path} kaldırıldı."
+  cwd_removal: "Çalışma dizini kaldırılamaz; değiştirmek için /worktree veya yeni bir oturum kullanın."
+  local_only: "Bu komut yerel bir oturumun çalışma alanını yönetir ve bu platformda kullanılamaz."
+  listing_header: "Çalışma alanı dizinleri:"
+  listing_cwd: "  {path} (çalışma dizini)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Düzenleyip yeniden göndermek için önceki bir isteme geri sar veya oradan çatalla (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "Geçerli oturumu dallandır (Discord/Telegram/Slack/Matrix'te yeni konu; --here burada kalır)"
   worktree:
     description: "Yalıtılmış git worktree'lerini göster, listele, oluştur veya temizle"
+  add-dir:
+    description: "Bu oturuma bir çalışma alanı dizini ekler (çok köklü)"
+  remove-dir:
+    description: "Bu oturumdan bir çalışma alanı dizinini kaldırır"
+  dirs:
+    description: "Bu oturumun çalışma alanı dizinlerini gösterir (cwd ve ek kökler)"
   compress:
     description: "Konuşma bağlamını sıkıştır (son N turu tutmak için 'here [N]' ekleyin; --preview ne olacağını gösterir)"
   rollback:

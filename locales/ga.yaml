@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "Cealaigh"
     prompt_other: "✏️ Eile (clóscríobh freagra)"
     prompt_expired: ⌛ Níl an leid sin ag fanacht le freagra a thuilleadh. Seol do fhreagra mar ghnáth-theachtaireacht.
+workspace_dirs:
+  usage_add: "Úsáid: /add-dir <conair>"
+  usage_remove: "Úsáid: /remove-dir <conair>"
+  not_found: "Níl an eolaire ann: {path}"
+  already_cwd: "Is é an eolaire oibre fréamh phríomhúil spáis oibre an tseisiúin seo cheana féin."
+  already: "Cheana sa spás oibre: {path}"
+  added: "Cuireadh {path} leis."
+  missing: "Ní heolaire spáis oibre é: {path}"
+  removed: "Baineadh {path}."
+  cwd_removal: "Ní féidir an t-eolaire oibre a bhaint; úsáid /worktree nó seisiún nua."
+  local_only: "Bainistíonn an t-ordú seo spás oibre seisiúin áitiúil agus níl sé ar fáil ar an ardán seo."
+  listing_header: "Eolairí spáis oibre:"
+  listing_cwd: "  {path} (eolaire oibre)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Athchas go leid níos luaithe chun í a chur in eagar & a athsheoladh, nó gabhlaigh as sin (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "Brainseáil an seisiún reatha (snáithe nua ar Discord/Telegram/Slack/Matrix; fanann --here anseo)"
   worktree:
     description: "Taispeáin, liostáil, cruthaigh, nó bearr worktrees git scoite"
+  add-dir:
+    description: "Cuireann eolaire spáis oibre leis an seisiún seo (ilfhréamh)"
+  remove-dir:
+    description: "Baineann eolaire spáis oibre den seisiún seo"
+  dirs:
+    description: "Taispeánann eolairí spáis oibre an tseisiúin seo (cwd agus fréamhacha breise)"
   compress:
     description: "Dlúthaigh comhthéacs an chomhrá (cuir 'here [N]' leis chun na N seal is déanaí a choinneáil; taispeánann --preview a dtarlódh)"
   rollback:

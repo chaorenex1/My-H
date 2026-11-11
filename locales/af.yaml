@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "Kanselleer"
     prompt_other: "✏️ Ander (tik antwoord)"
     prompt_expired: ⌛ Daardie navraag wag nie meer op 'n antwoord nie. Stuur jou antwoord as 'n gewone boodskap.
+workspace_dirs:
+  usage_add: "Gebruik: /add-dir <pad>"
+  usage_remove: "Gebruik: /remove-dir <pad>"
+  not_found: "Gids bestaan nie: {path}"
+  already_cwd: "Die werkgids is reeds hierdie sessie se primêre werkruimte-wortel."
+  already: "Reeds in die werkruimte: {path}"
+  added: "{path} bygevoeg."
+  missing: "Nie 'n werkruimtegids nie: {path}"
+  removed: "{path} verwyder."
+  cwd_removal: "Kan nie die werkgids verwyder nie; gebruik /worktree of 'n nuwe sessie."
+  local_only: "Hierdie opdrag bestuur 'n plaaslike sessie se werkruimte en is nie op hierdie platform beskikbaar nie."
+  listing_header: "Werkruimtegidse:"
+  listing_cwd: "  {path} (werkgids)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Spoel terug na 'n vroeëre opdrag om dit te wysig & weer te stuur, of vurk van daar af (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "Vertak die huidige sessie (nuwe draad op Discord/Telegram/Slack/Matrix; --here bly hier)"
   worktree:
     description: "Wys, lys, skep of snoei geïsoleerde git-werkbome"
+  add-dir:
+    description: "Voeg 'n werkruimtegids by hierdie sessie (meervoudige wortels)"
+  remove-dir:
+    description: "Verwyder 'n werkruimtegids uit hierdie sessie"
+  dirs:
+    description: "Wys hierdie sessie se werkruimtegidse (cwd en bykomende wortels)"
   compress:
     description: "Pers gesprekskonteks saam (voeg 'here [N]' by om die onlangse N beurte te behou; --preview wys wat sou gebeur)"
   rollback:

@@ -494,6 +494,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     cache_write_tokens INTEGER DEFAULT 0,
     reasoning_tokens INTEGER DEFAULT 0,
     cwd TEXT,
+    -- Additional workspace roots (`/add-dir`), a JSON array of absolute paths; NULL/`[]` = none.
+    workspace_roots TEXT,
     git_branch TEXT,
     git_repo_root TEXT,
     git_metadata_generation INTEGER NOT NULL DEFAULT 0,

@@ -1497,6 +1497,20 @@ platform:
     confirm_cancel: "Mégse"
     prompt_other: "✏️ Egyéb (írd be a választ)"
     prompt_expired: ⌛ Ez a kérdés már nem vár válaszra. Küldd el a válaszodat normál üzenetként.
+workspace_dirs:
+  usage_add: "Használat: /add-dir <útvonal>"
+  usage_remove: "Használat: /remove-dir <útvonal>"
+  not_found: "A könyvtár nem létezik: {path}"
+  already_cwd: "A munkakönyvtár már ennek a munkamenetnek az elsődleges munkaterület-gyökere."
+  already: "Már a munkaterületen: {path}"
+  added: "{path} hozzáadva."
+  missing: "Nem munkaterület-könyvtár: {path}"
+  removed: "{path} eltávolítva."
+  cwd_removal: "A munkakönyvtár nem távolítható el; használj /worktree-t vagy új munkamenetet."
+  local_only: "Ez a parancs egy helyi munkamenet munkaterületét kezeli, és ezen a platformon nem érhető el."
+  listing_header: "Munkaterület-könyvtárak:"
+  listing_cwd: "  {path} (munkakönyvtár)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Visszatekerés egy korábbi prompthoz a szerkesztéshez és újraküldéshez, vagy elágazás onnan (Esc Esc)"
@@ -1560,6 +1574,12 @@ slash:
     description: "Az aktuális munkamenet elágaztatása (új szál Discordon/Telegramon/Slacken/Matrixon; a --here itt marad)"
   worktree:
     description: "Izolált git worktree-k megjelenítése, listázása, létrehozása vagy tisztítása"
+  add-dir:
+    description: "Munkaterület-könyvtárat ad ehhez a munkamenethez (többgyökerű)"
+  remove-dir:
+    description: "Eltávolít egy munkaterület-könyvtárat ebből a munkamenetből"
+  dirs:
+    description: "Megjeleníti a munkamenet munkaterület-könyvtárait (cwd és további gyökerek)"
   compress:
     description: "A beszélgetés kontextusának tömörítése (a 'here [N]' megtartja az utolsó N kört; a --preview megmutatja, mi történne)"
   rollback:
