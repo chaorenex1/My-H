@@ -22278,3 +22278,15 @@ def test_named_profile_without_backend_stays_local_under_ssh_launch(monkeypatch,
     monkeypatch.setattr(server, "_profile_home", lambda name: home if name == "plain" else None)
 
     assert server._completion_cwd({"profile": "plain", "cwd": launch, "cwd_explicit": False}) == launch
+
+
+def test_agent_messages_do_not_collapse_in_the_notification_dedup_key():
+    """Two inbound peer messages in one poll must each start their own turn."""
+    from tui_gateway.session_notifications import _notification_event_dedup_key
+
+    first = {"type": "agent_message", "session_key": "agent:main:tui:1",
+             "inbox_id": "inbox-a"}
+    second = dict(first, inbox_id="inbox-b")
+
+    assert _notification_event_dedup_key(first) != _notification_event_dedup_key(second)
+    assert _notification_event_dedup_key(first) == _notification_event_dedup_key(dict(first))

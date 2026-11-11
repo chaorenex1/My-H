@@ -139,6 +139,9 @@ def _notification_event_dedup_key(evt: dict) -> tuple:
             task_idx = ((evt.get("results") or [{}])[0] or {}).get("task_index", "")
             return (evt.get("delegation_id", ""), evt_type, "task_failure", task_idx)
         return (evt.get("delegation_id", ""), evt_type)
+    if evt_type == "agent_message":
+        # One inbound message is its own event; a payload id keeps two messages from collapsing.
+        return (evt.get("session_key", ""), evt_type, evt.get("inbox_id", ""))
     extra = _DEDUP_EXTRA_FIELDS.get("watch_overflow_" if evt_type.startswith("watch_overflow_") else evt_type, ())
     return (evt.get("session_id", ""), evt_type, *(evt.get(f, 0 if f == "suppressed" else "") for f in extra))
 
@@ -697,9 +700,9 @@ def _notif_handle_event(sid, session, evt, emitted, registry, fmt, deferred, com
         render_notification(lambda: _emit("status.update", sid, {"kind": "process", "text": display_text}),
                             platform="tui", diagnostic=diagnostic_process_event(evt))
         emitted.add(dedup_key)
-    if evt_type != "async_delegation" and _background_notifications_off(session):
+    if evt_type not in {"async_delegation", "agent_message"} and _background_notifications_off(session):
         # The user opted out of process-driven agent wakes: the status row above is the whole
-        # delivery. Subagent results are not process notifications and still land.
+        # delivery. Subagent results and peer messages are not process notifications and still land.
         return True
     if evt_type == "completion" and completions is not None:
         completions.append((evt, text))

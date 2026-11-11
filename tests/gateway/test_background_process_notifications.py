@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gateway.config import GatewayConfig, Platform
-from gateway.run import GatewayRunner, _parse_session_key
+from gateway.run import GatewayRunner, _drain_gateway_watch_events, _parse_session_key
 from gateway.run_notifications import INTERNAL_NOTIFICATION_FOOTER
 
 
@@ -879,3 +879,41 @@ async def test_raw_output_modes_are_human_facing(monkeypatch, tmp_path):
         assert "proc_deadbeef" not in text and "[Background process" not in text and "~" not in text
         assert "\x1b[" not in text
         assert "make -j8 all" in text
+
+
+def test_the_watch_drain_requeues_agent_messages_for_their_owner():
+    """A peer message is not a watch event: dropping it here would lose the delivery."""
+    events = queue.Queue()
+    events.put({"type": "agent_message", "session_key": "agent:main:telegram:dm:1",
+                "text": "<agent_message>hi</agent_message>"})
+    events.put({"type": "watch_match", "session_id": "proc_1", "pattern": "done"})
+
+    drained = _drain_gateway_watch_events(events)
+
+    assert [event["type"] for event in drained] == ["watch_match"]
+    requeued = list(events.queue)
+    assert [event["type"] for event in requeued] == ["agent_message"]
+
+
+def test_an_agent_message_routes_on_the_owners_composited_key():
+    """The child→owner event carries the owner's ``agent:...`` key, so routing resolves."""
+    event = {"type": "agent_message", "session_key": "agent:main:telegram:dm:123"}
+
+    GatewayRunner._enrich_async_delegation_routing(None, event)
+
+    assert event["platform"] == "telegram"
+    assert event["chat_type"] == "dm" and event["chat_id"] == "123"
+
+
+def test_peer_messages_never_coalesce_into_a_delegation_batch():
+    fields = GatewayRunner._ASYNC_GROUP_KEY_FIELDS
+    first = {"type": "agent_message", "session_key": "agent:main:telegram:dm:1",
+             "inbox_id": "inbox-a"}
+    second = dict(first, inbox_id="inbox-b")
+
+    assert (GatewayRunner._event_route_key(first, fields)
+            != GatewayRunner._event_route_key(second, fields))
+    # Async delegations carry no inbox_id, so their batching behavior is unchanged.
+    deleg = {"type": "async_delegation", "session_key": "agent:main:telegram:dm:1"}
+    assert (GatewayRunner._event_route_key(deleg, fields)
+            == GatewayRunner._event_route_key(dict(deleg), fields))

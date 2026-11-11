@@ -471,6 +471,9 @@ def format_process_notification(evt: dict) -> str | None:
         return f"[IMPORTANT: {evt.get('message', '')}]"
     if evt_type == "async_delegation":
         return _format_async_delegation(evt)
+    if evt_type == "agent_message":
+        # The envelope was built (and escaped) by tools.agent_inbox; deliver it verbatim.
+        return str(evt.get("text") or evt.get("message") or "") or None
     _sid, _cmd = evt.get("session_id", "unknown"), evt.get("command", "unknown")
     _attribution = _delegation_attribution_line(evt)
     if evt.get("handoff_note"):

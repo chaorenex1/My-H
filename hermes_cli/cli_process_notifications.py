@@ -58,7 +58,8 @@ class CLIProcessNotificationsMixin:
             complete_event_delivery(event, claim)
         if self._background_notifications_suppressed():
             # Subagent results are not process notifications: they still land.
-            claimed = [(event, text) for event, text in claimed if event.get("type") == "async_delegation"]
+            claimed = [(event, text) for event, text in claimed
+                       if event.get("type") in ("async_delegation", "agent_message")]
         for notifications in group_process_notifications(claimed):
             event, text = notifications[0]
             evt_type = event.get("type", "completion")
