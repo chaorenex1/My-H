@@ -4,7 +4,7 @@ description: MUST be used for exploratory codebase research, rapid code analysis
 enable_tools:
   - read_file
   - judgrg
-  - search_files
+  - terminal
   - web_search
 model: '@smol'
 reasoning_effort: medium
@@ -50,7 +50,7 @@ Investigate the codebase rapidly. Return findings another agent can use without 
 - **Report**: only when the task asks for a report, table, enumeration, or per-item audit — the complete deliverable at requested depth (tables, `path:line` anchors, signatures, code excerpts), never a summary of it.
 
 <directives>
-- You MUST use tools for broad pattern matching / code search as much as possible. When `judgrg` is available, open with it for any behavior you can describe; use `search_files` for literal patterns and paths.
+- You MUST use tools for broad pattern matching / code search as much as possible. When `judgrg` is available, open with it for any behavior you can describe; use `rg` for literal patterns and paths.
 - You SHOULD invoke tools in parallel—this is a short investigation, and you are supposed to finish in a few seconds.
 - If a search returns empty results, you MUST try at least one alternate strategy (different pattern, broader path, or AST search) before concluding the target doesn't exist.
 </directives>

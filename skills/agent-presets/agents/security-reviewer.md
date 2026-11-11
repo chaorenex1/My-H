@@ -4,7 +4,7 @@ description: Read-only security specialist for evidence-backed repository vulner
 enable_tools:
   - read_file
   - judgrg
-  - search_files
+  - terminal
   - code_intel
 output:
   type: object

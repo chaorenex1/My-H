@@ -4,9 +4,10 @@ Complete content of the agent definitions omp embeds at build time and exposes t
 tool. These are the prompts a spawned subagent actually runs, not summaries.
 
 Hermes does not scan this directory. `scripts/build_bundled_agents.py` translates the snapshots
-into `skills/agent-presets/agents/` (omp `tools`/`thinking-level` → `enable_tools`/`reasoning_effort`,
-prose tool names → Hermes names); that converted skill is what the `agent` tool discovers. Run the
-script after refreshing a snapshot; `--check` fails on stale output.
+into `skills/agent-presets/agents/` (omp `tools`/`thinking-level` → `enable_tools`/`reasoning_effort`;
+`grep`/`glob`/`ast_grep` declare `terminal` while the prose names `rg`/`ast-grep`); that converted
+skill is what the `agent` tool discovers. Run the script after refreshing a snapshot; `--check`
+fails on stale output.
 
 Source: `packages/coding-agent/src/prompts/agents/` in the vendored oh-my-pi tree
 (`C:/Users/zarag/projects/hermes-omp-ui/vendor/oh-my-pi`), consumed by

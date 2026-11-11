@@ -63,7 +63,7 @@ enforces the result before any run or background dispatch:
 ---
 name: scout
 description: "Read-only codebase reconnaissance and fact gathering."
-enable_tools: [read_file, judgrg, search_files, web_search]
+enable_tools: [read_file, judgrg, terminal, web_search]
 max_iterations: 100
 background: true
 skip_memory: true
@@ -268,18 +268,21 @@ from tools rather than deleted.
 Additional rules:
 
 - Tool names: `read` → `read_file`, `write` → `write_file`, `edit` → `patch`,
-  `grep`/`glob`/`ls`/`find` → `search_files`, `bash` → `terminal`, `todo_write` → `todo_list`,
-  `web_search` stays. `ast_grep` has no direct Hermes tool: express the step as `search_files`
-  for locating plus `patch` for the edit, and document that exact AST semantics need an
-  extension rather than leaving the omp tool name in prose. `sonic` must not retain omp
-  mutation names (`write`, `edit`, `todo_write`).
+  `find` → `judgrg`, `bash`/`grep`/`glob`/`ast_grep`/`ast_edit` → `terminal`, `lsp` → `code_intel`,
+  `todo_write` → `todo_list`, `web_search` stays. `enable_tools` accepts registered tool names
+  only, so every search is declared as `terminal`; the **body** names the binary the agent runs —
+  `rg`, `rg --files` for the glob equivalent, and `ast-grep` for structural search. `search_files`
+  is the structured fallback (files-only, counts, paging), never a preset's declared surface.
+  `sonic` must not retain omp mutation names (`write`, `edit`, `todo_write`).
 - Never leave an omp URI or pseudo-tool in a definition. Replace it with the concrete tool call
-  (`read_file`, `write_file`, `search_files`, `session_search`, `process_manage`, `delegate_task`).
+  (`read_file`, `write_file`, `terminal` running `rg`, `session_search`, `process_manage`,
+  `delegate_task`).
 - State the output contract in the body: concise findings first, evidence as `path:line`,
   explicit uncertainty, no process replay. Background delivery truncates the notification at
   2000 characters and points at the transcript, so lead with the result.
-- Read-only definitions must not claim they can edit or run tests. The prompt and the toolset must
-  agree.
+- Read-only definitions must not claim they can edit or run tests. Their prompt carries the
+  constraint: `enable_tools` narrows what the agent may call, but `terminal` — present for
+  search — can still mutate, so a read-only persona says so in prose.
 - Where Hermes has no exact primitive, port the observable behavior by composition and document
   the fidelity gap; do not silently drop the instruction. `seance` is the worked example:
   `session_search` + `read_file` replace transcript forking and artifact scoping.
@@ -289,11 +292,11 @@ Additional rules:
 | File | Surface | Spawning | Notes |
 |---|---|---|---|
 | `skills/agent-presets/agents/init.md` | `toolsets: file, search, terminal, agents` | yes (`agents`) | Surveys the repository, fans out four read-only `delegate_task` slices, and writes `AGENTS.md` at the project root. |
-| `skills/agent-presets/agents/scout.md` | `enable_tools: read_file, judgrg, search_files, web_search` | no | No terminal, no write tools: the allowlist is the read/search surface. |
+| `skills/agent-presets/agents/scout.md` | `enable_tools: read_file, judgrg, terminal, web_search` | no | No write tools; `terminal` exists for `rg`, and the prompt keeps the run read-only. |
 | `skills/agent-presets/agents/sonic.md` | default host toolsets | no | Mechanical edits are allowed; no `agents` toolset, so it cannot fan out. |
 | `skills/agent-presets/agents/reviewer.md` | `enable_tools: read_file, judgrg, terminal, code_intel, web_search` | `spawns: [scout]` | `terminal` lets it run tests; no `patch`/`write_file`, so edits stay out of reach. |
-| `skills/agent-presets/agents/security-reviewer.md` | `enable_tools: read_file, judgrg, search_files, code_intel` | no | No terminal: findings are static-analysis evidence, never executed exploit code. |
-| `skills/agent-presets/agents/seance.md` | `enable_tools: read_file, search_files` | no | Emulates transcript consultation with `session_search` + `read_file`; no context fork or source-artifact scope. |
+| `skills/agent-presets/agents/security-reviewer.md` | `enable_tools: read_file, judgrg, terminal, code_intel` | no | No write tools; `terminal` runs `rg`/`ast-grep`, and findings are static-analysis evidence, never executed exploit code. |
+| `skills/agent-presets/agents/seance.md` | `enable_tools: read_file, terminal` | no | Emulates transcript consultation with `session_search` + `read_file`/`rg`; no context fork or source-artifact scope. |
 
 `init` is ported from omp's `agents/init.md` command prompt rather than its bundled agent set: it
 ships so a fresh repository can bootstrap its own `AGENTS.md`. It holds `delegation` for the

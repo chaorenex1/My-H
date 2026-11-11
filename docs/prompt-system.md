@@ -74,30 +74,38 @@ skill_search-> llm根据候选技能列表生成多条问题指令，上限3条-
 
 ## omp ui和hermes的工具映射
 
+规范版本在 `agent/prompts/system/AGENTS.md` § 规则 2；两处同步改。`formatter` 指渲染/计数归到哪个工具。
+
 ```text
-read -> read_file
+read       -> read_file
 
-find -> judgrg
+find       -> judgrg
 
-grep -> terminal中使用rg
+grep       -> terminal中使用rg，formatter是terminal
 
-glob -> terminal中使用rg
+glob       -> terminal中使用rg，formatter是terminal
 
-bash- > terminal /process
+bash- > terminal
 
-lsp -> code_intel
+lsp        -> code_intel
 
 web_search ->web_search
 
-ast_grep -> terminal中使用ast-grep
+ast_grep   -> terminal中使用ast-grep，formatter是terminal
 
-ast_edit-> terminal中使用ast-grep
+ast_edit-> terminal中使用ast-grep，formatter是terminal
 
 write -> write_file
 
 edit -> patch
 
 eval -> execute_code
+proc -> process_manage
+agent_out -> agent_out
+rule_view -> rule_view
+agent_message -> agent_message
+irc -> agent_message（发送）+ agent_out mode=inbox（读取）
+yield -> yield
 ```
 
 ## prompt system

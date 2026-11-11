@@ -24,7 +24,7 @@ them through its normal `skills/*/agents/` scan, so they work without installati
 - A repository has no `AGENTS.md`, or its instructions have drifted from the code; `init` surveys
   the tree and writes the document.
 - A task needs a reusable persona with a fixed tool surface, not an anonymous one-off child.
-- You want a read-only reviewer that cannot edit the workspace by construction.
+- You want a read-only reviewer: no edit tool in its surface, and a prompt that forbids writes.
 - You need a second opinion on a diff with the operator's own model route and effort level.
 - You want to consult an earlier conversation that this session no longer holds.
 
@@ -34,7 +34,8 @@ goal that needs no durable history.
 ## Prerequisites
 
 - The `agents` toolset (the `agent` tool itself). The converted definitions name their tools
-  directly (`read_file`, `search_files`, `web_search`, `terminal`, `code_intel`); those tools are
+  directly (`read_file`, `judgrg`, `terminal`, `web_search`, `code_intel`): search is declared as
+  `terminal`, and the body tells the agent to run ripgrep or ast-grep through it. Those tools are
   available when the matching toolsets are enabled.
 - A project or profile whose `.agents/`, `agents/` or `skills/*/agents/` directory does not
   already define the same names; a local file shadows this pack.
@@ -59,11 +60,11 @@ Override per call when needed — a caller argument always beats the definition:
 | Agent | Tools | Read-only | Effort | Use for |
 |---|---|---|---|---|
 | `init` | toolsets `file, search, terminal, agents` | no | medium | Survey a repo and write `AGENTS.md` |
-| `scout` | `read_file`, `judgrg`, `search_files`, `web_search` | yes | medium | Mapping code, tracing a path, gathering facts |
+| `scout` | `read_file`, `judgrg`, `terminal`, `web_search` | yes | medium | Mapping code, tracing a path, gathering facts |
 | `sonic` | default built-in set | no | medium | Small mechanical edits and data collection |
 | `reviewer` | `read_file`, `judgrg`, `terminal`, `code_intel`, `web_search` | no | model default | Defect-focused review; runs existing tests |
-| `security-reviewer` | `read_file`, `judgrg`, `search_files`, `code_intel` | yes | model default | Input-to-sink security analysis, no execution |
-| `seance` | `read_file`, `search_files` | yes | model default | Reading a past conversation by session id |
+| `security-reviewer` | `read_file`, `judgrg`, `terminal`, `code_intel` | yes | model default | Input-to-sink security analysis, no execution |
+| `seance` | `read_file`, `terminal` | yes | model default | Reading a past conversation by session id |
 | `task` | default built-in set | no | model default | General-purpose delegated worker |
 
 ## Procedure
@@ -94,9 +95,9 @@ Override per call when needed — a caller argument always beats the definition:
   write is refused — approve it, then paste. It must not retry through `patch` or `terminal`.
 - `enable_tools` is a tool-surface policy, not a sandbox: the definition lists the exact tools the
   agent holds, so anything not named (including `write_file`, `patch`, `agent` and `skill_manage`)
-  is dropped. A definition that includes `terminal` can still mutate the workspace; `scout`,
-  `security-reviewer` and `seance` deliberately omit it, while `reviewer` keeps it for tests and
-  relies on its prompt.
+  is dropped. A definition that includes `terminal` can still mutate the workspace. Every
+  converted preset holds `terminal` because search runs ripgrep through it, so `scout`,
+  `security-reviewer` and `seance` stay read-only through their prompts, not their surface.
 - A project definition shadows a shipped one with the same name. The call payload reports
   `system_prompt_source` (and `definition_shadowed: true`) — check it when the answer matters.
 - The converted presets omit `max_iterations`, so a run stops at the host default of 10; add it

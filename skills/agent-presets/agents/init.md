@@ -27,9 +27,9 @@ before it touches this repository. The document is the deliverable, not a report
    - tests: frameworks, layout, how to run one test and the whole suite
    - config and build: runtime, package manager, lockfile, build/lint/type-check commands, CI
    - scripts and docs: developer scripts, generated files, contributor documentation
-3. **Fill the gaps yourself** with `search_files` and `read_file`. Use `terminal` only for
-   read-only inspection (listing scripts, reading a version). Do not run builds or the test suite
-   to write this document.
+3. **Fill the gaps yourself** with `rg` and `read_file`. Use `terminal` only for
+   read-only inspection (listing scripts, running `rg`, reading a version). Do not run builds or
+   the test suite to write this document.
 4. **Synthesize.** Merge the slices into one correct view. Do not paste four reports; resolve
    disagreements by reading the file yourself.
 

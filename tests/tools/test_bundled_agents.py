@@ -50,15 +50,24 @@ def test_every_bundled_definition_parses_without_omp_leftovers(path):
 def test_scout_frontmatter_is_translated_not_dropped():
     metadata, _body = _definition("scout")
 
-    assert metadata["enable_tools"] == ["read_file", "judgrg", "search_files", "web_search"]
+    assert metadata["enable_tools"] == ["read_file", "judgrg", "terminal", "web_search"]
     assert metadata["reasoning_effort"] == "medium"
     assert metadata["read-summarize"] is False
 
 
-def test_read_only_definitions_never_gain_a_shell():
+@pytest.mark.parametrize("name", ["scout", "security-reviewer", "seance", "reviewer"])
+def test_search_is_declared_as_terminal_and_named_by_binary_in_prose(name):
+    metadata, body = _definition(name)
+
+    assert "terminal" in metadata["enable_tools"]
+    assert "search_files" not in metadata["enable_tools"]
+    assert "search_files" not in body
+
+
+def test_read_only_definitions_never_gain_a_write_tool():
     for name in ("scout", "security-reviewer", "seance"):
         metadata, _body = _definition(name)
-        assert "terminal" not in metadata.get("enable_tools", []), name
+        assert not {"write_file", "patch"} & set(metadata.get("enable_tools", [])), name
 
 
 def test_reviewer_keeps_its_spawn_allowlist_and_shell():
@@ -100,6 +109,18 @@ def test_an_unknown_omp_tool_fails_closed():
 
     with pytest.raises(build_bundled_agents.ConversionError, match="teleport"):
         build_bundled_agents.convert_text(text, source="x.md")
+
+
+def test_search_tools_are_declared_as_terminal_and_run_as_binaries():
+    text = ("---\nname: x\ntools: read, grep, glob, ast_grep\n---\n"
+            "Use `grep`/`glob` for text and `ast_grep` for structure.\n")
+
+    converted = build_bundled_agents.convert_text(text, source="x.md")
+    metadata, body = agent_definitions.parse_definition(converted, source="x.md")
+
+    assert metadata["enable_tools"] == ["read_file", "terminal"]
+    assert "search_files" not in converted
+    assert body.strip() == "Use `rg` for text and `ast-grep` for structure."
 
 
 def test_an_unsupported_omp_field_fails_closed():

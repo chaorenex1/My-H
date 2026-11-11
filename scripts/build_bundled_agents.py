@@ -30,33 +30,33 @@ if __package__ in (None, "") and str(ROOT) not in sys.path:
 
 import hermes_yaml
 
-#: omp tool name -> Hermes registry name. A definition that never had ``bash`` must stay
-#: read-only: ``grep``/``glob``/``ast_grep`` map to search-only tools, not ``terminal`` (which
-#: would silently grant shell write access omp never gave these agents). ``terminal`` appears
-#: only when omp itself granted ``bash``.
+#: omp tool name -> Hermes registry name. ``grep``/``glob``/``ast_grep``/``ast_edit`` all become
+#: ``terminal``: ``enable_tools`` accepts registered tool names only, and Hermes runs ripgrep and
+#: ast-grep through the shell. ``search_files`` is the structured fallback, never a preset's
+#: declared surface.
 OMP_TOOL_MAP: dict[str, str] = {
     "read": "read_file",
     "find": "judgrg",
-    "grep": "search_files",
-    "glob": "search_files",
+    "grep": "terminal",
+    "glob": "terminal",
     "bash": "terminal",
     "lsp": "code_intel",
     "web_search": "web_search",
-    "ast_grep": "judgrg",
-    "ast_edit": "judgrg",
+    "ast_grep": "terminal",
+    "ast_edit": "terminal",
     "write": "write_file",
     "edit": "patch",
     "eval": "execute_code",
     "proc": "process_manage",
 }
 
-#: With a shell, ripgrep/ast-grep are run through `terminal` (the Hermes-supported path).
-_SHELL_TOOL_MAP: dict[str, str] = {
+#: Prose names the executable the model runs through the declared ``terminal`` tool.
+_BODY_TOOL_MAP: dict[str, str] = {
     **OMP_TOOL_MAP,
-    "grep": "terminal",
-    "glob": "terminal",
-    "ast_grep": "terminal",
-    "ast_edit": "terminal",
+    "grep": "rg",
+    "glob": "rg",
+    "ast_grep": "ast-grep",
+    "ast_edit": "ast-grep",
 }
 
 #: omp front-matter keys this converter understands. ``prewalk`` has no Hermes equivalent yet,
@@ -95,11 +95,10 @@ def _tool_names(value: Any, source: str) -> list[str]:
     return parsed
 
 
-def _tools(value: Any, source: str, *, shell: bool) -> list[str]:
-    mapping = _SHELL_TOOL_MAP if shell else OMP_TOOL_MAP
+def _tools(value: Any, source: str) -> list[str]:
     converted: list[str] = []
     for name in _tool_names(value, source):
-        mapped = mapping.get(name)
+        mapped = OMP_TOOL_MAP.get(name)
         if mapped is None:
             raise ConversionError(f"{source}: unknown omp tool {name!r}")
         if mapped not in converted:
@@ -124,13 +123,8 @@ def _emit_ordered(values: Mapping[str, Any]) -> dict[str, Any]:
     return {key: values[key] for key in _EMIT_ORDER if key in values}
 
 
-def convert_frontmatter(raw: Mapping[str, Any], *, source: str,
-                        shell: bool = False) -> dict[str, Any]:
-    """Translate omp front matter into the Hermes definition contract.
-
-    *shell* is whether the same definition granted ``bash``; it decides whether ripgrep and
-    ast-grep searches map to ``terminal`` or to the read-only search tools.
-    """
+def convert_frontmatter(raw: Mapping[str, Any], *, source: str) -> dict[str, Any]:
+    """Translate omp front matter into the Hermes definition contract."""
     unknown = sorted(set(raw) - _OMP_KEYS)
     if unknown:
         raise ConversionError(f"{source}: unsupported omp field(s): {', '.join(unknown)}")
@@ -142,7 +136,7 @@ def convert_frontmatter(raw: Mapping[str, Any], *, source: str,
         if key in raw:
             converted[key] = str(raw[key] or "").strip()
     if "tools" in raw:
-        converted["enable_tools"] = _tools(raw["tools"], source, shell=shell)
+        converted["enable_tools"] = _tools(raw["tools"], source)
     if "spawns" in raw:
         spawns = agent_definitions._spawns(raw["spawns"], source)
         if spawns is not None:
@@ -164,16 +158,11 @@ def convert_frontmatter(raw: Mapping[str, Any], *, source: str,
     return _emit_ordered(converted)
 
 
-def _rewrite_body(body: str, *, source: str, shell: bool = False) -> str:
+def _rewrite_body(body: str, *, source: str) -> str:
     """Rewrite omp tool/URI references in prose; unknown hangovers fail closed."""
     text = body
-    for omp_name, read_only_target in OMP_TOOL_MAP.items():
-        # Prose names the tool the model can actually call; ast-grep stays a binary only when
-        # the definition has a shell.
-        if shell and omp_name in {"grep", "glob", "ast_grep", "ast_edit"}:
-            target = "ast-grep" if omp_name.startswith("ast_") else "terminal"
-        else:
-            target = read_only_target
+    for omp_name, target in _BODY_TOOL_MAP.items():
+        # Prose names the executable the declared `terminal` tool runs, not the tool name.
         text = text.replace(f"`{omp_name}`", f"`{target}`")
     text = text.replace(
         "Tools: FULL access (edit, write, bash, grep, read, etc.);",
@@ -222,10 +211,8 @@ def convert_text(text: str, *, source: str) -> str:
     raw, body = _frontmatter_and_body(text, source=source)
     if not raw:
         raise ConversionError(f"{source}: missing front matter")
-    raw_tools = raw.get("tools")
-    shell = "bash" in _tool_names(raw_tools, source) if raw_tools is not None else False
-    metadata = convert_frontmatter(raw, source=source, shell=shell)
-    converted_body = _rewrite_body(body, source=source, shell=shell)
+    metadata = convert_frontmatter(raw, source=source)
+    converted_body = _rewrite_body(body, source=source)
     if not converted_body:
         raise ConversionError(f"{source}: empty definition body")
 

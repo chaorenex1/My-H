@@ -30,9 +30,9 @@ The following is the complete skill definition that Hermes loads when this skill
 
 # Agent Presets Skill
 
-This pack ships six named-agent definitions — `init`, `scout`, `sonic`, `reviewer`,
-`security-reviewer`, `seance` — in `agents/` beside this file. The `agent` tool discovers them
-through its normal `skills/*/agents/` scan, so they work without installation: pass
+This pack ships seven named-agent definitions — `init`, `scout`, `sonic`, `reviewer`,
+`security-reviewer`, `seance`, `task` — in `agents/` beside this file. The `agent` tool discovers
+them through its normal `skills/*/agents/` scan, so they work without installation: pass
 `skill_name="agent-presets"` to search this pack first. Copy any file into
 `<project>/.agents/` or `<HERMES_HOME>/agents/` to override it with your own version.
 
@@ -41,7 +41,7 @@ through its normal `skills/*/agents/` scan, so they work without installation: p
 - A repository has no `AGENTS.md`, or its instructions have drifted from the code; `init` surveys
   the tree and writes the document.
 - A task needs a reusable persona with a fixed tool surface, not an anonymous one-off child.
-- You want a read-only reviewer that cannot edit the workspace by construction.
+- You want a read-only reviewer: no edit tool in its surface, and a prompt that forbids writes.
 - You need a second opinion on a diff with the operator's own model route and effort level.
 - You want to consult an earlier conversation that this session no longer holds.
 
@@ -50,8 +50,10 @@ goal that needs no durable history.
 
 ## Prerequisites
 
-- The `agents` toolset (the `agent` tool itself). `scout`, `sonic` and `reviewer` also need the
-  toolsets their definitions request: `file`, `search`, `web`, `terminal`, `session_search`.
+- The `agents` toolset (the `agent` tool itself). The converted definitions name their tools
+  directly (`read_file`, `judgrg`, `terminal`, `web_search`, `code_intel`): search is declared as
+  `terminal`, and the body tells the agent to run ripgrep or ast-grep through it. Those tools are
+  available when the matching toolsets are enabled.
 - A project or profile whose `.agents/`, `agents/` or `skills/*/agents/` directory does not
   already define the same names; a local file shadows this pack.
 
@@ -72,19 +74,20 @@ Override per call when needed — a caller argument always beats the definition:
 
 ## Quick Reference
 
-| Agent | Toolsets | Read-only | Effort | Use for |
+| Agent | Tools | Read-only | Effort | Use for |
 |---|---|---|---|---|
-| `init` | `file, search, terminal, delegation` | no | medium | Survey a repo and write `AGENTS.md` |
-| `scout` | `file, search, web, session_search` | yes | low | Mapping code, tracing a path, gathering facts |
-| `sonic` | `file, terminal, search, web` | no | low | Small mechanical edits and data collection |
-| `reviewer` | `file, terminal, search, web, session_search` | yes | high | Defect-focused review; runs existing tests |
-| `security-reviewer` | `file, search, web, session_search` | yes | high | Input-to-sink security analysis, no execution |
-| `seance` | `file, search, session_search` | yes | medium | Reading a past conversation by session id |
+| `init` | toolsets `file, search, terminal, agents` | no | medium | Survey a repo and write `AGENTS.md` |
+| `scout` | `read_file`, `judgrg`, `terminal`, `web_search` | yes | medium | Mapping code, tracing a path, gathering facts |
+| `sonic` | default built-in set | no | medium | Small mechanical edits and data collection |
+| `reviewer` | `read_file`, `judgrg`, `terminal`, `code_intel`, `web_search` | no | model default | Defect-focused review; runs existing tests |
+| `security-reviewer` | `read_file`, `judgrg`, `terminal`, `code_intel` | yes | model default | Input-to-sink security analysis, no execution |
+| `seance` | `read_file`, `terminal` | yes | model default | Reading a past conversation by session id |
+| `task` | default built-in set | no | model default | General-purpose delegated worker |
 
 ## Procedure
 
 1. To onboard a repository, run `init` inline (`background: false`) with the absolute project path
-   in `project_dir`; it fans out four read-only `delegate_task` slices, synthesizes them, and
+   in `project_dir`; it fans out four read-only `agent(tasks=[...])` slices, synthesizes them, and
    writes `AGENTS.md` at the root.
 2. Pick the narrowest agent for the job. A question that needs no edits belongs to `scout` or
    `security-reviewer`, never to `sonic`.
@@ -101,20 +104,21 @@ Override per call when needed — a caller argument always beats the definition:
 ## Pitfalls
 
 - `init` writes `<project>/AGENTS.md`, so leave `worktree` off for it — an isolated worktree would
-  strand the document on a branch. It holds `delegation` to fan out its survey; recursion stays
-  capped at depth 3.
+  strand the document on a branch. It holds the `agents` toolset to fan out its survey; recursion
+  stays capped at depth 3.
 - `AGENTS.md` is a protected agent-instruction file: each write needs one-operation human approval,
   is not bypassed by auto-approve, and fails closed on an unattended run. `init` therefore defaults
   to inline (`background: false`) and returns the complete document in its final message when the
   write is refused — approve it, then paste. It must not retry through `patch` or `terminal`.
-- `read_only` is a tool-surface policy, not a sandbox: `write_file`, `patch`, `agent` and
-  `skill_manage` are stripped, but a definition that also grants `terminal` can still mutate the
-  workspace. `scout`, `security-reviewer` and `seance` deliberately omit `terminal`; `reviewer`
-  keeps it for tests and relies on its prompt.
+- `enable_tools` is a tool-surface policy, not a sandbox: the definition lists the exact tools the
+  agent holds, so anything not named (including `write_file`, `patch`, `agent` and `skill_manage`)
+  is dropped. A definition that includes `terminal` can still mutate the workspace. Every
+  converted preset holds `terminal` because search runs ripgrep through it, so `scout`,
+  `security-reviewer` and `seance` stay read-only through their prompts, not their surface.
 - A project definition shadows a shipped one with the same name. The call payload reports
   `system_prompt_source` (and `definition_shadowed: true`) — check it when the answer matters.
-- `max_iterations` comes from the definition; without it a run stops at the host default of 10
-  and a reviewer quits before it finishes.
+- The converted presets omit `max_iterations`, so a run stops at the host default of 10; add it
+  to a local copy when a preset needs a longer tool-call budget.
 - Worktree isolation degrades silently outside a git work tree or on a non-local terminal
   backend; the payload's `worktree` block says whether it engaged.
 
