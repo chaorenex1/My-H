@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from ruamel.yaml.error import YAMLError
 
@@ -207,6 +207,24 @@ def _agent_matches(agent_name: str, patterns: list[str]) -> bool:
     return any(fnmatch(name, pattern.casefold()) for pattern in patterns)
 
 
+def rule_applies_to_agent(rule: Mapping[str, Any], agent_name: str) -> bool:
+    """Whether *rule*'s ``agents`` gate admits *agent_name* (empty name admits every rule)."""
+    if not agent_name:
+        return True
+    metadata = rule.get("metadata") or {}
+    return _agent_matches(agent_name, list(metadata.get("agents") or ()))
+
+
+def is_builtin_rule_source(source: str) -> bool:
+    """Whether a rule file lives under the installation root (built-in corpus / plugin tree)."""
+    try:
+        from pm.paths import install_root
+
+        return Path(source).resolve().is_relative_to(install_root().resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def discover_rules(project_dir: Optional[str | Path] = None, *,
                    skill_name: str = "", agent_name: str = "") -> list[dict[str, Any]]:
     """Every visible rule in scope order; the first rule for an identity wins."""
@@ -228,7 +246,7 @@ def discover_rules(project_dir: Optional[str | Path] = None, *,
             row = parse_rule_text(text, source=str(path), rule_id=rule_id)
             if not row["metadata"]["enabled"]:
                 continue
-            if agent_name and not _agent_matches(agent_name, row["metadata"]["agents"]):
+            if not rule_applies_to_agent(row, agent_name):
                 continue
             row["scope"] = scope
             row["root"] = str(root)

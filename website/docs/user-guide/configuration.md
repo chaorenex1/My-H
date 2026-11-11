@@ -2284,6 +2284,15 @@ ttsr:
   judge: auto              # question rules: auto = native judge only, on = text too, off = never
 ```
 
+`builtinRules` / `disabledRules` (omp's camelCase spelling) are accepted as aliases for
+`builtin_rules` / `disabled_rules`.
+
+The system prompt buckets every visible rule once: `alwaysApply: true` rules are injected in
+full under `<generic-rules>`, rules with a `description` are listed under `<domain-rules>` as
+name + globs + description, and rules registered with the TTSR matcher appear in neither block.
+A disabled rule leaves every block, and `rule_view` only resolves the union of those buckets, so
+a rule with no description, no `alwaysApply` and no runtime trigger is unaddressable.
+
 Rules using `interruptMode` other than `never`, or only `astCondition`, are listed once in a
 warning notice and stay inactive. `repeatMode: once` is durable per session
 (`session_ttsr_injections`), so a resumed session does not inject the same reminder again.

@@ -33,7 +33,10 @@ RULES_LIST_SCHEMA = {
 
 RULE_VIEW_SCHEMA = {
     "name": "rule_view",
-    "description": "Read one rule's full Markdown body and parsed frontmatter by rule id or unique name.",
+    "description": (
+        "Read one addressable rule's full Markdown body and parsed frontmatter by rule id or "
+        "unique name. Addressable = rulebook (has a description), always-apply, or registered "
+        "TTSR; disabled and non-rulebook rules are not readable here."),
     "parameters": {
         "type": "object",
         "properties": {
@@ -111,9 +114,12 @@ def rules_list(scope: str = "", agent_name: str = "") -> str:
 
 def rule_view(rule_id: str) -> str:
     from agent import rule_utils
+    from agent.rule_buckets import addressable_rules
+    from agent.ttsr_runtime import load_ttsr_settings
 
     try:
-        rule = rule_utils.find_rule(rule_id)
+        catalog = addressable_rules(rule_utils.discover_rules(), load_ttsr_settings())
+        rule = rule_utils.find_rule(rule_id, rules=catalog)
     except rule_utils.RuleError as exc:
         return tool_error(str(exc), success=False)
     if rule is None:

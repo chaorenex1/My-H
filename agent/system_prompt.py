@@ -663,6 +663,20 @@ def _persisted_workspace_block(prompt: str, key: str) -> Optional[str]:
     return None
 
 
+def persisted_workspace_roots(prompt: str) -> list[str]:
+    """The additional roots listed by a stored ``<workspace-roots>`` block ([] when absent).
+
+    Used to decide whether a persisted prompt still names the session's roots after
+    ``/add-dir``/``/remove-dir`` (``conversation_loop._stored_prompt_matches_runtime``).
+    """
+    marker = "<workspace-roots>"
+    start = prompt.find(marker)
+    if start < 0:
+        return []
+    body = prompt[start + len(marker):].split("</workspace-roots>", 1)[0]
+    return [line.strip()[2:].strip() for line in body.splitlines() if line.strip().startswith("- ")]
+
+
 def _session_prompt(agent: Any) -> Optional[str]:
     """Prompt bytes this session already sends: the cached copy, else its persisted row."""
     cached = getattr(agent, "_cached_system_prompt", None)
@@ -748,20 +762,41 @@ def _post_workspace_parts(agent: Any) -> list[str]:
     return parts
 
 
-def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -> list[str]:
-    """Project context files (AGENTS.md etc.) for the context tier. TERMINAL_CWD
-    when set (gateway); None lets discovery fall back to the launch dir.  The
-    install-tree fallback is only legitimate for cli/tui where the launch dir
-    IS the user's shell cwd. Desktop launch artifacts skip the session cwd but
-    still honor the profile-scoped TERMINAL_CWD; without one, the fallback guard
-    can reject Hermes's bundled AGENTS.md."""
+def _context_files_part(agent: Any, ctx_len: Optional[int]) -> list[str]:
+    """``<project-context>`` for the context tier: workstation identity plus the project
+    instruction files (AGENTS.md etc.). TERMINAL_CWD when set (gateway); None lets discovery
+    fall back to the launch dir.  The install-tree fallback is only legitimate for cli/tui
+    where the launch dir IS the user's shell cwd. Desktop launch artifacts skip the session
+    cwd but still honor the profile-scoped TERMINAL_CWD; without one, the fallback guard can
+    reject Hermes's bundled AGENTS.md. SOUL.md is identity-owned and never repeats here."""
     if agent.skip_context_files:
         return []
     launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
     cwd = resolve_context_cwd(include_session_override=not launch_artifact)
-    return [_pb.build_context_files_prompt(
-        cwd=cwd, skip_soul=soul_loaded, context_length=ctx_len,
-        allow_install_tree_fallback=agent.platform in ("cli", "tui"), home_override=_agent_home(agent))]
+    workspace_roots: list[str] = []
+    session_id, db = getattr(agent, "session_id", ""), getattr(agent, "_session_db", None)
+    if db is not None and isinstance(session_id, str) and session_id:
+        try:
+            from agent.workspace_dirs import prompt_roots
+            workspace_roots = prompt_roots(session_id, db=db, cwd=cwd)
+        except Exception:  # health: allow BLE001 -- additional roots must never block prompt build
+            logger.debug("workspace roots skipped", exc_info=True)
+    try:
+        from agent.prompts.renderer import render_project_context
+
+        block = render_project_context(
+            provider=getattr(agent, "provider", "") or "",
+            model=getattr(agent, "model", "") or "",
+            cwd=cwd,
+            context_length=ctx_len,
+            allow_install_tree_fallback=agent.platform in ("cli", "tui"),
+            workspace_roots=workspace_roots,
+            subagent=bool(getattr(agent, "is_subagent", False)),
+        )
+    except Exception:
+        logger.warning("project context block skipped", exc_info=True)
+        return []
+    return [block] if block else []
 
 
 def _join_tier(parts: list[Optional[str]]) -> str:
@@ -808,7 +843,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # ephemeral_system_prompt is injected at API-call time only, never cached.
     if system_message is not None:
         context_parts.append(system_message)
-    context_parts.extend(_context_files_part(agent, _ctx_len, _soul_loaded))
+    context_parts.extend(_context_files_part(agent, _ctx_len))
     if coding_workspace_parts:
         context_parts.extend([*coding_workspace_parts, *coding_trailing_parts, *post_workspace_parts])
     else:

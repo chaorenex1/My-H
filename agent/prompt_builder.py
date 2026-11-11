@@ -1532,6 +1532,8 @@ _CONTEXT_FILE_CANDIDATES = {
     "claude_md": _claude_md_candidates,
     "cursorrules": _cursorrules_candidates,
 }
+# The one-type-wins priority order, shared with the ``<project-context>`` tail block.
+CONTEXT_FILE_PRIORITY = tuple(_CONTEXT_FILE_CANDIDATES)
 
 
 def discover_context_files(cwd_path: Path) -> list[tuple[str, str, Path, str]]:

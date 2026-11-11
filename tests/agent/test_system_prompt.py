@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from agent.system_prompt import build_system_prompt, build_system_prompt_parts
+from agent.conversation_loop import _restore_or_build_system_prompt
 
 
 def _make_agent(**overrides):
@@ -41,12 +42,12 @@ def _make_agent(**overrides):
 
 
 def _captured_context_cwd(agent):
-    """The cwd build_system_prompt_parts hands to build_context_files_prompt."""
+    """The cwd build_system_prompt_parts hands to render_project_context."""
     captured = {}
 
     def fake_context_files(
-        cwd=None, skip_soul=False, context_length=None,
-        allow_install_tree_fallback=False, home_override=None,
+        *, provider="", model="", cwd=None, context_length=None, allow_install_tree_fallback=False,
+        **kwargs,
     ):
         captured["cwd"] = cwd
         return ""
@@ -54,7 +55,7 @@ def _captured_context_cwd(agent):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", side_effect=fake_context_files),
+        patch("agent.prompts.renderer.render_project_context", side_effect=fake_context_files),
     ):
         build_system_prompt_parts(agent)
     return captured["cwd"]
@@ -82,6 +83,38 @@ def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id
     _load_tools(agent, enabled_toolsets=["kanban"], disabled_toolsets=None)
 
     assert (agent._kanban_worker_guidance == KANBAN_GUIDANCE) is expected
+
+
+def test_project_context_lists_the_sessions_additional_workspace_roots(tmp_path):
+    """`/add-dir` roots ride the ``<workspace-roots>`` slot of the project-context block."""
+    from agent import workspace_dirs
+
+    extra = tmp_path / "shared"
+    extra.mkdir()
+
+    class _DB:
+        def get_session_workspace_roots(self, session_id):
+            return [str(extra)]
+
+    captured = {}
+
+    def fake_context_files(*, workspace_roots=(), **kwargs):
+        captured["roots"] = list(workspace_roots)
+        return ""
+
+    workspace_dirs.clear_cache("sess-roots")
+    agent = _make_agent(session_id="sess-roots", _session_db=_DB())
+    try:
+        with (
+            patch("agent.prompt_builder.load_soul_md", return_value=""),
+            patch("agent.prompt_builder.build_environment_hints", return_value=""),
+            patch("agent.prompts.renderer.render_project_context", side_effect=fake_context_files),
+        ):
+            build_system_prompt_parts(agent)
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
+
+    assert captured["roots"] == [str(extra)]
 
 
 @pytest.mark.parametrize("task_id, owner, expected", [
@@ -218,7 +251,7 @@ def _stable_prompt(agent):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
     ):
         return build_system_prompt_parts(agent)["stable"]
 
@@ -227,7 +260,7 @@ def _prompt_parts(agent):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
     ):
         return build_system_prompt_parts(agent)
 
@@ -325,6 +358,94 @@ def test_stored_prompt_stamped_for_another_session_is_not_restored(monkeypatch, 
     parent_prompt = build_system_prompt(_make_agent(session_id="parent-sid", **fields))
     assert _stored_prompt_matches_runtime(_make_agent(session_id="parent-sid", **fields), parent_prompt)
     assert not _stored_prompt_matches_runtime(_make_agent(session_id="child-sid", **fields), parent_prompt)
+
+
+def _root_prompt(*roots):
+    lines = "".join(f"- {root}\n" for root in roots)
+    return (
+        "SYSTEM BODY\n\n<project-context>\n<workspace-roots>\nAdditional workspace directories.\n"
+        f"{lines}</workspace-roots>\n</project-context>\n\n"
+        "Model: test-model\nProvider: openrouter\nPlatform: cli"
+    )
+
+
+def _root_agent(db):
+    from unittest.mock import MagicMock
+
+    agent = MagicMock()
+    agent._cached_system_prompt = None
+    agent.session_id = "sess-roots"
+    agent.model = "test-model"
+    agent.provider = "openrouter"
+    agent.platform = "cli"
+    agent.pass_session_id = False
+    agent._session_db = db
+    agent._use_prompt_caching = False
+    agent._persist_disabled = False
+    agent._bot_mode_protocol = False
+    agent._session_title_hint = ""
+    agent._surface_switch_note = ""
+    agent._gateway_turn_context_notes = ""
+    agent.enabled_toolsets = []
+    agent.disabled_toolsets = None
+    agent.tools = []
+    agent.valid_tool_names = set()
+    agent._build_system_prompt = MagicMock(return_value="NEW_PROMPT")
+    return agent
+
+
+class _RootDB:
+    def __init__(self, stored, roots):
+        self._stored, self.roots = stored, list(roots)
+
+    def get_session(self, session_id):
+        return {"system_prompt": self._stored, "tool_names": None}
+
+    def get_session_workspace_roots(self, session_id):
+        return list(self.roots)
+
+    def update_system_prompt(self, *args, **kwargs):
+        return True
+
+
+def test_a_new_workspace_root_is_not_lost_to_a_stored_prompt(tmp_path, monkeypatch):
+    """`/add-dir` writes the session row; the next turn must rebuild, not restore bytes that
+    omit the root (the stored-prompt predicate is what decides that)."""
+    from agent import workspace_dirs
+
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    extra = tmp_path / "shared"
+    extra.mkdir()
+    stored = _root_prompt(tmp_path / "old-root")
+    db = _RootDB(stored, [str(extra)])
+    agent = _root_agent(db)
+    workspace_dirs.clear_cache("sess-roots")
+    try:
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
+    agent._build_system_prompt.assert_called_once()
+    assert agent._cached_system_prompt == "NEW_PROMPT"
+
+
+def test_a_stored_prompt_listing_the_same_roots_is_reused(tmp_path, monkeypatch):
+    """Adding no root must not break the prefix cache: same roots → the stored bytes are kept."""
+    from agent import workspace_dirs
+
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    extra = tmp_path / "shared"
+    extra.mkdir()
+    stored = _root_prompt(extra)
+    agent = _root_agent(_RootDB(stored, [str(extra)]))
+    workspace_dirs.clear_cache("sess-roots")
+    try:
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
+    agent._build_system_prompt.assert_not_called()
+    assert agent._cached_system_prompt == stored
 
 
 class TestExecutionGuidanceInjection:
@@ -480,7 +601,7 @@ def test_build_system_prompt_records_stable_prefix():
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="context"),
+        patch("agent.prompts.renderer.render_project_context", return_value="context"),
     ):
         prompt = build_system_prompt(agent)
 
@@ -531,7 +652,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
+        patch("agent.prompts.renderer.render_project_context", return_value="CONTEXT_FILES"),
         patch(
             "agent.coding_context.coding_system_prompt_parts",
             return_value=(
@@ -668,7 +789,7 @@ def _build(builder, **overrides):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=_CONTEXT),
+        patch("agent.prompts.renderer.render_project_context", return_value=_CONTEXT),
         patch("model_tools.get_toolset_for_tool", return_value=None),
         patch("agent.prompt_builder.build_skills_system_prompt", return_value=_SKILLS),
     ):
@@ -899,7 +1020,7 @@ def test_conversation_start_uses_session_start_not_build_time(monkeypatch):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
+        patch("agent.prompts.renderer.render_project_context", return_value="CONTEXT_FILES"),
         patch(
             "agent.coding_context.coding_system_prompt_parts",
             return_value=([], [], []),

@@ -63,6 +63,16 @@ def test_create_list_view_update_delete_roundtrip(rules_env):
     assert not (rules_env / ".agents/rules/python/style.md").exists()
 
 
+def test_rule_view_only_resolves_addressable_rules(rules_env):
+    path = rules_env / ".agents/rules/bare.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\n---\nbody\n", encoding="utf-8")
+
+    assert path.is_file()
+    viewed = _call("rule_view", {"rule_id": "bare"})
+    assert viewed["success"] is False and "not found" in viewed["error"].lower()
+
+
 def test_rule_manage_refuses_path_traversal(rules_env):
     result = _call("rule_manage", {
         "action": "create", "rule_id": "../../escape", "content": "---\ndescription: x\n---\n",

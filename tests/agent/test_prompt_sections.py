@@ -183,15 +183,25 @@ def test_project_languages_count_extension_files(tmp_path):
     assert rules_mod.project_languages(tmp_path) == {"go"}
 
 
-def test_rules_section_has_a_usage_guide_and_rows():
-    out = ps.render_section("rules", {"rules": ["go-ioutil: Use io — rules/go-ioutil.md"]})
+def test_rules_section_splits_generic_and_domain_blocks():
+    out = ps.render_section("rules", {
+        "generic_rules": ["Use tabs.\nNever reflow."],
+        "domain_rules": ["go-ioutil (**/*.go): Use io"],
+        "rule_view": True,
+    })
+    assert "read the full rule with\n`rule_view`" in out
     assert out.startswith("# Rules\n\nRules are constraints")
     assert "Treat that reminder as authoritative" in out
     assert "Path-only rules apply when you edit a file" in out
-    assert "- go-ioutil: Use io — rules/go-ioutil.md" in out
+    assert "<generic-rules>\nUse tabs.\nNever reflow.\n</generic-rules>" in out
+    assert "<domain-rules>\n- go-ioutil (**/*.go): Use io\n</domain-rules>" in out
+
+    empty = ps.render_section("rules", {"generic_rules": [], "domain_rules": [], "rule_view": False})
+    assert "\n<generic-rules>\n" not in empty and "\n<domain-rules>\n" not in empty
+    assert "rule_view" not in empty
 
 
-def test_rule_rows_keep_builtins_and_gate_profile_rules_by_language(tmp_path, monkeypatch):
+def test_rule_prompt_keeps_builtins_and_gates_profile_rules_by_language(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / "rules").mkdir(parents=True)
     _write_rule(home / "rules", "go-custom.md", globs="**/*.go", description="Custom go.")
@@ -205,12 +215,37 @@ def test_rule_rows_keep_builtins_and_gate_profile_rules_by_language(tmp_path, mo
     (project / "b.go").write_text("package b", encoding="utf-8")
     (project / "c.py").write_text("x = 1", encoding="utf-8")  # one .py -> not a language
 
-    rows = rules_mod.rule_rows(project)
-    assert rows is not None
-    assert any(row.startswith("go-ioutil: Use io and os") for row in rows)
-    assert not any("Shadowed builtin." in row for row in rows)
-    assert any(row.startswith("go-custom: Custom go.") for row in rows)
-    assert not any(row.startswith("py-custom") for row in rows)
+    prompt = rules_mod.rule_prompt(project)
+    assert prompt is not None
+    assert any(row.startswith("go-ioutil: Use io and os") for row in prompt.domain)
+    assert not any("Shadowed builtin." in row for row in prompt.domain)
+    assert "go-custom (**/*.go): Custom go." in prompt.domain
+    assert not any(row.startswith("py-custom") for row in prompt.domain)
+    assert prompt.generic == ()
+
+
+def test_rule_prompt_sends_always_apply_to_generic_and_ttsr_rules_to_neither_block(
+        tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "rules").mkdir(parents=True)
+    _write_rule(home / "rules", "style.md", description="Style.", always_apply=True)
+    monkeypatch.setattr(rules_mod, "get_hermes_home", lambda: home)
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "a.go").write_text("package a", encoding="utf-8")
+    (project / "b.go").write_text("package b", encoding="utf-8")
+
+    prompt = rules_mod.rule_prompt(project)
+    assert prompt is not None
+    assert prompt.generic == ("body",)
+
+    # An omp-ui viewer registers the condition rules with TTSR: they leave the static prompt.
+    monkeypatch.setattr(rules_mod, "ttsr_session_active", lambda: True)
+    runtime = rules_mod.rule_prompt(project)
+    assert runtime is not None
+    assert "go-ioutil" not in " ".join(runtime.domain)
+    assert runtime.generic == ("body",)
 
 
 def test_runtime_includes_rules_only_for_programming_projects(tmp_path, monkeypatch):
@@ -540,7 +575,7 @@ def test_unknown_section_and_python_only_section_raise():
     with pytest.raises(ps.PromptSectionError):
         ps.render_section("does-not-exist")
     with pytest.raises(ps.PromptSectionError):
-        ps.render_section("project_context")
+        ps.render_section("additional_communication")
 
 
 def test_budget_truncation_respects_the_strategy():

@@ -1,66 +1,42 @@
 <project-context>
 <workstation>
-{{#list environment prefix="- " join="\n"}}{{label}}: {{value}}{{/list}}
-{{#if model}}- Model: {{model}}{{/if}}
-</workstation>
-
-{{#if contextFiles.length}}
+{% for row in environment %}- {{ row }}
+{% endfor %}{% if model %}- Model: {{ model }}
+{% endif %}</workstation>
+{% if context_files %}
 <repo-rules>
 MUST follow these context files for all tasks:
-{{#each contextFiles}}
-<file path="{{path}}">
-{{content}}
-</file>
-{{/each}}
+{{ context_files | join("\n") }}
 </repo-rules>
-{{/if}}
-
-{{#if agentsMdSearch.files.length}}
+{% endif %}{% if dir_context_files %}
 <dir-context>
 Some directories may have rules; deeper rules override higher ones.
 Before changes in these directories, MUST read:
-{{#list agentsMdSearch.files join="\n"}}- {{this}}{{/list}}
-</dir-context>
-{{/if}}
-
-{{#ifAny contextFiles.length agentsMdSearch.files.length}}
-Context files above auto-loaded. NEVER search for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context; others noise.
-{{/ifAny}}
-
-{{#if includeWorkspaceTree}}
-{{#if workspaceTree.rendered}}
+{% for path in dir_context_files %}- {{ path }}
+{% endfor %}</dir-context>
+{% endif %}{% if context_files or dir_context_files %}
+Context files above auto-loaded. NEVER `rg` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: relevant files already in context; others noise.
+{% endif %}{% if include_workspace_tree %}{% if workspace_tree %}
 <workspace-tree>
 Working-directory layout: newest mtime first; depth ≤ 3.
-{{workspaceTree.rendered}}
-{{#if workspaceTree.truncated}}
-{{#has tools "terminal"}}{{#has tools "read_file"}}Some entries elided to shorten tree — use `rg --files`/`{{toolRefs.read_file}}` to drill in.{{/has}}{{/has}}
-{{/if}}
-</workspace-tree>
-{{/if}}
-{{/if}}
-{{#if additionalWorkspaceRoots.length}}
+{{ workspace_tree }}
+{% if workspace_tree_truncated %}Some entries elided to shorten tree — use `rg --files` in `terminal` (or `read_file` on the directory) to drill in.
+{% endif %}</workspace-tree>
+{% endif %}{% endif %}{% if workspace_roots %}
 <workspace-roots>
-Additional workspace directories. This CURRENT workspace state supersedes workspace changes mentioned earlier in the conversation. {{#ifAny (includes tools "read_file") (includes tools "terminal") (includes tools "patch")}}Use absolute paths under these roots with {{#has tools "read_file"}}`{{toolRefs.read_file}}`{{/has}}{{#has tools "terminal"}}{{#ifAny (includes tools "read_file")}}/{{/ifAny}}`rg`{{/has}}{{#has tools "patch"}}{{#ifAny (includes tools "read_file") (includes tools "terminal")}}/{{/ifAny}}`{{toolRefs.patch}}`{{/has}}.{{/ifAny}} Manage with `/add-dir` and `/remove-dir`; `/dirs` lists them.
-{{#each additionalWorkspaceRoots}}
-- {{this}}
-{{/each}}
-</workspace-roots>
-{{/if}}
-{{#if activeRepoContext}}
-{{activeRepoContext}}
-{{/if}}
-</project-context>
+Additional workspace directories. This CURRENT workspace state supersedes workspace changes mentioned earlier in the conversation. Use absolute paths under these roots with `read_file`, `patch`, and `rg` run in `terminal`. Manage with `/add-dir` and `/remove-dir`; `/dirs` lists them.
+{% for root in workspace_roots %}- {{ root }}
+{% endfor %}</workspace-roots>
+{% endif %}{% if active_repo_context %}
+{{ active_repo_context }}
+{% endif %}</project-context>
 
 <critical>
 - Each response MUST advance the task; completion only stopping condition.
 - MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
-{{#if subagent}}
-- Changes complete → yield; verification is main agent's job. NEVER run it yourself unless your assignment explicitly instructs it.
-{{else}}
-- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
-{{/if}}
-</critical>
-
-{{#if appendPrompt}}
-{{appendPrompt}}
-{{/if}}
+{% if subagent %}- Changes complete → yield; verification is main agent's job. NEVER run it yourself unless your assignment explicitly instructs it.
+{% else %}- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
+{% endif %}</critical>
+{% if append_prompt %}
+{{ append_prompt }}
+{% endif %}

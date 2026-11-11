@@ -19,10 +19,9 @@ import re
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from agent.rule_utils import discover_rules
+from agent.rule_utils import discover_rules, is_builtin_rule_source
 from agent.ttsr_ast import AST_GREP_TIMEOUT_S, ast_match, language_for_path, resolve_ast_grep
 from agent.ttsr_prompts import render_interrupt, render_judged_warning, render_tool_reminder
 
@@ -99,14 +98,16 @@ def load_ttsr_settings(config: Mapping[str, Any] | None = None) -> TtsrSettings:
     if not isinstance(block, Mapping):
         block = {}
     problems: list[str] = []
-    raw_disabled = block.get("disabled_rules", [])
+    # omp spells these camelCase; the profile defaults stay snake_case. Both are read so a
+    # copied omp setting works without a migration.
+    raw_disabled = block.get("disabledRules", block.get("disabled_rules", []))
     if isinstance(raw_disabled, str):
         disabled = (raw_disabled.strip(),) if raw_disabled.strip() else ()
     elif isinstance(raw_disabled, (list, tuple)):
         disabled = tuple(str(name).strip() for name in raw_disabled if str(name).strip())
     else:
         disabled = ()
-        problems.append("ttsr.disabled_rules must be a list")
+        problems.append("ttsr.disabledRules must be a list")
     judge = str(block.get("judge", "auto") or "auto").strip().lower()
     if judge not in JUDGE_MODES:
         problems.append(f"ttsr.judge must be one of {JUDGE_MODES}")
@@ -131,7 +132,8 @@ def load_ttsr_settings(config: Mapping[str, Any] | None = None) -> TtsrSettings:
             f"ttsr.context_mode={context_mode} is not implemented; using discard")
     enabled = _as_bool(block.get("enabled"), True, "ttsr.enabled must be a bool", problems)
     builtin_rules = _as_bool(
-        block.get("builtin_rules"), True, "ttsr.builtin_rules must be a bool", problems)
+        block.get("builtinRules", block.get("builtin_rules")), True,
+        "ttsr.builtinRules must be a bool", problems)
     for problem in problems:
         logger.warning("ttsr config: %s", problem)
     return TtsrSettings(
@@ -415,15 +417,6 @@ class TtsrRule:
     repeat_gap: int | None = None
 
 
-def _is_builtin(source: str) -> bool:
-    try:
-        from pm.paths import install_root
-
-        return Path(source).resolve().is_relative_to(install_root().resolve())
-    except (OSError, ValueError):
-        return False
-
-
 def _compile_conditions(patterns: Sequence[str]) -> tuple[re.Pattern[str], ...] | None:
     compiled: list[re.Pattern[str]] = []
     for pattern in patterns:
@@ -504,7 +497,7 @@ def select_rules(
         seen.add(name)
         if name in disabled:
             continue
-        builtin = _is_builtin(str(row.get("source") or ""))
+        builtin = is_builtin_rule_source(str(row.get("source") or ""))
         if builtin and not settings.builtin_rules:
             continue
         conditions_raw = tuple(meta.get("condition") or ())

@@ -191,6 +191,17 @@ def test_selected_memory_provider_declares_its_config_keys(hermes_home, capsys):
     assert _set_notice("memory.widgetmem.project", "p3", capsys)  # selected but disabled
 
 
+def test_omp_camel_case_ttsr_aliases_are_settable(hermes_home, capsys):
+    assert not _set_notice("ttsr.disabledRules", "ts-no-any", capsys)
+    assert not _set_notice("ttsr.builtinRules", "false", capsys)
+
+    from hermes_cli.config import load_config
+
+    ttsr = load_config()["ttsr"]
+    assert ttsr["disabledRules"] == ["ts-no-any"]  # a bare name is one list item
+    assert ttsr["builtinRules"] is False
+
+
 def test_enabled_project_plugin_declares_its_config_keys(hermes_home, tmp_path, monkeypatch, capsys):
     _plugin(tmp_path / "proj" / ".hermes" / "plugins", "widget-plugin", ["display.widget"])
     _write_config(hermes_home, {"plugins": {"enabled": ["widget-plugin"]}})

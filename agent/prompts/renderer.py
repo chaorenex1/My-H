@@ -28,9 +28,10 @@ from hermes_constants import get_hermes_home
 from agent.prompts.hermes_help import hermes_agent_help_guidance, is_hermes_agent_help
 from agent.prompts.kanban import is_kanban_intent, kanban_guidance
 from agent.prompts.platforms import IDENTITY_CAPS, load_platform_hints
+from agent.prompts.project_context import render_project_context
 from agent.prompts.prompt_sections import SYSTEM_PROMPT_DIR, read_prompt_text, render_section
 from agent.prompts.rules import project_languages as rule_project_languages
-from agent.prompts.rules import rule_rows
+from agent.prompts.rules import rule_prompt
 from agent.prompts.skills import bundled_skill_rows
 from agent.prompts.toolsets import PM_DEFAULT_TOOLSETS, resolve_tool_names, tool_inventory_rows
 from agent.prompts.urls import internal_url_rows
@@ -291,7 +292,9 @@ def render_runtime(
     tree, each entry prejoined as ``"<name>: <description>"``. An explicit empty list
     renders the fixed guide parts without an ``<available_skills>`` block. Rules are
     discovered internally (built-in + language-matched ``$HERMES_HOME/rules``) from
-    *project_dir* (default: cwd); a non-programming project omits the rules section.
+    *project_dir* (default: cwd), then bucketed into ``<generic-rules>`` (always-apply)
+    and ``<domain-rules>`` (rulebook); a rule registered with the session's TTSR matcher
+    is listed in neither block. A non-programming project omits the rules section.
     The internal-location list is fixed in code as well — there is no caller parameter
     for it, so extra directories cannot be injected into the prompt. When *first_input*
     asks for help with Hermes Agent itself (judged by ``is_hermes_agent_help``), the
@@ -310,9 +313,13 @@ def render_runtime(
         rows = bundled_skill_rows() if skills is None else list(skills)
         parts.append(render_section("skills", {"skills": rows, **skill_map}))
 
-    rules = rule_rows(project)
+    rules = rule_prompt(project)
     if rules is not None:
-        parts.append(render_section("rules", {"rules": rules}))
+        parts.append(render_section("rules", {
+            "generic_rules": list(rules.generic),
+            "domain_rules": list(rules.domain),
+            "rule_view": "rule_view" in available,
+        }))
 
     help_guidance = ""
     kanban_text = ""
@@ -587,6 +594,7 @@ __all__ = [
     "render_identity",
     "render_irc_incoming",
     "render_memories",
+    "render_project_context",
     "render_rfc2119",
     "render_role",
     "render_runtime",

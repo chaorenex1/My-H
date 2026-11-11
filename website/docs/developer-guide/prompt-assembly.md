@@ -121,13 +121,32 @@ your task, load it with skill_view(name) and follow its instructions.
 </available_skills>
 
 # Layer 8: Context files (from project directory)
-# Project Context
-The following project context files have been loaded and should be followed:
+<project-context>
+<workstation>
+- OS: linux 6.8.0-45-generic
+- Arch: x64
+- Model: openrouter/anthropic/claude-sonnet-4.5
+</workstation>
 
-## AGENTS.md
+<repo-rules>
+MUST follow these context files for all tasks:
+<file path="AGENTS.md">
 This is the atlas project. Use pytest for testing. The main
 entry point is src/atlas/main.py. Always run `make lint` before
 committing.
+</file>
+</repo-rules>
+
+Context files above auto-loaded. NEVER `rg` for `AGENTS.md`, `CLAUDE.md`,
+`.cursorrules`, or similar agent/context files: relevant files already in
+context; others noise.
+</project-context>
+
+<critical>
+- Each response MUST advance the task; completion only stopping condition.
+- MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
+- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
+</critical>
 
 # Layer 9: Timestamp + session
 Current time: 2026-03-30T14:30:00-07:00
@@ -199,7 +218,7 @@ def load_soul_md() -> Optional[str]:
     return content
 ```
 
-When `load_soul_md()` returns content, it replaces the hardcoded `DEFAULT_AGENT_IDENTITY`. The `build_context_files_prompt()` function is then called with `skip_soul=True` to prevent SOUL.md from appearing twice (once as identity, once as a context file).
+When `load_soul_md()` returns content, it replaces the hardcoded `DEFAULT_AGENT_IDENTITY`. SOUL.md is identity-owned: the `<project-context>` tail block only injects project files, so the two paths can never repeat it.
 
 If `SOUL.md` doesn't exist, the system falls back to:
 
@@ -218,41 +237,39 @@ stakes demand it, not by default.
 
 ## How context files are injected
 
-`build_context_files_prompt()` uses a **priority system** — only one project context type is loaded (first match wins):
+`render_project_context()` (`agent/prompts/project_context.py`) renders the
+`<project-context>` tail block from `agent/prompts/system/project-prompt.md`. It uses a
+**priority system** — only one project context type is loaded (first match wins):
 
 ```python
-# From agent/prompt_builder.py (simplified)
-def build_context_files_prompt(cwd=None, skip_soul=False):
-    cwd_path = Path(cwd).resolve()
+# From agent/prompts/project_context.py (simplified)
+def select_context_files(cwd_path):
+    by_kind = {
+        kind: [ContextFile(kind, label, path, content) ...]
+        for kind, label, path, content in discover_context_files(cwd_path)
+        if content
+    }
+    for kind in CONTEXT_FILE_PRIORITY:      # .hermes.md → AGENTS.md → CLAUDE.md → .cursorrules
+        if by_kind.get(kind):
+            return dedupe_contained_context_files(by_kind[kind])
+    return []
 
-    # Priority: first match wins — only ONE project context loaded
-    project_context = (
-        _load_hermes_md(cwd_path)       # 1. .hermes.md / HERMES.md (walks to git root)
-        or _load_agents_md(cwd_path)    # 2. AGENTS.md (cwd only)
-        or _load_claude_md(cwd_path)    # 3. CLAUDE.md (cwd only)
-        or _load_cursorrules(cwd_path)  # 4. .cursorrules / .cursor/rules/*.mdc
-    )
-
-    sections = []
-    if project_context:
-        sections.append(project_context)
-
-    # SOUL.md from HERMES_HOME (independent of project context)
-    if not skip_soul:
-        soul_content = load_soul_md()
-        if soul_content:
-            sections.append(soul_content)
-
-    if not sections:
-        return ""
-
-    return (
-        "# Project Context\n\n"
-        "The following project context files have been loaded "
-        "and should be followed:\n\n"
-        + "\n".join(sections)
-    )
+def render_project_context(...):
+    files = select_context_files(cwd_path)
+    rows = [format_context_file(file) for file in files]   # <file path="...">, scanned + capped
+    return render_section("project_context", {
+        "environment": workstation_environment(),           # OS / Arch rows
+        "model": model_label(provider, model),              # provider/model
+        "context_files": rows,
+        ...
+    })
 ```
+
+Deduplication follows the omp rules (`docs/omp-prompt-system.md` §5): every directory depth
+keeps its own AGENTS.md, files inject far ancestor → near ancestor, and a file whose
+normalized paragraph sequence is fully contained in a nearer file is dropped. Fenced code
+blocks are ignored when comparing, so two files that differ only in examples are not
+considered identical.
 
 ### Context file discovery details
 

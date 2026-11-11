@@ -90,6 +90,13 @@ def test_load_ttsr_settings_defaults_and_validation():
     assert settings.problems
 
 
+def test_load_ttsr_settings_accepts_omp_camel_case_keys():
+    settings = load_ttsr_settings({"ttsr": {"disabledRules": ["ts-no-any"], "builtinRules": False}})
+    assert settings.disabled_rules == ("ts-no-any",)
+    assert settings.builtin_rules is False
+    assert not settings.problems
+
+
 def test_scope_tokens_survive_braces_quotes_and_commas():
     assert split_scope_tokens('text, tool:edit({ts,tsx}), "tool:write(*.md)"') == [
         "text", "tool:edit({ts,tsx})", '"tool:write(*.md)"']

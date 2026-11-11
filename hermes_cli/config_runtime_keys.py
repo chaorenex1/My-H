@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 CORE_RUNTIME_KEYS: dict[str, str] = {
     "computer_use.backend": "plugins/computer_use/__init__.py configured_backend_name() (unset = cua)",
     "dashboard.kanban": "plugins/kanban/dashboard/plugin_api.py (bundled dashboard tab preferences)",
+    # omp's camelCase spelling of the seeded defaults under ``ttsr``.
+    "ttsr.builtinRules": "agent/ttsr_runtime.py load_ttsr_settings() (alias of ttsr.builtin_rules)",
+    "ttsr.disabledRules": "agent/ttsr_runtime.py load_ttsr_settings() (alias of ttsr.disabled_rules)",
 }
 
 

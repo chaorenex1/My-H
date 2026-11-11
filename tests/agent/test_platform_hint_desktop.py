@@ -27,7 +27,7 @@ def _stable_prompt(agent):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
     ):
         return build_system_prompt_parts(agent)["stable"]
 

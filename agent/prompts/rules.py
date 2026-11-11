@@ -18,9 +18,11 @@ import re
 import shutil
 import subprocess
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
+from agent.rule_buckets import bucket_rules, ttsr_ast_available, ttsr_session_active
 from agent.rule_utils import parse_rule_text
 from hermes_constants import get_hermes_home
 
@@ -132,36 +134,66 @@ def _rule_languages(rule: dict[str, Any]) -> set[str]:
     return languages
 
 
-def _row(rule: dict[str, Any], *, builtin: bool) -> str:
+@dataclass(frozen=True)
+class RulePrompt:
+    """Section 07 blocks: always-apply bodies and rulebook rows."""
+
+    generic: tuple[str, ...] = ()
+    domain: tuple[str, ...] = ()
+
+
+def _domain_row(rule: Mapping[str, Any]) -> str:
+    """``name (globs): description`` — the rulebook line, never the body."""
     name = rule["name"] or rule["rule_id"]
-    description = rule["description"]
-    location = f"rules/{rule['rule_id']}.md" if builtin else f"$HERMES_HOME/rules/{rule['rule_id']}.md"
-    return f"{name}: {description} — {location}" if description else f"{name} — {location}"
+    globs = rule["metadata"]["globs"]
+    scope = f" ({', '.join(globs)})" if globs else ""
+    return f"{name}{scope}: {rule['description']}"
 
 
-def rule_rows(project_dir: Path | str | None = None) -> list[str] | None:
-    """Rendered rule lines, or ``None`` when the project is not a programming project."""
+def rule_prompt(project_dir: Path | str | None = None, *, agent_name: str = "") -> RulePrompt | None:
+    """Section 07 buckets, or ``None`` when the project is not a programming project.
+
+    Built-ins load first and are never displaced by a profile rule with the same id;
+    profile rules stay language-gated (a glob-less ``alwaysApply`` rule is unconditional).
+    The buckets then apply ``ttsr.disabled_rules`` / ``ttsr.builtin_rules`` and the
+    session's TTSR gate, so an omp-ui viewer sees runtime rules in neither static block.
+    """
     languages = project_languages(Path(project_dir) if project_dir is not None else Path.cwd())
     if not languages:
         return None
-    rows: list[str] = []
+    rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for rule in _iter_rules(builtin_rules_dir()):
         seen.add(rule["rule_id"])
-        rows.append(_row(rule, builtin=True))
+        rows.append(rule)
     for rule in _iter_rules(profile_rules_dir()):
         if rule["rule_id"] in seen:  # built-ins are never overridden
             continue
         rule_languages = _rule_languages(rule)
         if rule_languages & languages or (not rule_languages and rule["metadata"]["always_apply"]):
-            rows.append(_row(rule, builtin=False))
-    return rows
+            rows.append(rule)
+
+    from agent.ttsr_runtime import load_ttsr_settings
+
+    settings = load_ttsr_settings()
+    buckets = bucket_rules(
+        rows,
+        settings,
+        agent_name=agent_name,
+        register_ttsr=bool(settings.enabled and ttsr_session_active()),
+        ast_available=ttsr_ast_available(rows),
+    )
+    return RulePrompt(
+        generic=tuple(rule["body"] for rule in buckets.always_apply if rule["body"]),
+        domain=tuple(_domain_row(rule) for rule in buckets.rulebook),
+    )
 
 
 __all__ = [
     "LANGUAGE_BY_EXTENSION",
+    "RulePrompt",
     "builtin_rules_dir",
     "profile_rules_dir",
     "project_languages",
-    "rule_rows",
+    "rule_prompt",
 ]

@@ -151,8 +151,8 @@
       "truncate": "head_tail",
       "override": false,
       "renderer": "rules",
-      "context_keys": ["rules"],
-      "context_types": {"rules": "list"}
+      "context_keys": ["generic_rules", "domain_rules", "rule_view"],
+      "context_types": {"generic_rules": "list", "domain_rules": "list", "rule_view": "bool"}
     },
     {
       "key": "tool_inventory",
@@ -230,15 +230,39 @@
     },
     {
       "key": "project_context",
-      "path": null,
+      "path": "project-prompt.md",
       "tier": "context",
       "gate": "always",
       "budget": null,
       "truncate": "head_tail",
       "override": false,
       "renderer": "project_context",
-      "context_keys": [],
-      "context_types": {}
+      "context_keys": [
+        "environment",
+        "model",
+        "context_files",
+        "dir_context_files",
+        "include_workspace_tree",
+        "workspace_tree",
+        "workspace_tree_truncated",
+        "workspace_roots",
+        "active_repo_context",
+        "subagent",
+        "append_prompt"
+      ],
+      "context_types": {
+        "environment": "list",
+        "model": "str",
+        "context_files": "list",
+        "dir_context_files": "list",
+        "include_workspace_tree": "bool",
+        "workspace_tree": "str",
+        "workspace_tree_truncated": "bool",
+        "workspace_roots": "list",
+        "active_repo_context": "str",
+        "subagent": "bool",
+        "append_prompt": "str"
+      }
     },
     {
       "key": "subagent_role",
