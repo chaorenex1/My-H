@@ -38,6 +38,21 @@ def os_family() -> str:
 
 
 @functools.cache
+def os_release() -> str:
+    """Return the human-facing release string.
+
+    Mirrors Node's ``os.release()``: the macOS product version on darwin, the full Windows
+    version (``10.0.26300``) on win32 — ``platform.release()`` alone reports only ``10`` there —
+    and the kernel release elsewhere.
+    """
+    if sys.platform == "darwin":
+        return platform.mac_ver()[0] or platform.release()
+    if sys.platform == "win32":
+        return platform.version()
+    return platform.release()
+
+
+@functools.cache
 def process_arch() -> str:
     """Return the architecture of this Python process."""
     if sys.platform == "win32":
