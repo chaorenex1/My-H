@@ -85,13 +85,13 @@ glob -> terminal中使用rg
 
 bash- > terminal /process
 
-lsp -> 暂无对应
+lsp -> code_intel
 
 web_search ->web_search
 
-ast_grep -> terminal中使用ast_grep
+ast_grep -> terminal中使用ast-grep
 
-ast_edit-> terminal中使用ast_grep
+ast_edit-> terminal中使用ast-grep
 
 write -> write_file
 
@@ -161,7 +161,7 @@ MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. NEVER = MUST NOT; AVOID = SH
 
 #### 7. memories context
 
-1. 这个章节2000字符预算
+1. 这个章节不设总字符预算：AI_SELF 没有长度上限，且 XML 结构不能按 `tail` 截断（会丢闭合标签）
 2. 定义memories的作用，引导使用记忆
 3. 使用xml标签包裹具体内容
 
@@ -172,20 +172,23 @@ MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. NEVER = MUST NOT; AVOID = SH
 md文件 记忆的使用和反馈向导
 </memories-Guidance>
 <memories-global>
-记忆插件向host注入的2个子标签内容
-1. 用户跨会话稳定的事实，偏好和交流风格
-2. ai跨会话的稳定的自我表示，包含如何理解用户真正的意图，工作达到什么程度才能让用户满意，需求/计划/执行步骤的思考深度等
+<memories-user>用户跨会话稳定的事实、偏好和交流风格，来源 $HERMES_HOME/memories/USER.md</memories-user>
+<memories-self>ai跨会话的稳定的自我表示，包含如何理解用户真正的意图，工作达到什么程度才能让用户满意，需求/计划/执行步骤的思考深度等，来源 $HERMES_HOME/memories/agents/&lt;agent_name&gt;/AI_SELF.md</memories-self>
+<memories-work>最近会话标签（MEMORY），来源 $HERMES_HOME/memories/agents/&lt;agent_name&gt;/MEMORY.md</memories-work>
 </memories-global>
 </memories>
 ```
 
+- 主会话的 `agent_name` 是 `default`；子代理传入自己的名称。
+- `memory_enabled=false` 时整个 05 章节（含 provider 块）不渲染；`user_profile_enabled=false` 只隐藏 `<memories-user>`。
+- 三个文件都直接从磁盘读取，不查询会话数据库；文件缺失时渲染空标签。
+- 记忆文件进入系统提示前按 strict 作用域做注入扫描，命中时用 `[BLOCKED: ...]` 占位。
+
 ##### memories provider
-1. 记忆插件注入的系统信息块
+1. 记忆插件注入的系统信息块，渲染在 `<memories>` 内部、`<memories-global>` 之后
 2. 信息块
 ```xml 
-<memories-provider name="记忆插件名称">
-记忆插件的信息
-</memories-provider>
+<memories_plugin_provider>记忆插件的信息</memories_plugin_provider>
 ```
 
 #### 8.skills/rules
@@ -211,10 +214,26 @@ md文件 记忆的使用和反馈向导
 
 #### 10.tool policy
 
-1. General / Tool I/O / Specialized Tools / Exploration / AST / Delegation
-2. "~\Documents\# Tool Policy.txt"
-3. tool policy根据agent允许的工具产生的信息不同
-4. 这个章节2000字符预算
+1. 只负责工具选择与调用方式：General / Tool I/O / Specialized Tools / Search and File Discovery /
+   Read / Edit / AST / Symbols and Graph / Delegation / Parallel and Retry
+2. 不渲染工具清单；专用工具优先于 shell 等价物
+3. `rg` 允许通过 terminal 运行，是文件发现与文本搜索的首选，`rg --files` 等同于 glob；
+   `grep`/`find`/`ls`/`fd`/`awk` 禁止。`search_files` 仅作为结构化输出（files_only/count/
+   分页）或无 shell 时的回退；未知行为或位置先用 `judgrg`，其 `ranges` 可作为
+   `read_file` 的可选 `offset`/`limit`
+4. `patch` 做局部手术式修改，`write_file` 只在新建或整体覆盖时使用；禁止用 shell 的
+   `sed`/`perl`/`python` 做单点编辑；`ast-grep` 的选型、用法与安全规则集中在 AST 一节
+5. `code_intel` 是符号、引用、调用链、类型、依赖与影响的权威；`rg`/`ast-grep`/`read_file`
+   只消费它的输出作为下一步输入，不作为图谱不完整时的回退
+6. 委派使用 `agent`/`agent_out`；`agent` 已全面取代 `delegate_task`，功能更完整：命名 agent、
+   独立 prompt/tools/model、JSONL 历史、后台常驻、输出契约与 artifact，并支持 `continue_from`
+7. 委派判定树复用 omp 的 switches：`delegation_bias`（gated/eager）、`eager_tasks`、
+   `eager_tasks_always`、`inline_first`、`max_concurrency`
+8. 根据实际工具面裁剪：没有 `agent` 就没有 Delegation，没有 `ast-grep` 就没有 AST，
+   没有 `code_intel` 就没有 Symbols and Graph；`rg`/`ast-grep` 来自
+   `agent/prompts/toolsets.py::PM_DEFAULT_TOOLSETS`，仅在 terminal 可用时注入
+9. 不写 Completion/验证小节，验证由 Workflow/Delivery 负责
+10. 章节不设总预算，避免截断末尾的 Parallel and Retry
 
 #### 10.override tool policy
 
@@ -225,6 +244,9 @@ md文件 记忆的使用和反馈向导
 #### 11.workflow
 
 1. 这个章节3000字符预算
+2. 按工具面裁剪：`code_intel`/`todo_list`/`clarify`/`browser_exec`/`computer_use`
+   缺失时对应小节或工具行不渲染
+3. `subagent=true` 时第 5 步走 Hand-off，验证交给主 agent；否则走 Verify
 
 ##### global scope
 
@@ -251,7 +273,8 @@ global scope->scope->Research Before Editing ->Decompose->Implement->Hand-off(su
 #### 12.Delivery
 
 1. contract / completeness / evidence-and-output / yielding
-2. 这个章节2000字符预算
+2. 这个章节2400字符预算
+3. `subagent=true` 时 yielding 只保留本切片一行，验证由主 agent 负责
 
 #### 13.Critical
 

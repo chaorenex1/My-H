@@ -252,17 +252,24 @@ class PromptSection:
 <memories>
 <memories-guidance>记忆使用与反馈向导</memories-guidance>
 <memories-global>
-<memories-user>跨会话稳定事实、偏好、交流风格</memories-user>
-<memories-self>稳定的自我表示与工作标准</memories-self>
+<memories-user>跨会话稳定事实、偏好、交流风格（memories/USER.md）</memories-user>
+<memories-self>稳定的自我表示与工作标准（memories/agents/<agent_name>/AI_SELF.md）</memories-self>
+<memories-work>最近会话标签 MEMORY（memories/agents/<agent_name>/MEMORY.md）</memories-work>
 </memories-global>
+<memories_plugin_provider>插件注入的信息</memories_plugin_provider>
 </memories>
-
-<memories-provider name="插件名">插件注入的信息</memories-provider>
 ```
 
+- 主会话 `agent_name=default`；渲染器接受调用方传入的名称选择 peer 目录。
+- `memory_enabled` 控制整个 05 章节（含 provider 块）；`user_profile_enabled` 只控制
+  `<memories-user>`。
+- 三个文件都按冻结快照语义直接读盘，不查会话数据库；缺失渲染空标签，strict 扫描命中时
+  以 `[BLOCKED: ...]` 占位。
+
 - 内置 `MEMORY.md`（2200）与 `USER.md`（1375）继续作为冻结快照；包装层不改变内容。
-- 预算默认 **5000**（guidance 1036 + 2200 + 1375 的实测上限），不是文档的 2000；否则会截断
-  用户记忆。若产品决定收紧，必须先下调 `memory_char_limit` / `user_char_limit`，再同步预算。
+- `memories` 章节不设总预算：`AI_SELF.md` 没有长度上限，而 05 是带闭合标签的 XML 结构，
+  按 `tail` 截断会先丢掉 `</memories>` 与 provider 块。单文件上限仍由记忆工具与用户维护，
+  章节整体不静默裁剪。
 - provider 块保持现有 `MemoryManager.build_system_prompt()` 的输出，只在外面包标签。
 
 ### D6. skills 与 rules
@@ -403,10 +410,10 @@ prompts:
     safety: 2000            # 含 <safety-policy> 包装开销；默认渲染 1025
     communication: 3000      # 默认 882 + desktop 平台提示 1406
     additional_communication: 1000
-    memories: 5000          # 与 MEMORY 2200 + USER 1375 + guidance 1036 对齐
-    tool_policy: 6000       # P1 实测后收紧
+    memories: null          # AI_SELF 无上限，且 XML 包装不可 tail 截断
+    tool_policy: null       # 工具面裁剪后的静态文本，不截断末尾 Parallel and Retry
     workflow: 3000
-    delivery: 2000
+    delivery: 2400
     critical: 1000
   overrides_dir: ""         # 默认 $HERMES_HOME/agents/<agent_name>/prompts
   additional_communication:

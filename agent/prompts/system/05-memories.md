@@ -3,10 +3,9 @@
 <memories>
 <memories-guidance>{{ memories_guidance }}</memories-guidance>
 <memories-global>
-<memories-user>{{ memories_user }}</memories-user>
-<memories-self>{{ memories_self }}</memories-self>
+{% if user_profile_enabled %}<memories-user>{{ memories_user }}</memories-user>
+{% endif %}<memories-self>{{ memories_self }}</memories-self>
+<memories-work>{{ memories_work }}</memories-work>
 </memories-global>
-</memories>
-{% if memories_provider %}
-{{ memories_provider }}
-{% endif -%}
+{% if memories_provider %}<memories_plugin_provider>{{ memories_provider }}</memories_plugin_provider>
+{% endif %}</memories>

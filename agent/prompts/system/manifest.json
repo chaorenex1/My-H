@@ -104,16 +104,25 @@
       "path": "05-memories.md",
       "tier": "volatile",
       "gate": "memory",
-      "budget": 5000,
+      "budget": null,
       "truncate": "tail",
       "override": false,
       "renderer": "memories",
-      "context_keys": ["memories_guidance", "memories_user", "memories_self", "memories_provider"],
+      "context_keys": [
+        "memories_guidance",
+        "memories_user",
+        "memories_self",
+        "memories_work",
+        "memories_provider",
+        "user_profile_enabled"
+      ],
       "context_types": {
         "memories_guidance": "str",
         "memories_user": "str",
         "memories_self": "str",
-        "memories_provider": "str"
+        "memories_work": "str",
+        "memories_provider": "str",
+        "user_profile_enabled": "bool"
       }
     },
     {
@@ -162,25 +171,25 @@
       "path": "09-tool-policy.md",
       "tier": "stable",
       "gate": "tools",
-      "budget": 6000,
+      "budget": null,
       "truncate": "tail",
       "override": true,
       "renderer": "tool_policy",
       "context_keys": [
-        "tool_use_enforcement",
-        "parallel_tool_calls",
-        "tool_guidance",
-        "steer_channel",
-        "google_operational_guidance",
-        "execution_guidance"
+        "tools",
+        "delegation_bias",
+        "eager_tasks",
+        "eager_tasks_always",
+        "inline_first",
+        "max_concurrency"
       ],
       "context_types": {
-        "tool_use_enforcement": "bool",
-        "parallel_tool_calls": "bool",
-        "tool_guidance": "str",
-        "steer_channel": "bool",
-        "google_operational_guidance": "bool",
-        "execution_guidance": "str"
+        "tools": "list",
+        "delegation_bias": "str",
+        "eager_tasks": "bool",
+        "eager_tasks_always": "bool",
+        "inline_first": "bool",
+        "max_concurrency": "int"
       }
     },
     {
@@ -192,20 +201,20 @@
       "truncate": "head_tail",
       "override": true,
       "renderer": "workflow",
-      "context_keys": ["coding_brief", "operator_instructions"],
-      "context_types": {"coding_brief": "str", "operator_instructions": "str"}
+      "context_keys": ["tools", "subagent"],
+      "context_types": {"tools": "list", "subagent": "bool"}
     },
     {
       "key": "delivery",
       "path": "11-delivery.md",
       "tier": "stable",
-      "gate": "tools",
-      "budget": 2000,
+      "gate": "always",
+      "budget": 2400,
       "truncate": "tail",
       "override": false,
-      "renderer": null,
-      "context_keys": [],
-      "context_types": {}
+      "renderer": "delivery",
+      "context_keys": ["subagent"],
+      "context_types": {"subagent": "bool"}
     },
     {
       "key": "critical",
@@ -215,7 +224,7 @@
       "budget": 1000,
       "truncate": "tail",
       "override": false,
-      "renderer": null,
+      "renderer": "critical",
       "context_keys": ["subagent"],
       "context_types": {"subagent": "bool"}
     },
@@ -247,6 +256,156 @@
         "plan_reference": "bool",
         "peers": "str",
         "completion": "str"
+      }
+    },
+    {
+      "key": "eager_task",
+      "path": "eager-task.md",
+      "tier": "context",
+      "gate": "tools",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "eager_task",
+      "context_keys": ["task_batch"],
+      "context_types": {"task_batch": "bool"}
+    },
+    {
+      "key": "eager_todo",
+      "path": "eager-todo.md",
+      "tier": "context",
+      "gate": "tools",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "eager_todo",
+      "context_keys": ["forced"],
+      "context_types": {"forced": "bool"}
+    },
+    {
+      "key": "irc_incoming",
+      "path": "irc-incoming.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "irc_incoming",
+      "context_keys": ["from", "reply_to", "progress", "interrupting", "relay_on_stop", "message"],
+      "context_types": {
+        "from": "str",
+        "reply_to": "str",
+        "progress": "bool",
+        "interrupting": "bool",
+        "relay_on_stop": "bool",
+        "message": "str"
+      }
+    },
+    {
+      "key": "subagent_system_prompt",
+      "path": "subagent-system-prompt.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_system_prompt",
+      "context_keys": [
+        "agent",
+        "context",
+        "plan_reference",
+        "plan_reference_path",
+        "worktree",
+        "irc_self_id",
+        "irc_peers",
+        "irc_omitted_count",
+        "irc_parked_count",
+        "structured",
+        "work_pool_yield_items",
+        "has_output_schema",
+        "yield_schema",
+        "output_schema_overrides_agent"
+      ],
+      "context_types": {
+        "agent": "str",
+        "context": "str",
+        "plan_reference": "str",
+        "plan_reference_path": "str",
+        "worktree": "str",
+        "irc_self_id": "str",
+        "irc_peers": "list",
+        "irc_omitted_count": "int",
+        "irc_parked_count": "int",
+        "structured": "bool",
+        "work_pool_yield_items": "bool",
+        "has_output_schema": "bool",
+        "yield_schema": "str",
+        "output_schema_overrides_agent": "bool"
+      }
+    },
+    {
+      "key": "subagent_user_prompt",
+      "path": "subagent-user-prompt.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_user_prompt",
+      "context_keys": ["assignment"],
+      "context_types": {"assignment": "str"}
+    },
+    {
+      "key": "subagent_async_pending",
+      "path": "subagent-async-pending.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_async_pending",
+      "context_keys": ["count", "multiple", "jobs"],
+      "context_types": {"count": "int", "multiple": "bool", "jobs": "str"}
+    },
+    {
+      "key": "subagent_completion_probe",
+      "path": "subagent-completion-probe.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_completion_probe",
+      "context_keys": [
+        "inflight_lines",
+        "has_previous",
+        "previous_ago",
+        "previous_percent",
+        "previous_stage"
+      ],
+      "context_types": {
+        "inflight_lines": "list",
+        "has_previous": "bool",
+        "previous_ago": "str",
+        "previous_percent": "int",
+        "previous_stage": "str"
+      }
+    },
+    {
+      "key": "subagent_yield_reminder",
+      "path": "subagent-yield-reminder.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "subagent_yield_reminder",
+      "context_keys": ["budget_stop", "structured", "retry_count", "max_retries"],
+      "context_types": {
+        "budget_stop": "bool",
+        "structured": "bool",
+        "retry_count": "int",
+        "max_retries": "int"
       }
     }
   ]

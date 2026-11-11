@@ -3,6 +3,7 @@
     "acp_adapter/entry.py": 1,
     "agent/i18n.py": 1,
     "agent/learning_graph.py": 1,
+    "agent/prompts/skills.py": 1,
     "cli.py": 1,
     "cron/scheduler.py": 3,
     "cron/scheduler_script.py": 3,

@@ -24,10 +24,11 @@ BOOL_FIELDS = frozenset({
     "background", "worktree",
     "skip_memory", "skip_context_files", "skip_background_review", "load_soul_identity",
     "structured", "read-summarize",
+    "eager_tasks", "eager_tasks_always", "inline_first",
 })
 
 #: Plain string fields. ``name``/``description`` document the file and are never sent to the model.
-STR_FIELDS = frozenset({"name", "description"})
+STR_FIELDS = frozenset({"name", "description", "delegation_bias"})
 
 #: omp spells the read-summary switch as ``readSummarize`` after normalization; accept both
 #: spellings and store the front-matter one canonical field.

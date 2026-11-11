@@ -64,7 +64,7 @@ class PromptSection:
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
     """Parse the manifest; malformed JSON or a missing file fails fast."""
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def load_sections(path: Path = MANIFEST_PATH) -> dict[str, PromptSection]:

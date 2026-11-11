@@ -972,6 +972,32 @@ def _collect_pre_llm_call_context(
     return ""
 
 
+def _delegation_turn_note(agent: Any, existing: str) -> str:
+    """``delegation.eager_tasks`` reminder for this turn; never touches the cached prefix.
+
+    The reminder rides the user-message injection channel with the gateway/plugin notes, so it
+    is re-sent only on the turn it applies to and historical rows keep their exact wire bytes.
+    """
+    if "agent" not in (getattr(agent, "valid_tool_names", None) or ()):
+        return existing
+    try:
+        from agent.prompts.delegation import resolve_delegation_policy
+        from agent.prompts.renderer import render_eager_task
+
+        definition = getattr(agent, "_agent_definition_metadata", None)
+        policy = resolve_delegation_policy(
+            definition=definition if isinstance(definition, dict) else None)
+        if not (policy.get("eager_tasks") or policy.get("eager_tasks_always")):
+            return existing
+        note = render_eager_task(task_batch=True).strip()
+    except Exception:
+        logger.warning("delegation turn note skipped", exc_info=True)
+        return existing
+    if not note:
+        return existing
+    return f"{existing}\n\n{note}" if existing else note
+
+
 def _merge_gateway_notes(
     agent: Any, messages: list[Any], current_turn_user_idx: int, plugin_user_context: str
 ) -> str:
@@ -1374,6 +1400,7 @@ def build_turn_context(
     plugin_user_context = _merge_gateway_notes(
         agent, messages, current_turn_user_idx, plugin_user_context
     )
+    plugin_user_context = _delegation_turn_note(agent, plugin_user_context)
 
     _bind_interrupt_scope(agent, ra)
     # A vetoed prompt never leaves the host: no external-memory prefetch, no titling call.

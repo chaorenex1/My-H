@@ -206,7 +206,8 @@ def render(out: Path) -> int:
             "TZ": "UTC", "LANG": "C.UTF-8", "PYTHONHASHSEED": "0", "PYTHONPATH": str(ROOT),
             "TMPDIR": tmp, "PYTHONDONTWRITEBYTECODE": "1",
         }
-        for key in ("HERMES_RUNTIME_DIR", "SYSTEMROOT"):
+        for key in ("HERMES_RUNTIME_DIR", "SYSTEMROOT", "USERPROFILE", "LOCALAPPDATA",
+                    "HOMEDRIVE", "HOMEPATH"):
             if os.environ.get(key):
                 env[key] = os.environ[key]
         proc = subprocess.run(

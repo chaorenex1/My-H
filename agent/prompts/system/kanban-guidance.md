@@ -31,4 +31,4 @@ If your task is itself a decomposition task (e.g. a planner profile given a high
 - Do not complete a task you didn't actually finish. Block it.
 - Do not call `clarify` to ask questions. You are running headless — there is no live user to answer. The call will time out and the task will sit silently in `running` with no signal to the operator. Instead: `kanban_comment` the context, then `kanban_block(reason=...)` so the task surfaces on the board as needing input.
 - Do not assign follow-up work to yourself. Assign it to the right specialist profile.
-- Do not call `delegate_task` as a board substitute. `delegate_task` is for short reasoning subtasks inside your own run; board tasks are for cross-agent handoffs that outlive one API loop.
+- Do not call `agent` as a board substitute. `agent` is for short reasoning subtasks inside your own run; board tasks are for cross-agent handoffs that outlive one API loop.

@@ -569,10 +569,31 @@ def _identity_parts(agent: Any, ctx_len: Optional[int]) -> tuple[list[str], bool
     return ([_soul_content], True) if _soul_content else ([DEFAULT_AGENT_IDENTITY], False)
 
 
+def _tool_policy_part(agent: Any) -> Optional[str]:
+    """Section 09 rendered from the live tool face and the profile's delegation switches.
+
+    The section is a stable-tier constant for the session: it is rendered once with the tools
+    the agent actually holds, and the config is read at that same build boundary. A bad config
+    value must not break prompt assembly, so a resolver failure degrades to no policy section.
+    """
+    try:
+        from agent.prompts.renderer import render_tool_policy_from_config
+
+        definition = getattr(agent, "_agent_definition_metadata", None)
+        return render_tool_policy_from_config(
+            enable_tools=sorted(agent.valid_tool_names),
+            definition=definition if isinstance(definition, dict) else None,
+        )
+    except Exception:
+        logger.warning("tool policy section skipped", exc_info=True)
+        return None
+
+
 def _guidance_parts(agent: Any) -> list[str]:
     """Universal + tool-aware + model-gated guidance blocks, each gated by its config.yaml key."""
     parts: list[str] = []
     if agent.valid_tool_names:
+        parts.append(_tool_policy_part(agent))
         parts += [
             text for flag, text in (
                 ("_task_completion_guidance", TASK_COMPLETION_GUIDANCE),

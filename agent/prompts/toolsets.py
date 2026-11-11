@@ -29,6 +29,16 @@ DEFAULT_TOOLSETS: tuple[str, ...] = (
     "codegraph",
 )
 
+# Shell binaries the PM environment provides to every prompt, with the purpose the
+# tool-policy section assigns each. They are not registry toolsets, so
+# ``resolve_tool_names`` cannot discover them; ``render_tool_policy`` merges these keys
+# into its availability set and can therefore stay capability-gated like the rest of
+# the prompt. Order is display/reference order.
+PM_DEFAULT_TOOLSETS: dict[str, str] = {
+    "rg": "File discovery, path matching, and text search; the glob equivalent (`rg --files`).",
+    "ast-grep": "AST-aware structural search, matching, and rewrite.",
+}
+
 
 def resolve_tool_names(
     *,
@@ -114,4 +124,4 @@ def tool_inventory_rows(available: set[str], *, coding_project: bool) -> list[st
     return rows
 
 
-__all__ = ["DEFAULT_TOOLSETS", "resolve_tool_names", "tool_inventory_rows"]
+__all__ = ["DEFAULT_TOOLSETS", "PM_DEFAULT_TOOLSETS", "resolve_tool_names", "tool_inventory_rows"]
