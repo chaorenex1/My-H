@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Delegate Tool -- Subagent Architecture
+Delegate Tool -- Legacy subagent architecture
+
+DEPRECATED: the ``agent`` tool (``tools/agent_tool.py``) fully supersedes
+``delegate_task``. It runs named agents with their own prompt, tools, model,
+JSONL history, background/resident lifecycle, output contracts and
+``agent_out`` artifacts, and can resume a run with ``continue_from``.
+``delegate_task`` remains for legacy batch callers and older transcripts; new
+prompt policy and tooling should use ``agent``.
 
 Spawns child AIAgent instances with a fresh conversation, their own task_id
 (terminal session, file-ops cache), the parent's toolsets minus child-blocked

@@ -3514,6 +3514,10 @@ Configure subagent behavior for the delegate tool:
 ```yaml
 delegation:
   backend: default                          # Delegation strategy routing each task: "default" = the keys below, or a plugin backend (model_map, profile_routes, ...)
+  bias: eager                               # Prompt policy: "gated" = no subagents unless the user/AGENTS.md/skill asks; "eager" = delegation preferred
+  eager_tasks: false                        # Render "delegation preferred" for substantial work
+  eager_tasks_always: false                 # Render "delegation default" except tiny single-file edits, direct answers, explicit commands
+  inline_first: true                        # Render "inline first": fan out only for 2+ independent slices or a context-flooding read set
   # backends:                               # Each plugin backend's own settings, keyed by its backend name
   #   model_map:
   #     options: [...]

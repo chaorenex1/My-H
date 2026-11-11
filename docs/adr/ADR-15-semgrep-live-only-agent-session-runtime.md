@@ -1,10 +1,10 @@
 # ADR-15：Semgrep 即时化收口与命名 agent 会话运行时（`@model` / `output` / inbox）
 
-**状态**：已决定（2026-11-05）；**P0 已实现**（2026-11-05），**P1 已实现**（2026-11-05），**P2 已实现**（2026-11-05），**P3 已实现**（2026-11-05），**P4 已实现**（2026-11-05），P5 未实现。分阶段：**P0** Semgrep 即时化收口（删索引期扫描与
+**状态**：已决定（2026-11-05）；**P0 已实现**（2026-11-05），**P1 已实现**（2026-11-05），**P2 已实现**（2026-11-05），**P3 已实现**（2026-11-05），**P4 已实现**（2026-11-05），**P5 已实现**（2026-11-11，发送面落地为独立 `agent_message` 工具，未做 broadcast 与独立 `interrupts` 队列）。分阶段：**P0** Semgrep 即时化收口（删索引期扫描与
 `_run_semgrep` 持久化，查询面排除 Semgrep 诊断）；**P1** agent 定义 `model: "@role"`；
 **P2** 定义契约 `output` / `spawns` / `blocking`；**P3** 命名 agent 的 session-owned inbox、
 owner `steer` 与注册接缝（仅 live）；**P4** wake turn、park/revive 与独立配额；**P5**
-peer/broadcast 发送面（`agent(action="message")`）与 `interrupts`。
+peer 双向发送面（`agent_message`）与 wake 链上限。
 
 **关联**：ADR-8（Code Intelligence；D17 的索引期 Semgrep 层、`CodeDiagnostic` /
 `CodeAnalysisRun`）、ADR-9（Late diagnostics；Semgrep 即时源与“查询面”条款）、ADR-12（prewalk
@@ -45,6 +45,12 @@ scout,reviewer}.md`、`src/config/model-resolver.ts`、`src/discovery/helpers.ts
   投递队列。resident 若复用本 ADR 的 wake/inbox，只是投递机制复用，不改变其稳定 `sessions`
   行身份；park/revive 默认不适用于 resident，除非 ADR-14 另行修订。
 - 本 ADR **不取代** ADR-12 的 prewalk。prewalk 的目标 `@smol` 由本 ADR 的模型选择器解析。
+- **P5 实现修订**（2026-11-11）：发送面落地为独立模型工具 `agent_message`
+  （`tools/agent_message_tool.py` + `tools/agent_inbox.py`），而不是给 `agent` 增加
+  `action="message"` 分支；peer 消息走既有 `steer`（下一个 tool boundary）、wake turn 或
+  `agent_inbox(status="pending")`，不另建 `interrupts` 队列；broadcast 不做，
+  `agent_sessions.max_wake_turns` 作为链式唤醒上限。`agent://` 仍不是 URI：读由
+  `agent_out` 承担，写由 `agent_message` 承担。
 
 **范围**：四项——Semgrep 只保留 live 路径；`model` 支持 `@role`；agent 定义支持
 `output`/`spawns`/`blocking`；命名 agent 的常驻会话（inbox、wake、park/revive、独立配额）。
@@ -277,11 +283,12 @@ parked，被消息/resume 自动 revive（`src/task/executor.ts:3555-3666,3709`�
 **身份**：`agent_session_id` 是 IRC id（`tools/agent_tool.py` mint，`run_transcript` 与
 `agent_session` 行都以它为准）。`agent_name` 只是标签；`subject` 不唯一。
 
-**队列**：每个 live session 持有三个队列，语义与 omp 对齐：
+**队列**：设计目标是与 omp 对齐的三个队列；当前实现只有 `asides`（live `steer`）与
+`deferred_wakes`（`agent_inbox` pending → wake/revive），`interrupts` 未落地：
 
 | 队列 | 语义 | 注入点 |
 |---|---|---|
-| `interrupts` | 需要打断可中断 `wait` 的 peer/broadcast 消息（P5 启用） | 下一个工具/步骤边界；不硬杀进行中的工具 |
+| `interrupts` | 设计中的打断队列；**P5 未落地**（peer 消息复用 `steer` / wake / pending） | 下一个工具/步骤边界；不硬杀进行中的工具 |
 | `asides` | 非打断消息、扩展/用户旁注 | 下一个步骤边界 |
 | `deferred_wakes` | 被“池化契约/活跃 run”暂扣的唤醒 | 契约释放后转成受监控的 wake |
 
@@ -290,11 +297,12 @@ parked，被消息/resume 自动 revive（`src/task/executor.ts:3555-3666,3709`�
 | 阶段 | 路径 | 权限 |
 |---|---|---|
 | P3 | owner → 命名 agent：`delegate_task(action="steer", subagent_id=<agent_session_id>, message=...)` | 现有 `_owns_subagent_record`（`tools/delegate_tool_registry.py:215-237`），只允许 owner 的 spawn tree |
-| P5 | sibling/broadcast → `agent(action="message", agent_session_id=..., message=..., delivery="steer\|aside\|wake")` | 同 profile；发送方必须是 live 命名 agent session（或 owning gateway session）；目标 session 必须存在；不跨 profile |
+| P5 | 命名 agent ↔ 命名 agent / child → owner：`agent_message(to=…, content=…, reply_to=…, progress=…)` | 同 profile 的 owner、同 parent 的 sibling、或自己的 child；child 可向派发它的 conversation 回信（owner 离线则 pending）；目标 id/短名/subject 必须存在；不跨 profile |
 
 `delegate_task(action="steer")` **不能**作为 peer 路径：它的 authority 是 owner-scoped，
 sibling 调用会被 `_owns_subagent_record` 拒绝。P3 因此只声明 owner→session 的注入；
-peer/broadcast 的 `interrupts` 队列随 P5 的 `agent(action="message")` 一起启用。
+P5 的 `agent_message` 使用 durable lineage（`agent_session.parent_session_id`）授权，
+不另建 `interrupts` 队列：live 目标复用同一 `steer`，idle 目标起 wake，parked/absent 目标落 pending。
 
 **持久化**：未投递的记录写 `state.db` 的新表 `agent_inbox`：
 
@@ -323,7 +331,7 @@ CREATE INDEX idx_agent_inbox_pending ON agent_inbox(agent_session_id, status, cr
 **投递**：
 
 1. **live streaming**：owner 消息 → `AIAgent.steer()`，以 `steering: true` 的 user 行进入下一个
-   边界；peer/broadcast（仅 P5）→ `interrupts`。
+   边界；P5 的 peer 消息同样走 `steer_subagent`（未单独建 `interrupts` 队列）。
 2. **live idle**：`wakeForIrc` 起一个 wake turn（D5）。
 3. **parked**：先 revive，再按 live idle 投递。
 4. **没有 live session**（已 settle 且未 keep-alive）：写 `agent_inbox(status="pending")`；
@@ -351,8 +359,8 @@ owner_transport, accepting_steer: True}` 写进 `_active_subagents`；`on_settle
   （`tools/delegate_tool_registry.py:124-175`）；
 - **peer 路径**（P5）不复用 `_owns_subagent_record`：它要求同 profile、发送方是 live 命名
   agent session（或 owning gateway session）、目标 session 存在；发送方身份由当前 run 的
-  `agent_session_id` 上下文推断，不由模型自报；peer 只能进 `interrupts`，
-  不能直接改父的 system prompt；
+  `agent_session_id` / 模型不可见的 `task_id` 推断，不由模型自报；`agent_message` 的正文装进
+  服务端生成的 envelope，不能直接改父的 system prompt；
 - inbox 按 profile 隔离（HX002）；跨 profile 投递一律拒绝。
 
 **控制面**：
@@ -360,13 +368,15 @@ owner_transport, accepting_steer: True}` 写进 `_active_subagents`；`on_settle
 - P3：扩展 `delegate_task` 的既有控制动作 `list | steer | stop`
   （`tools/delegate_tool.py:849`）使其能解析命名 agent 的 `agent_session_id`；权限仍是
   owner-scoped。
-- P5：给 `agent` 增加可选 `action`（缺省 `"run"`）；`action="message"` 用于同 profile 的
-  peer/broadcast 发送，此时 `agent_name`/`user_prompts` 不再是必填，改由
-  `agent_session_id`/`message`/`delivery` 组成（schema 用 `if action != "message"` 的
-  `required` 分支，或 handler 前置校验；不把 `agent_name` 全局改成可选）。目标 id 来自
-  `delegate_task(action="list")` 或 `agent_out`。不新增独立工具。
+- P5：新增独立模型工具 `agent_message`（toolset `agents`），接收 `to` /
+  `agent_session_id` / `name` / `subject` 目标与 `content` / `reply_to` / `progress`。发送面
+  **不放** 进 `agent` 的 `action` 分支：`agent` 的 `spawn` / `agent_name` 语义保持单一；目标 id
+  来自 `delegate_task(action="list")`、`agent_out` 或短名。`delegate_task` 仍只做 owner-scoped
+  的 `list | steer | stop`。
 - `agent_out` 增加 `mode="inbox"`（读取/排空 pending + 最近投递）；ADR-16 P2 后模式为
-  `history` / `artifact` / `ast_summary` / `inbox`，`final_response` 已删除。
+  `history` / `artifact` / `ast_summary` / `inbox` / `context_files`，`final_response` 已删除。
+- `agent_messages.envelope: false` 是 P5 的 rollout 开关：关闭时投递转义的正文，不带
+  `from`/`reply_to` envelope。
 
 **实现注记（P3，2026-11-05）**：`asides` 由 live `AIAgent.steer()` 承载（同一把 registry 锁内投递）；
 `deferred_wakes` 在 P3 就是 `agent_inbox(status="pending")` 行——没有 wake 消费者，P4 的
@@ -468,7 +478,7 @@ agent_sessions:
 - **wake relay**：每个 wake turn 的答案写一条 `kind="wake_relay"` 的 delivered 行；只有 sender
   本身是 live 常驻 session 时才向 `completion_queue` 推完成事件，否则由 `agent_out` 读取。
 - **max_wake_turns**：P4 的 owner 路径把一条外部消息排队的多个 body 合并成一个 wake turn，并在
-  投递时把计数归零；计数与上限为 P5 的 relay 链预留（届时越界只保留 pending，不自动唤醒）。
+  投递时把计数归零；P5 对 relay 链使用同一计数与上限：越界只保留 pending，不自动唤醒。
 
 ### D8：上下文与缓存边界
 
@@ -497,10 +507,12 @@ agent_sessions:
 | `agent_session` | `+ last_activity_at, parked_at, model_role, metadata_json`；status `parked` |
 | `agent_inbox` | 新表（见 D4） |
 | `delegate_task` control actions | `list/steer/stop` 可解析命名 agent session（owner scope） |
-| `agent` | `+ 可选 action="message"`（P5；同 profile peer 发送）；`action="run"` 时 `agent_name`/`user_prompts` 仍必填 |
-| `agent_out` | `+ mode="inbox"`（ADR-16 P2：`final_response` 删除，默认 `history`） |
+| `agent_message` | 新模型工具（toolset `agents`）：`to`/`agent_session_id`/`name`/`subject` + `content`/`reply_to`/`progress`；envelope 由服务端生成 |
+| `agent` | `+ spawn`（`spawn:@<name>` 文本指令；`delegation.spawn_directive` 开关）；`agent_name`/`user_prompts` 规则不变 |
+| `agent_out` | `+ mode="inbox"` / `"context_files"`（ADR-16 P2：`final_response` 删除，默认 `history`） |
 
-**配置**：`agent_sessions.*`（D7）；`code_intel.semgrep.*` 语义不变（只控制 live）。
+**配置**：`agent_sessions.*`（D7，含 `yield_tool` rollout 开关）；`agent_messages.envelope`
+（envelope rollout 开关）；`delegation.spawn_directive`；`code_intel.semgrep.*` 语义不变（只控制 live）。
 
 ---
 
@@ -513,10 +525,10 @@ agent_sessions:
 | **P2** | D3：`output` 归一化 + 校验/一次重试；`spawns` 限制；`blocking` 等待 | schema 合法/非法/重试；spawns 拒绝；blocking 阻塞 |
 | **P3**（已实现） | D4：session 注册接缝、owner `delegate_task(steer)`、`asides`/`deferred_wakes`、`agent_out(inbox)`；仅 live，不 park | 运行中注入；idle 排队；无 live 时 pending；转义与 owner authority |
 | **P4**（已实现） | D5–D7：wake turn、park/revive、独立配额、观测 | 30 分钟 park；消息 revive；配额溢出结构化错误；不占 `agent_loop` 槽 |
-| **P5** | peer/broadcast：`agent(action="message")`、`interrupts`、同 profile 授权与广播 | sibling 发送可达；owner-scoped steer 不能冒充 peer；跨 profile 拒绝 |
+| **P5**（已实现） | peer 双向：`agent_message`（envelope/reply_to/progress）、child→owner、同 profile lineage 授权、`max_wake_turns` 链式上限 | sibling/parent/child 可达；owner-scoped steer 不能冒充 peer；跨 profile 拒绝；超 hop 只 pending |
 
 依赖：P3 依赖 `agent_run` 的 `on_agent`/`keep_alive` 接缝；P4 依赖 P3（park 需要 live 注册与
-inbox）；P5 依赖 P4（持久 inbox 与 `interrupts`）。P0 独立，可先合。
+inbox）；P5 依赖 P4（持久 inbox 与 wake/revive）。P0 独立，可先合。
 
 ---
 
@@ -531,8 +543,10 @@ inbox）；P5 依赖 P4（持久 inbox 与 `interrupts`）。P0 独立，可先�
    解析，`output` 校验，`spawns` 生效，`blocking` 生效。
 5. P3：owner 的 `delegate_task(action="steer", subagent_id=<agent_session_id>,
    message="...")` 向运行中的命名 agent 注入；下一个边界可见。
-6. P5：sibling 的 `agent(action="message", ...)` 到达 `interrupts`；owner-scoped
-   `delegate_task(steer)` 不能冒充 peer；跨 profile 在两种路径都被拒。
+6. P5：命名 agent 之间用 `agent_message` 互发，目标看到 envelope 并可用 `reply_to` 回信；
+   child → owner 在 owner live 时可达、离线时 pending；owner-scoped
+   `delegate_task(steer)` 不能冒充 peer；跨 profile 在两种路径都被拒；`max_wake_turns`
+   越界后只保留 pending。
 7. idle 30 分钟后 `agent_session.status="parked"`；发消息后 revive 并继续同一
    `agent_session_id`；transcript 前缀不变。
 8. `agent_sessions.max_live` 满时新 run 返回 `queue_full`；给 parked agent 的消息保留为
@@ -548,8 +562,8 @@ inbox）；P5 依赖 P4（持久 inbox 与 `interrupts`）。P0 独立，可先�
 | 保留索引期 Semgrep，并给 `CodeDiagnostic` 加 Revision | 两个真源仍存在；即时路径不需要 Revision；ADR-9 已把 Semgrep 定为即时源 |
 | 查询面继续返回 Semgrep 旧行，只标 freshness | 用户明确要求查询面不返回；旧行只会误导 |
 | 新增 `role:` 字段 | omp 用 `model: "@role"`；两个名字表达同一件事，定义不可直接移植 |
-| 新建 IRC 工具/全局总线 | 窄腰；session-owned inbox + 既有 `delegate_task` 控制面足够 |
-| 用 `delegate_task(steer)` 作为 peer 发送路径 | authority 是 owner-scoped（`_owns_subagent_record`），sibling 调用会被拒；peer 走 P5 的 `agent(action="message")` |
+| 新建 IRC 工具/全局总线 | 窄腰；`agent_message` 只是 session-owned inbox 的模型入口，不是跨 agent 总线；控制面仍是 `delegate_task` |
+| 用 `delegate_task(steer)` 作为 peer 发送路径 | authority 是 owner-scoped（`_owns_subagent_record`），sibling 调用会被拒；peer 走 P5 的 `agent_message` |
 | 用 `agent_loop.max_run_seconds` 当常驻 TTL | 它是卡死上限，会误杀 live agent；idle TTL 是独立语义 |
 | `blocking` 由调用方覆盖 | omp 的 `blocking: true` 是“即使异步也等待”的契约；定义优先 |
 | 用散文 `references/*.md` 代替 `output` schema | omp 的输出模板是机器校验 schema；散文无法保证结构 |
