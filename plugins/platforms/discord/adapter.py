@@ -1,4 +1,4 @@
-# health: allow FILE_LINES -- platform-tables refactor: core's PLATFORM_HINTS/_PLATFORM_DEFAULTS rows for this platform moved onto its register() call (hint text lives in adapter_hint.py); the growth is only those kwargs
+# health: allow FILE_LINES -- platform-tables refactor: the core platform-hint/display-default rows for this platform moved onto its register() call (hint text lives in adapter_hint.py); the growth is only those kwargs
 from __future__ import annotations
 
 """
