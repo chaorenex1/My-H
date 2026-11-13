@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import pytest
@@ -73,18 +74,18 @@ def test_safety_over_budget_policy_fails_instead_of_truncating():
 def test_renderer_entry_methods_supply_variables_and_join_in_order():
     from agent.prompts import renderer
 
-    head = renderer.render_head(
+    role = renderer.render_role(
         identity={"role": "Hermes Agent", "role_desc": "You are Hermes Agent."},
         safety={"rules": "- No force-push.", "override": True},
     )
-    assert head.startswith("MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.")
-    assert 0 < head.index("§ Role") < head.index("# Safety")
-    assert "You are Hermes Agent." in head
-    assert "- No force-push." in head
-    assert "- Act only within" not in head
-    assert "\n\n\n" not in head  # one blank line between sections, no doubled breaks
-    assert not head.endswith("\n")
-    assert head.index("</safety-policy>") < head.index("# Communication")
+    assert role.startswith("§ Role")
+    assert role.index("§ Role") < role.index("# Safety")
+    assert "You are Hermes Agent." in role
+    assert "- No force-push." in role
+    assert "- Act only within" not in role
+    assert "\n\n\n" not in role  # one blank line between sections, no doubled breaks
+    assert not role.endswith("\n")
+    assert role.index("</safety-policy>") < role.index("# Communication")
 
 
 def test_renderer_defaults_match_the_registry_defaults():
@@ -95,7 +96,7 @@ def test_renderer_defaults_match_the_registry_defaults():
     assert renderer.render_safety() == ps.render_section("safety")
     assert renderer.render_communication() == ps.render_section("communication")
     with pytest.raises(TypeError):
-        renderer.render_head(identity={"bogus": "x"})
+        renderer.render_identity(bogus="x")
 
 
 def test_communication_defaults_split_from_personality_and_platform():
@@ -122,9 +123,9 @@ def test_communication_variables_supply_personality_and_platform():
 
 
 def test_communication_budget_holds_default_plus_the_longest_platform_hint():
-    from agent.prompt_builder import PLATFORM_HINTS
+    from agent.prompts.platforms import load_platform_hints as _load_platform_hints
 
-    hint = PLATFORM_HINTS["desktop"]
+    hint = _load_platform_hints()["desktop"]
     out = ps.render_section("communication", {"platform_hint": hint})
     assert hint in out
     assert "truncated" not in out
@@ -521,21 +522,22 @@ def test_render_role_applies_platform_capability_gates():
     assert "Visuals:" in renderer.render_role("cli", identity={"render_svg": True})
 
 
-def test_renderer_communication_entry_and_head_order():
+def test_renderer_role_orders_identity_safety_and_communication():
     from agent.prompts import renderer
 
-    head = renderer.render_head(
+    role = renderer.render_role(
+        "omp-ui",
         identity={"role": "Hermes Agent", "role_desc": "You are Hermes Agent."},
         safety={"rules": "- No force-push.", "override": True},
-        communication={"personality": "- Dry.", "platform": "- omp-ui."},
+        personality="- Dry.",
     )
     assert (
-        head.index("§ Role")
-        < head.index("# Safety")
-        < head.index("# Personality")
-        < head.index("# Platform")
+        role.index("§ Role")
+        < role.index("# Safety")
+        < role.index("# Personality")
+        < role.index("# Platform")
     )
-    assert head.index("# Communication") > head.index("# Personality")
+    assert role.index("# Communication") > role.index("# Personality")
 
 
 def test_identity_defaults_fall_back_to_the_default_role_block():
@@ -614,3 +616,97 @@ def test_int_context_is_supported_and_unknown_types_rejected(tmp_path):
     )
     with pytest.raises(ps.PromptSectionError):
         ps.load_sections(manifest)
+
+
+def test_manifest_scope_splits_system_and_request_sections():
+    sections = ps.load_sections()
+    request = {key for key, section in sections.items() if section.scope == "request"}
+    assert request == {
+        "eager_task",
+        "eager_todo",
+        "irc_incoming",
+        "subagent_role",
+        "subagent_system_prompt",
+        "subagent_user_prompt",
+        "subagent_async_pending",
+        "subagent_completion_probe",
+        "subagent_yield_reminder",
+    }
+    system = {key for key, section in sections.items() if section.scope == "system"}
+    assert system == set(sections) - request
+    assert "additional_communication" not in sections
+
+
+def test_manifest_scope_defaults_to_system(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"sections": [{
+        "key": "x", "path": "00-rfc2119.md", "tier": "stable", "gate": "always",
+    }]}), encoding="utf-8")
+
+    section = ps.load_sections(manifest)["x"]
+    assert section.scope == "system"
+
+
+@pytest.mark.parametrize("scope", ["deferred", "System", "", None, 3])
+def test_manifest_rejects_an_unknown_scope(tmp_path, scope):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"sections": [{
+        "key": "x", "path": "00-rfc2119.md", "tier": "stable", "gate": "always",
+        "scope": scope,
+    }]}), encoding="utf-8")
+
+    with pytest.raises(ps.PromptSectionError, match="unknown scope"):
+        ps.load_sections(manifest)
+
+
+def test_block_renderers_return_finished_bodies_and_gate_inside_the_block(tmp_path):
+    from agent.prompts import renderer
+
+    role = renderer.render_role("cli")
+    assert role.startswith("§ Role")
+    assert role.index("# Safety") < role.index("# Communication")
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    closing = renderer.render_closing(enable_tools=["read_file"])
+    assert "# 5. Verify" in closing and "§ Critical" in closing
+    no_code = renderer.render_closing(project_dir=empty, enable_tools=["read_file"])
+    assert "§ Workflow" not in no_code
+    assert "§ Delivery" in no_code and "§ Critical" in no_code
+
+    handoff = renderer.render_workflow(enable_tools=["read_file"], subagent=True)
+    assert "# 5. Hand-off" in handoff and "# 5. Verify" not in handoff
+    assert "your slice's callsites" in renderer.render_delivery(subagent=True)
+
+    runtime = renderer.render_runtime(project_dir=empty, enable_tools=["read_file"])
+    assert runtime.startswith("§ Runtime\n\n# Internal URLs")
+    assert "# Rules" not in runtime
+
+    assert renderer.render_tool_policy(toolsets=()) == ""
+    assert renderer.render_tool_policy(enable_tools=["read_file"]).startswith("§ Tool Policy")
+    assert renderer.render_project_context(skip_context_files=True) == ""
+
+
+def test_runtime_injects_the_kanban_lifecycle_for_a_dispatcher_worker(tmp_path, monkeypatch):
+    from agent.prompts import renderer
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_worker")
+    worker = renderer.render_runtime(project_dir=empty, enable_tools=["kanban_show"])
+    assert "kanban_complete" in worker
+
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    interactive = renderer.render_runtime(project_dir=empty, enable_tools=["kanban_show"])
+    assert "kanban_complete" not in interactive
+
+
+def test_render_request_only_accepts_request_scope_templates():
+    from agent.prompts import renderer
+
+    assert renderer.render_request("eager_task", {"task_batch": True}).startswith("<system-reminder>")
+    with pytest.raises(ps.PromptSectionError, match="not 'request'"):
+        renderer.render_request("rfc2119", {})
+    with pytest.raises(ps.PromptSectionError, match="unknown prompt section"):
+        renderer.render_request("does-not-exist", {})

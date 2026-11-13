@@ -799,15 +799,11 @@ class TestPreApiCallSteerDrain:
 
 
 class TestSteerMarkerContract:
-    def test_system_prompt_note_describes_the_real_marker(self):
-        """The system-prompt note tells the model which marker to trust; it
-        must reference the exact open/close the injector emits, or the model
-        trusts a marker that never appears (and vice-versa)."""
-        from agent.prompt_builder import STEER_CHANNEL_NOTE, STEER_MARKER_CLOSE
+    def test_steer_marker_is_self_describing(self):
+        from agent.prompt_builder import STEER_MARKER_CLOSE, STEER_MARKER_OPEN
 
         emitted = format_steer_marker("hi")
         assert STEER_MARKER_OPEN in emitted and STEER_MARKER_CLOSE in emitted
-        assert STEER_MARKER_OPEN in STEER_CHANNEL_NOTE and STEER_MARKER_CLOSE in STEER_CHANNEL_NOTE
 
 
 

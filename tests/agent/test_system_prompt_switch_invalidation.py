@@ -96,10 +96,13 @@ def test_compression_tip_adoption_applies_the_identity_check(db):
     assert _adopt("model-a", "prov-a")._cached_system_prompt == stale
 
 
-def _turn_agent(db, model: str, provider: str, prose: str = "") -> MagicMock:
-    """A fresh per-turn agent (the gateway shape) whose rebuild renders the real trailer."""
-    from agent.system_prompt import _timestamp_line
+def _workstation(model: str, provider: str) -> str:
+    rows = (f"- Model: {model}\n" if model else "") + (f"- Provider: {provider}\n" if provider else "")
+    return f"<workstation>\n{rows}</workstation>"
 
+
+def _turn_agent(db, model: str, provider: str, prose: str = "") -> MagicMock:
+    """A fresh per-turn agent (the gateway shape) whose rebuild renders a real workstation block."""
     agent = MagicMock()
     agent._cached_system_prompt = None
     agent.session_id = SESSION_ID
@@ -115,7 +118,9 @@ def _turn_agent(db, model: str, provider: str, prose: str = "") -> MagicMock:
     agent._surface_switch_note = ""
     agent._gateway_turn_context_notes = ""
     agent.enabled_toolsets = agent.disabled_toolsets = None
-    agent._build_system_prompt = MagicMock(side_effect=lambda _sm: f"You are Hermes Agent.\n\n{prose}{_timestamp_line(agent)}")
+    agent._build_system_prompt = MagicMock(
+        side_effect=lambda _sm: f"You are Hermes Agent.\n\n{prose}<project-context>\n{_workstation(model, provider)}\n</project-context>"
+    )
     return agent
 
 

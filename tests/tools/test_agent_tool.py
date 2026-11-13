@@ -107,7 +107,7 @@ def test_an_inline_run_uses_host_knobs_and_writes_its_own_history():
 
     agent = _FakeAgent.instances[-1]
     assert agent.message.endswith("Find the cause.")
-    assert agent.system_message.startswith("§ Role\nYou research.")
+    assert agent.system_message.startswith("§ Subagent Role\nYou research.")
     assert agent.kwargs["platform"] == "subagent"
     assert agent.kwargs["enabled_toolsets"] == list(DEFAULT_TOOLSETS), (
         "an omitted tool_sets means the default-loaded built-in sets")
@@ -230,7 +230,7 @@ def test_an_agent_definition_file_beats_the_argument_and_loses_its_front_matter(
                  system_prompts="inline", project_dir=str(tmp_path / "project"))
 
     assert data["system_prompt_source"].endswith("researcher.md")
-    assert _FakeAgent.instances[-1].system_message.startswith("§ Role\nYou are the researcher.")
+    assert _FakeAgent.instances[-1].system_message.startswith("§ Subagent Role\nYou are the researcher.")
 
 
 def test_definition_search_covers_profile_plugins_and_installation(tmp_path, monkeypatch):
@@ -273,7 +273,7 @@ def test_a_definition_shipped_inside_a_plugin_is_used(tmp_path, monkeypatch):
 
     assert data["system_prompt_source"].endswith("researcher.md")
     assert _FakeAgent.instances[-1].system_message.startswith(
-        "§ Role\nYou are the plugin researcher.")
+        "§ Subagent Role\nYou are the plugin researcher.")
 
 
 def test_context_files_are_data_and_stay_inside_the_allowed_roots(tmp_path):
@@ -447,7 +447,7 @@ def test_definition_metadata_owns_toolsets_limits_and_effort(tmp_path, monkeypat
     assert data["toolsets"] == ["file", "web"] and data["all_tools"] is False
     assert (seen["model"], seen["provider"]) == ("model", "provider")
     agent = _FakeAgent.instances[-1]
-    assert agent.system_message.startswith("§ Role\nYou are the agent."), (
+    assert agent.system_message.startswith("§ Subagent Role\nYou are the agent."), (
         "the definition body beats the argument")
     assert agent.kwargs["enabled_toolsets"] == ["file", "web"]
     assert agent.kwargs["max_iterations"] == 42
@@ -512,7 +512,7 @@ def test_a_model_role_resolves_against_its_auxiliary_slot(tmp_path, monkeypatch)
                     "base_url": "https://relay.example/v1", "api_key": "slot-key"}
     assert data["model_role"] == "smol"
     agent = _FakeAgent.instances[-1]
-    assert agent.system_message.startswith("§ Role\nYou are the agent."), (
+    assert agent.system_message.startswith("§ Subagent Role\nYou are the agent."), (
         "front matter never reaches the prompt")
     assert "api_key" not in agent.kwargs, "credentials come from the resolved runtime, not the tool"
     assert agent.kwargs["reasoning_config"] == {"enabled": True, "effort": "low"}
@@ -639,7 +639,7 @@ def test_a_poisoned_project_definition_is_blocked_and_the_next_candidate_wins(tm
 
     assert "error" not in data
     assert _FakeAgent.instances[-1].system_message.startswith(
-        "§ Role\nYou are the profile scout.")
+        "§ Subagent Role\nYou are the profile scout.")
     assert Path(data["system_prompt_source"]) != poisoned
 
 
@@ -701,7 +701,7 @@ def test_shadowing_a_bundled_definition_is_reported(tmp_path, monkeypatch):
 
     assert data["definition_shadowed"] is True
     assert _FakeAgent.instances[-1].system_message.startswith(
-        "§ Role\nYou are the project scout.")
+        "§ Subagent Role\nYou are the project scout.")
 
 
 # -- worktree isolation --------------------------------------------------------

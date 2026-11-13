@@ -12,9 +12,8 @@ Two scenarios for _agent_home's resolution order (#86313 post-merge findings):
    home must still win over ambient env resolution.
 
 Plus the full-prompt wiring test (@helix4u): build_system_prompt_parts on a
-bare thread with the bot's session DB must produce a prompt whose identity
-(SOUL.md), skills block, and profile line ALL belong to the bot — reverting
-any single call-site wire breaks this test.
+bare thread with the bot's session DB must produce a prompt whose skills block
+and profile line belong to the bot — reverting either wire breaks this test.
 """
 
 import re
@@ -99,10 +98,8 @@ def test_db_home_wins_on_bare_thread_without_override(tmp_path, monkeypatch):
 
 
 def test_full_prompt_scoped_to_bot_on_bare_thread(tmp_path, monkeypatch):
-    """Wiring test: SOUL.md identity, skills block, and profile line must ALL
-    come from the bot's home when building on an unbound thread with the
-    bot's session DB — no mixed-profile prompt."""
-    from agent import prompt_builder
+    """Wiring test: the skills block and profile line must come from the bot's
+    home when building on an unbound thread with the bot's session DB."""
     from agent.system_prompt import build_system_prompt
 
     default_home = tmp_path / "root"
@@ -112,7 +109,6 @@ def test_full_prompt_scoped_to_bot_on_bare_thread(tmp_path, monkeypatch):
         "---\nname: leaky-skill\ndescription: default-only skill\n---\nbody\n",
         encoding="utf-8",
     )
-    (default_home / "SOUL.md").write_text("DEFAULT SOUL", encoding="utf-8")
 
     bot_home = default_home / "profiles" / "mybot"
     bot_skills = bot_home / "skills" / "general" / "bot-skill"
@@ -121,12 +117,10 @@ def test_full_prompt_scoped_to_bot_on_bare_thread(tmp_path, monkeypatch):
         "---\nname: bot-skill\ndescription: bot-only skill\n---\nbody\n",
         encoding="utf-8",
     )
-    (bot_home / "SOUL.md").write_text("BOT SOUL", encoding="utf-8")
 
     # Ambient env resolves to the launch/default home; nothing binds the
     # ContextVar on the build thread.
     monkeypatch.setenv("HERMES_HOME", str(default_home))
-    prompt_builder.clear_skills_system_prompt_cache(clear_snapshot=False)
 
     agent = _agent_for(bot_home, valid_tool_names=["skill_view"])
     result = {}
@@ -142,8 +136,6 @@ def test_full_prompt_scoped_to_bot_on_bare_thread(tmp_path, monkeypatch):
     t.join()
     prompt = result["prompt"]
 
-    assert "BOT SOUL" in prompt
-    assert "DEFAULT SOUL" not in prompt
     m = re.search(r"<available_skills>(.*?)</available_skills>", prompt, re.DOTALL)
     skills_block = m.group(1) if m else ""
     assert "bot-skill" in skills_block

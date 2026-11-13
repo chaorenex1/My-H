@@ -17,11 +17,12 @@ def _file(kind: str, label: str, path: Path, content: str) -> pc.ContextFile:
     return pc.ContextFile(kind=kind, label=label, path=path, content=content)
 
 
-def test_workstation_reports_the_os_and_architecture_rows():
+def test_workstation_reports_the_os_architecture_and_runtime_rows():
     rows = pc.workstation_environment()
-    assert rows[0].startswith("OS: ")
-    assert set(rows[0].split(": ", 1)[1].split()) >= {sys.platform}
-    assert all(row.startswith(("OS: ", "Arch: ")) for row in rows)
+    labels = [row.split(":", 1)[0] for row in rows]
+    assert labels[:2] == ["OS", "Arch"] or labels[:2] == ["OS"]
+    assert any(label == "User home directory" for label in labels)
+    assert any(label == "Current working directory" for label in labels)
 
 
 @pytest.mark.parametrize(
@@ -95,7 +96,9 @@ def test_render_project_context_renders_workstation_and_repo_rules():
     block = pc.render_project_context(provider="openrouter", model="deepseek-chat",
                                       context_files=[file], dir_context_files=["src/AGENTS.md"])
     assert block.startswith("<project-context>\n<workstation>\n- OS: ")
-    assert "- Model: openrouter/deepseek-chat" in block
+    assert "- Model: deepseek-chat" in block
+    assert "- Provider: openrouter" in block
+    assert "- Platform: " not in block
     assert "<repo-rules>\nMUST follow these context files for all tasks:" in block
     assert f'<file path="{file.label}">\nUse pytest.\n</file>' in block
     assert "Before changes in these directories, MUST read:\n- src/AGENTS.md" in block
@@ -182,23 +185,35 @@ def test_append_prompt_lands_after_the_critical_tail():
     assert block.rstrip().endswith("Extra rule.")
 
 
-def test_context_files_part_renders_the_tail_block(tmp_path, monkeypatch):
+def test_assembled_prompt_carries_the_project_context_tail(tmp_path, monkeypatch):
     from agent import system_prompt
+    from agent.prompts import renderer
 
     (tmp_path / "AGENTS.md").write_text("Use pytest.")
     agent = SimpleNamespace(skip_context_files=False, platform="cli", provider="openrouter",
-                            model="deepseek-chat")
+                            model="deepseek-chat", valid_tool_names=set(),
+                            _bot_mode_protocol=True, _session_title_hint="", _session_db=None,
+                            _memory_store=None, _memory_manager=None, _user_profile_enabled=True,
+                            _auto_load_skills_resolved=True, _auto_load_skills_result=("", [], []),
+                            _agent_definition_metadata=None, enabled_toolsets=(), is_subagent=False)
     monkeypatch.setattr(system_prompt, "resolve_context_cwd", lambda **_kwargs: tmp_path)
-    parts = system_prompt._context_files_part(agent, None)
-    assert len(parts) == 1
-    assert parts[0].startswith("<project-context>")
-    assert "- Model: openrouter/deepseek-chat" in parts[0]
-    assert "Use pytest." in parts[0]
+    monkeypatch.setattr(renderer, "render_project_context",
+                        lambda **kwargs: "<project-context>Use pytest.</project-context>")
+    stable = system_prompt.build_system_prompt_parts(agent)["stable"]
+    assert stable.rstrip().endswith("</project-context>")
+    assert stable.index("<project-context>") > stable.index("§ Critical")
 
 
-def test_context_files_part_is_empty_when_context_files_are_skipped(monkeypatch):
+def test_project_context_is_skipped_when_context_files_are_skipped(monkeypatch):
     from agent import system_prompt
+    from agent.prompts import renderer
 
-    agent = SimpleNamespace(skip_context_files=True, platform="cli", provider="p", model="m")
+    agent = SimpleNamespace(skip_context_files=True, platform="cli", provider="p", model="m",
+                            valid_tool_names=set(), _bot_mode_protocol=True,
+                            _session_title_hint="", _session_db=None, _memory_store=None,
+                            _memory_manager=None, _user_profile_enabled=True,
+                            _auto_load_skills_resolved=True, _auto_load_skills_result=("", [], []),
+                            _agent_definition_metadata=None, enabled_toolsets=(), is_subagent=False)
     monkeypatch.setattr(system_prompt, "resolve_context_cwd", lambda **_kwargs: Path("/nowhere"))
-    assert system_prompt._context_files_part(agent, None) == []
+    monkeypatch.setattr(renderer, "render_project_context", lambda **kwargs: "")
+    assert "<project-context>" not in system_prompt.build_system_prompt_parts(agent)["stable"]

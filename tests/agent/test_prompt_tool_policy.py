@@ -241,11 +241,12 @@ def test_workflow_handoff_carries_yield_and_irc():
     assert "`agent_message`" in out
 
 
-def test_delivery_and_critical_carry_yield_and_irc_for_subagents():
+def test_workflow_and_delivery_carry_yield_and_irc_for_subagents():
     delivery = renderer.render_delivery(subagent=True)
-    critical = renderer.render_critical(subagent=True)
+    workflow = renderer.render_workflow(
+        enable_tools=["agent", "agent_message"], subagent=True)
 
     assert "Yield the slice result" in delivery
     assert "`agent_message`" in delivery
-    assert "Changes complete → yield" in critical
-    assert "peer waiting on an answer" in critical
+    assert "Changes complete → yield" in workflow
+    assert "peer waiting on an answer" in workflow

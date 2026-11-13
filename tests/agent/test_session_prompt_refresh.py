@@ -114,15 +114,13 @@ def _refresh_prompts(monkeypatch, home: Path, *extra: str) -> None:
 
 
 def _assert_updated(system: str) -> None:
-    assert SOUL_V2 in system and SOUL_V1 not in system
     assert "Description revision two." in system and "Description revision one." not in system
     assert "incident-triage" in system
     assert "Project rules revision two." in system
 
 
 def _assert_stale(system: str) -> None:
-    assert SOUL_V1 in system and SOUL_V2 not in system
-    assert "Description revision one." in system
+    assert "Description revision one." in system and "Description revision two." not in system
     assert "incident-triage" not in system
     assert "Project rules revision one." in system
 
@@ -136,7 +134,7 @@ def test_without_the_verb_a_continuing_session_keeps_its_stored_prompt(profile):
     assert second == first  # main's contract: the stored bytes are replayed until /new
 
 
-def test_the_verb_makes_the_next_turn_adopt_soul_skills_and_project_files_once(profile, monkeypatch, capsys):
+def test_the_verb_makes_the_next_turn_adopt_skills_and_project_files_once(profile, monkeypatch, capsys):
     from run_agent import AIAgent
 
     srv, home, project = profile
@@ -234,7 +232,7 @@ def test_refresh_request_is_scoped_to_its_profile(profile, monkeypatch, tmp_path
     _assert_updated(system_a)
     monkeypatch.setenv("HERMES_HOME", str(home_b))
     _, system_b = _turn(srv, home_b, "chat-b", "next", history_b)
-    assert SOUL_V1 in system_b and "incident-triage" not in system_b
+    assert "Description revision one." in system_b and "incident-triage" not in system_b
 
 
 def test_no_request_means_no_rebuild_and_no_prompt_source_reads(profile, monkeypatch):

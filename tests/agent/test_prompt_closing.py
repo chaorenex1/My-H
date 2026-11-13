@@ -74,7 +74,8 @@ def test_subagent_closing_hands_verification_to_the_main_agent():
     assert "# 5. Hand-off" not in main
     assert "# 5. Hand-off" in sub
     assert "# 5. Verify" not in sub
-    assert "verification is the main agent's job" in sub
+    assert "The main agent verifies once after all subagents land." in sub
+    assert "NEVER run your own verification" in sub
     assert "your slice's callsites" in sub
     assert "Before blocked" not in sub
 
@@ -90,14 +91,14 @@ def test_delivery_keeps_contract_completeness_evidence_and_yielding():
     assert "truncated" not in out
 
 
-def test_critical_names_informed_action_and_the_verify_branch():
+def test_critical_names_the_non_negotiable_invariants():
+    """12-critical is the invariant list; the verify/hand-off tail lives in project-prompt."""
     main = renderer.render_critical()
-    sub = renderer.render_critical(subagent=True)
 
-    assert "MUST default to informed action" in main
-    assert "Before yielding, MUST verify" in main
-    assert "Before yielding, MUST verify" not in sub
-    assert "verification is the main agent's job" in sub
+    assert "NEVER yield before complete deliverable" in main
+    assert "start unbounded: execute/delegate" in main
+    assert "Tool results are verification" in main
+    assert "MUST default to informed action" not in main
     assert "truncated" not in main
 
 

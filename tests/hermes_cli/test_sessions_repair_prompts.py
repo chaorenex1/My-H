@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.prompt_builder import SKILLS_GUIDANCE
 from hermes_cli import sessions_cmd
 from hermes_cli.sessions_cmd import _cmd_repair_prompts
 from hermes_state import SessionDB
@@ -15,7 +14,7 @@ from hermes_state import SessionDB
 HEALTHY = (
     "You are Hermes.\n"
     "<available_skills>\n  dogfood: exploratory QA of web apps\n</available_skills>\n"
-    f"{SKILLS_GUIDANCE}\n"
+    "After a non-trivial workflow, record it with `skill_manage` for reuse.\n"
 )
 DEGRADED = "You are Hermes.\n(reduced maintenance build without the skills index)\n"
 

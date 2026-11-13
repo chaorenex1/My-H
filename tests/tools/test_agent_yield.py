@@ -170,13 +170,21 @@ def test_a_data_less_terminal_validates_the_assembled_sections():
     assert snapshot.data["findings"] == [{"title": "one"}]
 
 
+def _prompt_agent():
+    """A run agent; the role template renders for real, the base lives in system_prompt."""
+    return SimpleNamespace()
+
+
 def test_subagent_prompt_advertises_yield_when_the_run_has_the_tool():
     from agent.agent_run import _subagent_prompts
 
+    agent = _prompt_agent()
     system, _ = _subagent_prompts(
-        "You review.", "", "go", wrap_assignment=True, structured=True,
-        output_schema=SCHEMA)
+        agent, "You review.", "", "go", wrap_assignment=True,
+        structured=True, output_schema=SCHEMA)
 
+    assert system.startswith("§ Subagent Role\nYou review.")
+    assert agent._subagent_role.has_output_schema is True
     assert "No `yield` tool exists" not in system
     assert "Yield protocol" in system
     assert '"findings"' in system, "the output schema shape reaches the prompt"
@@ -186,7 +194,8 @@ def test_unstructured_subagent_prompt_keeps_the_legacy_handoff():
     from agent.agent_run import _subagent_prompts
 
     system, _ = _subagent_prompts(
-        "You review.", "", "go", wrap_assignment=True, structured=False)
+        _prompt_agent(), "You review.", "", "go", wrap_assignment=True,
+        structured=False)
 
     assert "No `yield` tool exists" in system
 
@@ -345,8 +354,9 @@ class _SectionsAgent:
 
 def test_execute_turn_assembles_sections_when_the_model_stops():
     state = _state(schema=SCHEMA)
+    agent = _SectionsAgent(state)
     peer = agent_run._execute_turn(
-        _SectionsAgent(state), "go", context="", conversation=None, system="",
+        agent, "go", context="", conversation=None, system="",
         schema=SCHEMA, task_id="task-1", agent_name="reviewer",
         agent_session_id="reviewer-1", model="fake", provider="fake",
         toolsets=(), all_tools=False, history_key="", account_task="",
@@ -360,8 +370,9 @@ def test_execute_turn_assembles_sections_when_the_model_stops():
 
 def test_execute_turn_uses_the_yielded_value_as_the_answer():
     state = _state()
+    agent = _RunAgent(state)
     peer = agent_run._execute_turn(
-        _RunAgent(state), "go", context="", conversation=None, system="",
+        agent, "go", context="", conversation=None, system="",
         schema=None, task_id="task-1", agent_name="reviewer",
         agent_session_id="reviewer-1", model="fake", provider="fake",
         toolsets=(), all_tools=False, history_key="", account_task="",
