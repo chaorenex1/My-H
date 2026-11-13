@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent.chat_completion_helpers import rewrite_prompt_model_identity
+from agent.chat_completion_helpers_identity import rewrite_prompt_model_identity
 from agent.conversation_loop import (
     _redecorate_prompt_cache_for_provider,
     _sync_failover_system_message,

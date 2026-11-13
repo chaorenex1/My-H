@@ -162,7 +162,7 @@ def begin_voice_turn_route(agent: Any, messages: list[dict[str, Any]], system_pr
             _warn_once(agent, target, reason)
             agent._voice_route_state = {"reasoning_config": state["reasoning_config"]}
             return agent._cached_system_prompt or system_prompt
-        from agent.chat_completion_helpers import rewrite_prompt_model_identity
+        from agent.chat_completion_helpers_identity import rewrite_prompt_model_identity
         rewrite_prompt_model_identity(agent, agent.model, agent.provider)
         agent._turn_route_task = TASK
         logger.info("Voice turn routed to %s (%s)", agent.model, agent.provider)
