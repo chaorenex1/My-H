@@ -1,0 +1,273 @@
+{
+  "description": "Run one named agent or a concurrent `tasks[]` batch, each with its own prompt, tools and on-disk history. The agent definition is <agent_name>.md (or <agent_name>) searched in the project, profile and installation .agents//agents/ directories, plugin agents/ directories and skills/<skill_name>/agents/; `agent_name` is required for a single run and may be the batch default. The definition's front matter may pin model, toolsets, enable_tools, max_iterations, reasoning_effort, worktree, output, spawns, blocking and the skip flags; a caller argument overrides it (blocking: true forces an inline run). `spawn` is a one-call shorthand: `spawn:@<agent_name>` on the first line, then the task body. By default the run is background and the answer arrives as a completion; background=false blocks and returns the answer. A background run that is not blocking/worktree stays resident after it settles (agent_sessions.keep_alive): it keeps its slot until the idle TTL parks it, a message wakes it, and a parked one revives on the next message. Every call is a new agent session with its own transcript at <parent bundle>/<topic>.jsonl under the profile's sessions/ tree (a run with no parent session gets its own bundle); the payload returns agent_session_id and subject, which agent_out reads back. Runs do not continue each other implicitly: pass continue_from with a prior agent_session_id to carry that conversation forward.",
+  "name": "agent",
+  "parameters": {
+    "properties": {
+      "agent_name": {
+        "description": "The agent's name (a file name, not a path); also its history folder.",
+        "type": "string"
+      },
+      "background": {
+        "description": "true (default) returns jobs and delivers answers later, dispatching a batch concurrently; false blocks and runs the call (or every task in a batch, in array order) on the calling thread.",
+        "type": "boolean"
+      },
+      "context": {
+        "description": "Shared batch context (`# Goal`, `# Contract` interfaces), prepended to every task prompt; NEVER repeat it per task.",
+        "type": "string"
+      },
+      "context_files": {
+        "description": "Files to supply as data (at most 20, 100KB each, 200KB total). A path is project-relative (or absolute inside the project/profile home), and `local://<path>` is an accepted spelling of the same reference.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "continue_from": {
+        "description": "A prior agent_session_id whose transcript seeds this run's history. The new run still gets its own id, subject and transcript.",
+        "type": "string"
+      },
+      "effort": {
+        "description": "Coarse reasoning effort; maps to low/medium/high.",
+        "enum": [
+          "lo",
+          "med",
+          "hi"
+        ],
+        "type": "string"
+      },
+      "enable_tools": {
+        "description": "Explicit tool-name allowlist. When non-empty it replaces tool_sets and the definition's toolsets; every name must be a registered tool (an unknown name fails closed). Host-only extra tools cannot be named.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "independent_completions": {
+        "description": "Batch background runs: true (default) delivers one completion per task; false buffers them into one combined completion.",
+        "type": "boolean"
+      },
+      "isolated": {
+        "description": "Alias for worktree (isolated git worktree per run).",
+        "type": "boolean"
+      },
+      "load_soul_identity": {
+        "description": "Load the operator soul/system identity (default false).",
+        "type": "boolean"
+      },
+      "max_iterations": {
+        "description": "Per-run tool-call budget; overrides the definition and host default.",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "model": {
+        "description": "Pin the route as 'provider:model', a bare model name, or '@role' (@default, @task, @advisor or an auxiliary.<task> slot such as @smol).",
+        "type": "string"
+      },
+      "name": {
+        "description": "Profile-unique short name (CamelCase letters/digits, at most 32) that agent_message and agent_out address this session by. Generated from the agent name plus four hex characters when omitted; a duplicate is refused.",
+        "type": "string"
+      },
+      "output_schema": {
+        "description": "JSON Schema the final answer must satisfy; overrides the definition's output contract for this call.",
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "project_dir": {
+        "description": "Working directory for the run; defaults to the project root.",
+        "type": "string"
+      },
+      "schema_mode": {
+        "description": "permissive (default) returns the raw answer after a failed validation; strict fails the run instead.",
+        "enum": [
+          "permissive",
+          "strict"
+        ],
+        "type": "string"
+      },
+      "skill_name": {
+        "description": "Optional skill folder whose skills/<skill_name>/agents/ is searched.",
+        "type": "string"
+      },
+      "skip_background_review": {
+        "description": "Skip the post-turn background review fork (default true).",
+        "type": "boolean"
+      },
+      "skip_context_files": {
+        "description": "Skip project context files such as AGENTS.md (default true).",
+        "type": "boolean"
+      },
+      "skip_memory": {
+        "description": "Skip host memory context (default true for a named peer).",
+        "type": "boolean"
+      },
+      "spawn": {
+        "description": "One-call shorthand: 'spawn:@<agent_name>' on the first line, then the task body. Mutually exclusive with agent_name, user_prompts, task_file and tasks; the named agent still passes the caller's spawns allow-list and depth limit.",
+        "type": "string"
+      },
+      "subject": {
+        "description": "One-line topic for this agent session; unique, and how agent_out finds it. Defaults to the first line of user_prompts.",
+        "type": "string"
+      },
+      "system_prompts": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array"
+          }
+        ],
+        "description": "System prompt used only when no agent definition file is found in the search path.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "task_file": {
+        "description": "Read the prompt from this file instead of user_prompts (absolute or project-relative, inside the project or profile home).",
+        "type": "string"
+      },
+      "tasks": {
+        "description": "Batch form: one object per agent. With background=false (or a blocking definition) tasks run one at a time in array order on the calling thread; background tasks are dispatched concurrently. Each item takes `agent` (defaults to agent_name), `user_prompts` (or `task`), and may override name, subject, model, tool_sets, enable_tools/tools, context_files, worktree/isolated, output_schema, continue_from, background.",
+        "items": {
+          "properties": {
+            "agent": {
+              "description": "Agent definition name for this task.",
+              "type": "string"
+            },
+            "background": {
+              "type": "boolean"
+            },
+            "context_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "continue_from": {
+              "type": "string"
+            },
+            "enable_tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "isolated": {
+              "description": "Alias for worktree.",
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            },
+            "name": {
+              "description": "Profile-unique short name.",
+              "type": "string"
+            },
+            "output_schema": {
+              "properties": {},
+              "required": [],
+              "type": "object"
+            },
+            "schema_mode": {
+              "enum": [
+                "permissive",
+                "strict"
+              ],
+              "type": "string"
+            },
+            "solution_space": {
+              "description": "How open-ended the problem is; appended to the prompt.",
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            },
+            "task": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array"
+                }
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "task_file": {
+              "type": "string"
+            },
+            "tool_sets": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "user_prompts": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array"
+                }
+              ],
+              "description": "The task prompt; `task` is accepted as an alias.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "worktree": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "tool_sets": {
+        "description": "Toolsets for this run, limited to the default-loaded built-in sets; omit for that default, or ['*'] for every host tool.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "tools": {
+        "description": "Alias for enable_tools; pass only one of the two.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "user_prompts": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array"
+          }
+        ],
+        "description": "The user message for this run (a list is joined with blank lines).",
+        "items": {
+          "type": "string"
+        }
+      },
+      "worktree": {
+        "description": "Run in an isolated git worktree off HEAD; the run's edits are committed and merged back automatically (apply=auto). A dirty parent workspace, a merge conflict or a failed merge keeps the branch and reports why. Off by default; degrades to the shared workspace outside git or on a non-local terminal backend, and the payload says which happened.",
+        "type": "boolean"
+      }
+    },
+    "required": [],
+    "type": "object"
+  }
+}

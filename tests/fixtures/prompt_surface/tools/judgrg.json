@@ -1,0 +1,16 @@
+{
+  "description": "Read-only search: judgment routes a request to ripgrep or ast-grep. Pass the user question, agent task, or code-analysis goal; the intent, search strategy, and tool are judged, not specified by the caller. Use search_files/grep when you already know the literal text or glob. Runs on the local filesystem, not a sandboxed task environment. Results may be partial — not evidence of absence.",
+  "name": "judgrg",
+  "parameters": {
+    "properties": {
+      "query": {
+        "description": "The user question, agent task, or code-analysis goal. Naming a symbol or a called function is enough; a full code pattern such as `foo($X)` is used verbatim for structural search.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  }
+}

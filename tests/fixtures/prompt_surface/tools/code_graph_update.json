@@ -1,0 +1,142 @@
+{
+  "description": "Write analysis-tool observations into the local code graph. `refresh_file` re-parses one file; `apply_evidence` materializes facts with source_tool/span/excerpt_hash and optimistic concurrency; `invalidate` retires stale evidence. The model cannot be the source of a fact: source_tool='model_observation' is rejected.",
+  "name": "code_graph_update",
+  "parameters": {
+    "properties": {
+      "action": {
+        "enum": [
+          "refresh_file",
+          "apply_evidence",
+          "invalidate"
+        ],
+        "type": "string"
+      },
+      "expected_content_hash": {
+        "type": "string"
+      },
+      "expected_revision_id": {
+        "type": "string"
+      },
+      "facts": {
+        "description": "Observed facts for apply_evidence.",
+        "items": {
+          "properties": {
+            "evidence": {
+              "properties": {
+                "excerpt_hash": {
+                  "type": "string"
+                },
+                "observed_at": {
+                  "type": "string"
+                },
+                "source_tool": {
+                  "type": "string"
+                },
+                "source_tool_version": {
+                  "type": "string"
+                },
+                "span": {
+                  "properties": {
+                    "end_column": {
+                      "type": "integer"
+                    },
+                    "end_line": {
+                      "type": "integer"
+                    },
+                    "start_column": {
+                      "type": "integer"
+                    },
+                    "start_line": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "source_tool",
+                "span",
+                "excerpt_hash"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "enum": [
+                "definition",
+                "reference",
+                "call",
+                "type",
+                "import",
+                "test",
+                "diagnostic"
+              ],
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "relation": {
+              "type": "string"
+            },
+            "resolution_status": {
+              "enum": [
+                "inferred",
+                "resolved"
+              ],
+              "type": "string"
+            },
+            "rule_id": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            },
+            "target_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "evidence"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "ids": {
+        "description": "Evidence or edge ids for invalidate.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "path": {
+        "description": "Repository-relative file path.",
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "root": {
+        "description": "Repository path (default: cwd).",
+        "type": "string"
+      },
+      "semantic": {
+        "description": "Use LSP during refresh_file.",
+        "type": "boolean"
+      },
+      "semgrep": {
+        "description": "Run Semgrep during refresh_file (off by default).",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  }
+}

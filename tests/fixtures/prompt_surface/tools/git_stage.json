@@ -1,0 +1,25 @@
+{
+  "description": "Stage the changes a description names, without committing. Every unstaged hunk and whole file is judged against the instruction; only the matching units are written to the index. The worktree is never modified and no commit is created. Use when the user asks to stage part of a dirty tree (e.g. 'stage the parser fix, not the formatting').",
+  "name": "git_stage",
+  "parameters": {
+    "additionalProperties": false,
+    "properties": {
+      "dry_run": {
+        "description": "Report what would be staged without touching the index.",
+        "type": "boolean"
+      },
+      "instruction": {
+        "description": "Natural-language description of the changes to stage. Naming a file, a kind of edit, or a feature is enough.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Restrict judgment to one file or a directory subtree (repo-relative). Omit to consider every unstaged change.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "instruction"
+    ],
+    "type": "object"
+  }
+}

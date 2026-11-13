@@ -1,0 +1,18 @@
+{
+  "description": "List rule files visible to this session (name, description, path scope, source). Rules are Markdown with YAML frontmatter; use rule_view for the full body.",
+  "name": "rules_list",
+  "parameters": {
+    "properties": {
+      "agent_name": {
+        "description": "Optional agent name used to filter rules whose `agents` gate excludes it.",
+        "type": "string"
+      },
+      "scope": {
+        "description": "Optional trust scope filter: project, profile, or installation.",
+        "type": "string"
+      }
+    },
+    "required": [],
+    "type": "object"
+  }
+}

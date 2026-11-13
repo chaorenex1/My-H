@@ -1,0 +1,16 @@
+{
+  "description": "Read one addressable rule's full Markdown body and parsed frontmatter by rule id or unique name. Addressable = rulebook (has a description), always-apply, or registered TTSR; disabled and non-rulebook rules are not readable here.",
+  "name": "rule_view",
+  "parameters": {
+    "properties": {
+      "rule_id": {
+        "description": "Rule id (for example 'python/coding-style') or its unique frontmatter name.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "rule_id"
+    ],
+    "type": "object"
+  }
+}
