@@ -22,6 +22,25 @@ LLM生成的候选词+Judgment决策的工具组合，执行工具调用
 
 1.lru缓存judgrg结果，缓存最近的10个结果，超过上限时淘汰最近搜索命中次数最少的3个结果
 
+## 装配接线状态（ADR-19）
+
+- 唯一装配入口：`agent/prompts/assembler.py::assemble_main()`。按代码顺序调用块入口，
+  空块丢弃，`"\n\n"` join 成一段正文；`agent/system_prompt.py` 只求值 `SessionFacts`、
+  调装配器、维护缓存/持久化。
+- 块顺序：`rfc2119` → `role`（01–03）→ `runtime`（04/06–08）→ `autoload_skills` →
+  `tool_policy`（09）→ `memories`（05）→ `closing`（10–12）→ `project_context`（尾块）。
+- manifest 只做模板注册与 `scope`（`system` / `request`）；`tier` / `gate` 是元数据，不驱动装配。
+- 已接线：00–12 全部章节、`autoload-skills.md`、`project-prompt.md`（含 `<workstation>` 的
+  运行时/模型/provider/platform 行）。
+- 未接线（只建文件、不登记 manifest）：`workspace.md`、`plugin-sections.md`、
+  `system-message.md`。`profile` 名在 `01-identity.md` 顶部；时间/session 行已从系统提示删除。
+- 请求级模板（`irc_incoming`、`eager_task`、`eager_todo`、`subagent_*` reminder）保持
+  `scope: request`，只由 `renderer.render_request(key, context)` 渲染（拒绝 `system` 键），
+  不进入系统提示。`subagent_system_prompt` 是例外：它是子代理角色块，经同一入口渲染后由
+  `assemble_subagent` 追加在共享 base 之后。
+- 子代理入口：`assemble_subagent(ctx, role)` = `assemble_main(ctx)`（`subagent=True`）+
+  `"\n\n"` + `render_subagent_prompt(role)`；角色块恒在末尾，`role.body` 为空即构建失败。
+
 ## 默认加载内置工具集
 
 1. browser: 浏览器自动化
@@ -355,12 +374,12 @@ Before changes in these directories, MUST read: …
 没有 `<repo-rules>`，因为**任务子代理丢弃所有 `AGENTS.md`**（文件名过滤，含用户级）；`RULES.md` 与 `@` 导入进来的内容不受影响。`subagent` 分支同时把验证职责换成了移交。
 
 
-#### 16. 子代理：`§ Role` 块与角色文件
+#### 16. 子代理：`§ Subagent Role` 块与角色文件
 
-主会话的 block 0 与尾块之后，子代理再多一块。模板是 `src/prompts/system/subagent-system-prompt.md`，开头就是我们在转录里看到的形状：
+主会话的 block 0 与尾块之后，子代理再多一块（`assemble_subagent` = `assemble_main` + 角色块）。模板是 `src/prompts/system/subagent-system-prompt.md`，开头就是我们在转录里看到的形状：
 
 ```handlebars
-§ Role
+§ Subagent Role
 {{agent}}
 
 {{#if context}}
@@ -389,10 +408,10 @@ No TODO tracking, no progress updates. Execute; your final message is your resul
 {{/if}}
 ```
 
-`{{agent}}` 就是角色文件去掉 frontmatter 后的正文。所以一块 `§ Role` 的构成是：
+`{{agent}}` 就是角色文件去掉 frontmatter 后的正文。所以一块 `§ Subagent Role` 的构成是：
 
 ```
-"§ Role\n" + agent.systemPrompt + "\n§ Context\n" + task.context + … + "§ Coop\n…" + "§ Completion\n…"
+"§ Subagent Role\n" + agent.systemPrompt + "\n§ Context\n" + task.context + … + "§ Coop\n…" + "§ Completion\n…"
 ```
 
 ---

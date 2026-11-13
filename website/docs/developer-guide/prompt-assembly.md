@@ -20,150 +20,162 @@ This is one of the most important design choices in the project because it affec
 
 Primary files:
 
-- `run_agent.py`
-- `agent/prompt_builder.py`
+- `agent/prompts/assembler.py` (block order + one join)
+- `agent/prompts/renderer.py` (block entry points + data)
+- `agent/prompts/system/*.md` (prompt text)
+- `agent/system_prompt.py` (facts, cache, persistence)
 - `tools/memory_tool.py`
 
 ## Cached system prompt layers
 
-The cached system prompt is assembled as three ordered tiers (see `agent/system_prompt.py`):
+`agent/prompts/assembler.py` is the single assembly entry. `assemble_main()` calls the renderer's
+block entry points **in code order**, drops empty bodies and joins them once with `\n\n`:
 
-1. **stable** — identity (`SOUL.md` or fallback), tool/model guidance, coding operating brief
-2. **context** — caller-supplied `system_message`, project context files (`.hermes.md` / `AGENTS.md` / `CLAUDE.md` / `.cursorrules`), then the worktree-dependent git workspace snapshot, operator instructions and platform hints
-3. **volatile** — skills index, built-in memory snapshot (`MEMORY.md`), user profile snapshot (`USER.md`), external memory-provider block, timestamp/session/model/provider line, then runtime environment hints (host / home / **current working directory**)
+1. `render_rfc2119()` — the RFC 2119 keyword contract (00)
+2. `render_role()` — 01 identity, 02 safety, 03 communication, including the platform hint
+3. `render_runtime()` — 06 skills, 07 rules, 04 internal URLs, 08 tool inventory
+4. `render_autoload_skills()` — pinned `skills.auto_load` bodies (zero bytes when unset)
+5. `render_tool_policy()` — 09 (zero bytes without tools)
+6. `render_memories()` — 05 (zero bytes without a memory store)
+7. `render_closing()` — 10 workflow (coding repos only), 11 delivery, 12 critical
+8. `render_project_context()` — the last block: `<project-context>` workstation, context files,
+   workspace tree/roots, operator append
 
-The final system prompt is then joined as: `stable` → `context` → `volatile`.
+There are no tiers, no gate table and no manifest-ordered second pass: the manifest is the template
+registry (`scope: system|request` plus budget/truncate metadata). A block decides its own contents
+and its own section-level gate (`coding_repo`, tool face, `memory`, `subagent`), and a false gate
+means zero bytes — never a placeholder or blank line.
 
-This ordering matters for precedence discussions:
-- skills are part of the **stable** tier
-- memory/profile snapshots are part of the **volatile** tier
-- both are still in the cached system prompt (they are not injected as ad-hoc mid-turn overlays)
+`assemble_subagent(ctx, role)` is the child entry: it returns `assemble_main(ctx)` (with
+`subagent=True`, so 10/11 use the hand-off wording) followed by `\n\n` and the
+`render_subagent_prompt(role)` block for `system/subagent-system-prompt.md`. The base is
+byte-identical for every child sharing one context and the role block is always last; an empty
+role body is a build error. `agent_run._subagent_prompts()` renders that block as the run's
+`system_message` and registers `_subagent_role`; `build_system_prompt_parts` then puts the shared
+base in `stable` and the role block in `context`, so the joined prompt is `assemble_subagent`
+bytes and `_cached_system_prompt_static` stays the shared base. A run with no definition body
+keeps the bare-prompt contract: no role block is built and `context` is appended to the user turn.
 
-Inside the context tier the shared project files come **before** anything naming the current worktree.
-Sessions of one project running in different git worktrees then share a prompt prefix covering the whole
-context block, instead of stopping at the first cwd-dependent line — that prefix is what a longest-prefix
-provider cache reuses. A session with no workspace snapshot keeps its trailing guidance in the stable
-tier; the runtime environment block always ends the volatile tier.
+Request-level templates (`scope: request` — `irc_incoming`, `eager_task`, `eager_todo`, the
+`subagent_*` reminders) render only through `renderer.render_request(key, context)`. It rejects a
+`system` key and the assembler's block sequence never calls it, so those bytes ride a user/tool
+row. `subagent_system_prompt` is the one request-scope template that is part of the system
+prompt: `agent_run` renders it through the same entry, and `system_prompt` places it in the
+`context` tier after the shared base.
 
-Consequence for stored prompts: `_stored_prompt_matches_runtime()` (`agent/conversation_loop.py`) reads
-the first host-info paragraph after the rendered `# Hermes runtime environment` boundary, with a
-closing marker at the absolute end distinguishing this layout from legacy prose quoting the heading.
-The runtime boundary follows all project, operator, memory and plugin text, so examples in those
-blocks do not masquerade as the runtime cwd. Model/provider are read before the runtime boundary,
-excluding embedder descriptions. `Platform:` is deliberately not an identity field: a surface switch
-(desktop ↔ TUI) keeps the stored bytes and delivers the current surface's guidance as a one-shot note on
-the per-turn user-message channel (`agent/surface_switch.py`), so the cached prefix survives (#104414). The
-`<available_skills>` index is kept the same way: every turn compares it with the index the session would
-build now (`agent/skills_index_delta.py`, called from `build_turn_context` so long-lived CLI/TUI/Desktop
-agents are covered, not only prompt restores), and a difference (new index rows, removed names) rides
-the same one-shot note channel, sent only when the difference changes. The in-process index cache is
-keyed on the skill files' signatures, so a change written by another process is seen too. The index
-itself converges at the next rebuild boundary (compaction). Legacy prompts retain their original
-host-before-context anchor, so prompts persisted before the reorder still validate.
+`system_prompt.build_system_prompt_parts()` keeps its historical return shape for the cache/restore
+contract: `stable` is the assembled body, `context` is the caller's `system_message`, and `volatile`
+is empty. `_cached_system_prompt_static` is therefore still a literal prefix of the full prompt.
 
-When `skip_context_files` is set (e.g., subagent delegation), SOUL.md is not loaded and the hardcoded `DEFAULT_AGENT_IDENTITY` is used instead.
+Two carriers deliberately sit outside the assembler (ADR-19 D5-B): the caller's `system_message`
+(context tier) and plugin prompt sections (restored from persisted bytes; `plugin-sections.md` is a
+placeholder asset and is not registered). A Bot Chat capability epoch is appended by the facade as an
+unwired stamp so `hermes tools enable/disable` still triggers one rebuild per capability change.
+
+Timestamp/session lines no longer live in the system prompt. The runtime host lines
+(host / home / **current working directory** / scratch), `Model:`, `Provider:` and `Platform:` are
+inside the `<workstation>` block of the final `<project-context>` block.
+
+Consequence for stored prompts: `_stored_prompt_matches_runtime()` reads `Model:` / `Provider:` /
+`Current working directory:` from `<workstation>` (`agent/surface_switch.py`), falling back to the
+legacy `# Hermes runtime environment` / trailer layout so prompts persisted before this cutover still
+validate. `Platform:` is not an identity field: a surface switch keeps the stored bytes and delivers
+the current surface's guidance as a one-shot note (`agent/surface_switch.py`). `rewrite_prompt_model_identity()`
+rewrites `Model:` / `Provider:` only inside `<workstation>`, so decoys in memory or context prose are
+never touched. The `<available_skills>` index is compared every turn by `agent/skills_index_delta.py`
+and its difference rides the same note channel.
+
+When `skip_context_files` is set (e.g., subagent delegation), the `<project-context>` block is
+omitted; identity comes from the `01-identity.md` template, not from `SOUL.md`.
 
 ### Concrete example: assembled system prompt
 
-Here is a simplified view of what the final system prompt looks like when all layers are present (comments show the source of each section):
+A simplified view of the assembled body (comments show the source template):
 
 ```
-# Layer 1: Agent Identity (from ~/.hermes/SOUL.md)
-You are Hermes, an AI assistant created by Nous Research.
-You are an expert software engineer and researcher.
-You value correctness, clarity, and efficiency.
+# 00 — RFC 2119 contract
+MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. ...
 ...
+§ Role
+Active Hermes profile: default.
 
-# Layer 2: Tool-aware behavior guidance
-Task-learned procedures, pitfalls, and task-specific preferences belong
-in skills. Memory is the narrow exception for facts that apply to EVERY
-session regardless of task. Skill-writing instructions appear here only
-when skill_manage is available; its absence does not widen memory's scope.
+You are My-H's trusted coding assistant.
+# Engineering
 ...
-When the user references something from a past conversation or you
-suspect relevant cross-session context exists, use session_search
-to recall it before asking them to repeat themselves.
-
-# Tool-use enforcement (for GPT/Codex models only)
-You MUST use your tools to take action — do not describe what you
-would do or plan to do without actually doing it.
+# Safety
 ...
-
-# Layer 3: Honcho static block (when active)
-[Honcho personality/context data]
-
-# Layer 4: Optional system message (from config or API)
-[User-configured system message override]
-
-# Layer 5: Frozen MEMORY snapshot
-## Persistent Memory
-- User prefers Python 3.12, uses pyproject.toml
-- Default editor is nvim
-- Working on project "atlas" in ~/code/atlas
-- Timezone: US/Pacific
-
-# Layer 6: Frozen USER profile snapshot
-## User Profile
-- Name: Alice
-- GitHub: alice-dev
-
-# Layer 7: Skills index
-## Skills (mandatory)
-Before replying, scan the skills below. If one clearly matches
-your task, load it with skill_view(name) and follow its instructions.
+# Communication
 ...
+# Platform
+You are in a plain terminal (CLI). ...
+
+§ Runtime
+# Skills
 <available_skills>
-  software-development:
-    - code-review: Structured code review workflow
-    - test-driven-development: TDD methodology
-  research:
-    - arxiv: Search and summarize arXiv papers
+- code-review: Structured code review workflow
+- test-driven-development: TDD methodology
 </available_skills>
 
-# Layer 8: Context files (from project directory)
+# Internal URLs
+...
+# Tool Inventory
+...
+
+[pinned skills.auto_load bodies, when configured]
+
+§ Tool Policy
+# General
+...
+
+§ Memories
+<memories>
+<memories-guidance>...</memories-guidance>
+<memories-global>
+<memories-user>...</memories-user>
+<memories-self>...</memories-self>
+<memories-work>...</memories-work>
+</memories-global>
+</memories>
+
+§ Workflow            (coding repos only)
+§ Delivery
+§ Critical
+
 <project-context>
 <workstation>
-- OS: linux 6.8.0-45-generic
+- OS: linux 6.8
 - Arch: x64
-- Model: openrouter/anthropic/claude-sonnet-4.5
+- Host: Linux (6.8)
+- User home directory: /home/alice
+- Current working directory: /home/alice/code/atlas
+- Scratch directory: ~/.hermes/cache/scratch (TMPDIR points here; ...)
+- Model: anthropic/claude-sonnet-4.5
+- Provider: openrouter
+- Platform: cli
 </workstation>
 
 <repo-rules>
 MUST follow these context files for all tasks:
-<file path="AGENTS.md">
-This is the atlas project. Use pytest for testing. The main
-entry point is src/atlas/main.py. Always run `make lint` before
-committing.
-</file>
+<file path="AGENTS.md">...</file>
 </repo-rules>
-
-Context files above auto-loaded. NEVER `rg` for `AGENTS.md`, `CLAUDE.md`,
-`.cursorrules`, or similar agent/context files: relevant files already in
-context; others noise.
+...
 </project-context>
 
 <critical>
-- Each response MUST advance the task; completion only stopping condition.
-- MUST default to informed action; do not ask for confirmation when tools or repo context can answer.
-- Before yielding, MUST verify significant behavioral changes: run the specific test, command, or scenario covering the change.
+- Each response MUST advance the task; ...
 </critical>
-
-# Layer 9: Timestamp + session
-Current time: 2026-03-30T14:30:00-07:00
-Session: abc123
-
-# Layer 10: Platform hint
-You are a CLI AI Agent. Try not to use markdown but simple text
-renderable inside a terminal.
 ```
 
 ## Customizing platform hints
 
-The platform hint (Layer 10 above) is the per-surface guidance Hermes
+The platform hint (inside the `§ Role` block) is the per-surface guidance Hermes
 injects for Telegram, WhatsApp, Slack, CLI, and other platforms — for
 example "you are on a terminal, avoid Markdown." The built-in defaults
-live in `PLATFORM_HINTS` (`agent/system_prompt.py`); plugin-provided
-platforms supply theirs through the platform registry.
+live in `agent/prompts/system/platforms/<platform>.md` (loaded by
+`agent/prompts/platforms.py::load_platform_hints`); plugin-provided
+platforms supply theirs through the platform registry. The hint is resolved inside
+`renderer.render_role()`, which owns the overlay chain (config override, desktop TUI clarifier,
+cron delivery hint).
 
 An administrator can append to or replace a single platform's hint from
 `config.yaml` via the top-level `platform_hints` key, without touching
@@ -202,38 +214,16 @@ byte-stable hint for a fixed config, so it lives in the **stable** tier
 alongside the built-in hint and does not break prompt caching — it is
 not a live mid-session mutation of a frozen prompt.
 
-## How SOUL.md appears in the prompt
+## Identity: the 01 template, not SOUL.md
 
-`SOUL.md` lives at `~/.hermes/SOUL.md` and serves as the agent's identity — the very first section of the system prompt. The loading logic in `prompt_builder.py` works as follows:
+`agent/prompts/system/01-identity.md` is the identity block. It renders the profile name
+(`Active Hermes profile: <name>.`), the role description and the engineering section, with
+`role` / `role_desc` / `role_section` as optional overrides from an agent definition.
 
-```python
-# From agent/prompt_builder.py (simplified)
-def load_soul_md() -> Optional[str]:
-    soul_path = get_hermes_home() / "SOUL.md"
-    if not soul_path.exists():
-        return None
-    content = soul_path.read_text(encoding="utf-8").strip()
-    content = _scan_context_content(content, "SOUL.md", user_authored=True)  # Security scan: warn + load, never block
-    content = _truncate_content(content, "SOUL.md")       # Cap scales with model context window (20k floor); config override wins
-    return content
-```
-
-When `load_soul_md()` returns content, it replaces the hardcoded `DEFAULT_AGENT_IDENTITY`. SOUL.md is identity-owned: the `<project-context>` tail block only injects project files, so the two paths can never repeat it.
-
-If `SOUL.md` doesn't exist, the system falls back to:
-
-```
-You are Hermes Agent, built by Nous Research. Be direct: match the length
-of your reply to the weight of the ask — a one-line question gets a
-one-line answer, and finished work gets a short report of what changed,
-what's verified, and what's left, never a replay of the process. No
-filler ("Great question," "I'd be happy to"), no restating the request
-back, no re-summarizing what you already said, no narrating tool calls
-the user can see. Plain claims over adjectives; when unsure, say so
-plainly. Agree because it's right, not because the user said it. Depth
-is earned — give it when the user asks for detail, teaches, or the
-stakes demand it, not by default.
-```
+`SOUL.md` is no longer injected into the system prompt (ADR-19 D5-A): the old
+`DEFAULT_AGENT_IDENTITY` fallback and the SOUL loader's prompt slot were deleted. `load_soul_md()`
+still exists for callers that read the file, but prompt assembly does not consume it. Configuring an
+agent persona goes through the agent definition's `role` fields.
 
 ## How context files are injected
 
@@ -300,33 +290,45 @@ This separation keeps the stable prefix stable for caching.
 
 ## Memory snapshots
 
-Local memory and user profile data are captured in the system prompt's **volatile tier**. Mid-session writes update disk state but do not mutate the already-built cached system prompt until a rebuild path runs (new session, or explicit invalidation/rebuild flow such as compression-triggered rebuild).
+Local memory and user profile data are the `§ Memories` block (`05-memories.md`), rendered by
+`renderer.render_memories()` from `<home>/memories/USER.md`, the per-agent `AI_SELF.md` and the
+agent's `MEMORY.md` (the main agent falls back to `<home>/memories/MEMORY.md`, where the built-in
+store writes it). The block is part of the assembled body and is rebuilt only through
+`invalidate_system_prompt()` (new session or compression); mid-session writes update disk state but
+do not mutate the already-built cached prompt. `memory_enabled` gates the whole block and
+`user_profile_enabled` hides only `<memories-user>`.
 
 ## Context files
 
-`agent/prompt_builder.py` scans and sanitizes project context files using a **priority system** — only one type is loaded (first match wins):
+`agent/prompt_builder.py` (as a data helper) scans and sanitizes project context files using a **priority system** — only one type is loaded (first match wins):
 
 1. `.hermes.md` / `HERMES.md` (walks to git root)
 2. `AGENTS.md` (CWD at startup; subdirectories discovered progressively during the session via `agent/subdirectory_hints.py`)
 3. `CLAUDE.md` (CWD only)
 4. `.cursorrules` / `.cursor/rules/*.mdc` (CWD only)
 
-`SOUL.md` is loaded separately via `load_soul_md()` for the identity slot. When it loads successfully, `build_context_files_prompt(skip_soul=True)` prevents it from appearing twice.
+The selected files are rendered into `<repo-rules>` inside `<project-context>` by
+`renderer.render_project_context()`, which is the assembler's final block. `SOUL.md` is not part of
+this path (and is not injected at all, see above).
 
 Long files are truncated before injection.
 
 ## Skills index
 
-The skills system contributes a compact skills index to the prompt when skills tooling is available.
+The skills system contributes `<available_skills>` inside `§ Runtime` (`06-skills.md`) when skills
+tooling is available. Rows come from the session's own `<home>/skills` tree through
+`agent/prompts/skills.py::skill_rows()`, which applies the offer-time gates (disabled names,
+platform/environment/app requirements, `requires_*`/`fallback_for_*` conditions); an empty tree falls
+back to the bundled catalog.
 
 ## Supported prompt customization surfaces
 
-Most users should treat `agent/prompt_builder.py` as implementation code, not a configuration surface. The supported customization path is to change the prompt inputs Hermes already loads, rather than editing Python templates in place.
+Most users should treat `agent/prompts/` as implementation code, not a configuration surface. The supported customization path is to change the prompt inputs Hermes already loads, rather than editing Python templates in place.
 
 ### Use these surfaces first
 
-- `~/.hermes/SOUL.md` — replace the built-in default identity block with your own agent persona and standing behavior.
-- `~/.hermes/MEMORY.md` and `~/.hermes/USER.md` — provide durable cross-session facts and user profile data that should be snapshotted into new sessions.
+- An agent definition's `role` / `role_desc` / `role_section` front matter — override the identity template's defaults (`01-identity.md`). `~/.hermes/SOUL.md` is no longer injected into the system prompt.
+- `~/.hermes/memories/MEMORY.md` and `~/.hermes/memories/USER.md` — provide durable cross-session facts and user profile data that should be snapshotted into new sessions.
 - Project context files such as `.hermes.md`, `HERMES.md`, `AGENTS.md`, `CLAUDE.md`, or `.cursorrules` — inject repo-specific working rules.
 - Skills — package reusable workflows and references without editing core prompt code.
 - Optional system prompt config / API overrides — add deployment-specific instruction text without forking Hermes.
@@ -334,11 +336,11 @@ Most users should treat `agent/prompt_builder.py` as implementation code, not a 
 
 ### When to edit code instead
 
-Edit `agent/prompt_builder.py` only if you are intentionally maintaining a fork or contributing upstream behavior changes. That file assembles the prompt plumbing, cache boundaries, and injection order for every session. Direct edits there are global product changes, not per-user prompt customization.
+Edit `agent/prompts/assembler.py` / `agent/prompts/renderer.py` only if you are intentionally maintaining a fork or contributing upstream behavior changes. Those files own block order and block contents for every session. Direct edits there are global product changes, not per-user prompt customization.
 
 In other words:
 
-- if you want a different assistant identity, edit `SOUL.md`
+- if you want a different assistant identity, set the agent definition's `role` fields
 - if you want different repo rules, edit project context files
 - if you want reusable operating procedures, add or modify skills
 - if you want to change how Hermes assembles prompts for everyone, change Python and treat it as a code contribution
@@ -358,7 +360,7 @@ Regenerate after any change that moves the surface:
 scripts/run-in-hermes-env python scripts/ci/prompt_surface.py render
 ```
 
-User-side customization (`SOUL.md`, context files, skills you install, `platform_hints`, `agent.*` guidance toggles) never touches the snapshot. The render uses stock defaults and only bundled skills.
+User-side customization (agent `role` fields, context files, skills you install, `platform_hints`, `agent.*` guidance toggles) never touches the snapshot. The render uses stock defaults and only bundled skills.
 
 ## Why prompt assembly is split this way
 

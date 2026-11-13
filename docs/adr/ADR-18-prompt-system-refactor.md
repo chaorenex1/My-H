@@ -1,7 +1,10 @@
 # ADR-18：提示词系统章节化与能力判定搜索（omp prompt-system 对齐）
 
 **状态**：提议（2026-11-08；2026-11-10 修订：渲染引擎定为 Jinja2，新增 D13；2026-11-11：
-`project_context` 章节落地——context tier 的内容包装，取代 `# Project Context` 旧头，仍不是字面缓存断点）。分阶段：
+`project_context` 章节落地——context tier 的内容包装，取代 `# Project Context` 旧头，仍不是字面缓存断点；
+2026-11-12：**装配器位置与输入边界由 `ADR-19-prompt-assembler.md` 修订**——D1 的"装配入口实现"从
+`agent/system_prompt.py` 移到 `agent/prompts/assembler.py`，装配器只装配 `system/` 模板、不装配旧常量；
+D2 中 `project_context` 改归 `volatile`（主代理尾块），其余 D2/D3/D13 与三档缓存语义不变）。分阶段：
 **P0** 章节注册表与渲染引擎（零行为）；**P1** 常量迁移与预算；**P2** 新章节；
 **P3** 统一 LRU 与判定搜索；**P4** 默认范围与工具清单；**P5** 清理与文档。
 
