@@ -964,23 +964,18 @@ def _root_key(path: str) -> str:
 
 def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     """Return False when the persisted runtime-identity lines are stale."""
-    # Model/provider identity, then cwd drift.  A cwd change is a real content change (context
-    # files, the workspace snapshot and the coding posture are all resolved from it), so it
-    # still rebuilds; the runtime surface does not (agent/surface_switch.py).
-    # The builder omits an empty trailer line, so stored-but-now-empty is a route change too;
-    # the rebuilt prompt then carries no line and matches from the next turn on.  Stored-empty
-    # (pre-trailer prompts) keeps reusing.
+    # Model/provider identity, then cwd drift, all anchored in the persisted <workstation>
+    # block (agent/surface_switch.py). A cwd change is a real content change (context files
+    # and the coding posture are resolved from it), so it still rebuilds; the runtime surface
+    # does not (agent/surface_switch.py::stage_surface_switch_note).
+    # The builder omits an empty line, so stored-but-now-empty is a route change too; the
+    # rebuilt prompt then carries no line and matches from the next turn on. Stored-empty
+    # (legacy prompts) keeps reusing.
     for label, attr in (("Model", "model"), ("Provider", "provider")):
         stored = identity_line_value(prompt, label)
         current = str(getattr(agent, attr, "") or "").strip()
         if stored and stored != current:
             return False
-    # A prompt stamped for another session (a /branch child copies its parent's bytes) must not
-    # tell the model a foreign Session ID.  Checked only when the trailer is on: with it off, a
-    # "Session ID:" line in project text would read as a mismatch and rebuild every turn.
-    stored_sid = identity_line_value(prompt, "Session ID")
-    if stored_sid and getattr(agent, "pass_session_id", False) and stored_sid != agent.session_id:
-        return False
     # Compare against resolve_agent_cwd() — the SAME resolver used to build the
     # prompt — so TERMINAL_CWD sessions are not falsely rejected.
     stored_cwd = runtime_host_value(prompt, "Current working directory")

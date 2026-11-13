@@ -1,7 +1,11 @@
 <project-context>
 <workstation>
 {% for row in environment %}- {{ row }}
+{% endfor %}{% for note in environment_notes %}
+{{ note }}
 {% endfor %}{% if model %}- Model: {{ model }}
+{% endif %}{% if provider %}- Provider: {{ provider }}
+{% endif %}{% if platform %}- Platform: {{ platform }}
 {% endif %}</workstation>
 {% if context_files %}
 <repo-rules>

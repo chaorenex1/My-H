@@ -1,4 +1,4 @@
-§ Role
+§ Subagent Role
 {{ agent }}
 
 {% if context %}§ Context

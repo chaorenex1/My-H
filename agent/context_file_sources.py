@@ -110,7 +110,7 @@ def list_context_file_sources(
 
 
 def context_file_sources_for_agent(agent: Any) -> list[dict[str, Any]]:
-    """The manifest for a live agent, resolved exactly like ``agent.system_prompt._context_files_part``
+    """The manifest for a live agent, resolved exactly like ``agent.system_prompt._render_context``
     (session cwd, install-tree policy per platform, the agent's own profile home)."""
     if getattr(agent, "skip_context_files", False):
         return []

@@ -1189,9 +1189,13 @@ def _repair_prompts_lacks_skill_safety(row) -> bool:
     # skills are installed, but the guidance is emitted whenever skill_manage is. A prompt stored before the
     # Skill Safety Rule moved to compaction carries that heading, under whichever opening line it was built with.
     from agent.context_compressor_tail import SKILL_SAFETY_HEADING
-    from agent.prompt_builder import SKILLS_GUIDANCE
+    # The skills block's skill_manage line under either corpus (pre-ADR-19 constant, post-ADR-19 template).
+    markers = (
+        "When you work out a non-trivial workflow, record it with skill_manage for future reuse.",
+        "After a non-trivial workflow, record it with `skill_manage` for reuse.",
+    )
     prompt = (row.get("system_prompt") or "").strip()
-    return bool(prompt and SKILLS_GUIDANCE not in prompt and SKILL_SAFETY_HEADING not in prompt)
+    return bool(prompt and SKILL_SAFETY_HEADING not in prompt and not any(m in prompt for m in markers))
 
 
 def _cmd_repair_prompts(db, args):

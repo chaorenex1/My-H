@@ -13,6 +13,7 @@ move the closing contract into the middle of the prompt.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -45,13 +46,17 @@ class ContextFile:
     content: str
 
 
+_RUNTIME_LABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9 $./_-]*: ")
+
+
 def workstation_environment() -> list[str]:
-    """``OS``/``Arch`` rows for ``<workstation>``: the runtime host, not a sandbox backend."""
+    """``OS``/``Arch`` rows plus the runtime host lines for ``<workstation>``."""
     from hermes_platform.host import facts as host_facts
 
     arch = _MACHINE_ARCH.get(host_facts.native_arch(), host_facts.native_arch())
     os_name = f"{host_facts.os_family()} {host_facts.os_release()}".strip()
-    return [f"OS: {os_name}"] + ([f"Arch: {arch}"] if arch else [])
+    rows = [f"OS: {os_name}"] + ([f"Arch: {arch}"] if arch else [])
+    return rows
 
 
 def model_label(provider: str = "", model: str = "") -> str:
@@ -183,7 +188,7 @@ def render_project_context(
     model: str = "",
     cwd: str | Path | None = None,
     context_length: int | None = None,
-    allow_install_tree_fallback: bool = False,
+    platform: str = "",
     context_files: Sequence[ContextFile] | None = None,
     dir_context_files: Sequence[str] = (),
     include_workspace_tree: bool = False,
@@ -193,14 +198,21 @@ def render_project_context(
     active_repo_context: str = "",
     subagent: bool = False,
     append_prompt: str = "",
+    environment_probe: bool = True,
+    skip_context_files: bool = False,
 ) -> str:
     """Render ``project-prompt.md``: workstation, ``<repo-rules>``, tail blocks and `<critical>`.
 
     ``context_files=None`` discovers from *cwd* through the same walk as the legacy
     ``build_context_files_prompt``, with the same install-tree and safe-worker guards;
-    explicit files skip discovery (advisor/renderer callers). ``subagent`` selects the
-    yield rule in ``<critical>``; ``append_prompt`` is the caller's literal tail text.
+    explicit files skip discovery (advisor/renderer callers). ``platform`` decides whether
+    the launch dir may fall back to the install tree (``cli``/``tui`` only); ``subagent``
+    selects the yield rule in ``<critical>``; ``append_prompt`` is the caller's literal
+    tail text; ``skip_context_files`` drops the whole block for sessions told to ignore
+    project instructions.
     """
+    if skip_context_files:
+        return ""
     cwd_path = Path(cwd if cwd is not None else os.getcwd()).resolve()
     if context_files is None:
         from agent import prompt_builder as pb
@@ -208,7 +220,7 @@ def render_project_context(
 
         raw_cwd = str(cwd) if cwd is not None else None
         if safe_worker_enabled() or pb._project_context_suppressed(
-            raw_cwd, cwd_path, allow_install_tree_fallback
+            raw_cwd, cwd_path, platform in ("cli", "tui")
         ):
             files: list[ContextFile] = []
         else:
@@ -217,11 +229,24 @@ def render_project_context(
         files = list(context_files)
     rows = [format_context_file(file, context_length=context_length) for file in files]
     rows = _cap_merged_rows(rows, files, cwd_path=cwd_path, context_length=context_length)
+    environment_notes = runtime_environment_rows()[1]
+    if environment_probe:
+        try:
+            from tools.env_probe import get_environment_probe_line
+
+            probe = get_environment_probe_line()
+        except Exception:  # health: allow BLE001 -- the probe is optional; a failure must not block the prompt
+            probe = ""
+        if probe:
+            environment_notes.append(probe)
     return render_section(
         "project_context",
         {
             "environment": workstation_environment(),
-            "model": model_label(provider, model),
+            "environment_notes": environment_notes,
+            "model": str(model or ""),
+            "provider": str(provider or ""),
+            "platform": str(platform or ""),
             "context_files": rows,
             "dir_context_files": [str(path) for path in dir_context_files],
             "include_workspace_tree": bool(include_workspace_tree),
@@ -242,6 +267,7 @@ __all__ = [
     "format_context_file",
     "model_label",
     "render_project_context",
+    "runtime_environment_rows",
     "select_context_files",
     "split_comparable_blocks",
     "workstation_environment",

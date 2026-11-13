@@ -1,10 +1,11 @@
 """Default SOUL.md template seeded into HERMES_HOME on first run."""
 
-# Kept identical to agent/prompt_builder.py's DEFAULT_AGENT_IDENTITY: _ensure_default_soul_md()
+# Seeds the text users get on first run; prompt assembly no longer injects SOUL.md or a
+# hardcoded identity fallback (ADR-19 D5-A). _ensure_default_soul_md()
 # seeds this into SOUL.md on first run, so it is the text virtually every real user gets. The old
-# "targeted and efficient exploration" line is deliberately absent (see DEFAULT_AGENT_IDENTITY) --
+# "targeted and efficient exploration" line is deliberately absent --
 # never re-add it here either.
-# DEFAULT_AGENT_IDENTITY only serves sessions with no SOUL.md at all (e.g. skip_context_files), which is not
+# The system prompt's identity block is agent/prompts/system/01-identity.md, which is not
 # the common case. See #95681.
 DEFAULT_SOUL_MD = (
     "You are Hermes Agent, built by Nous Research. Be direct: match the length of your reply to the weight of "

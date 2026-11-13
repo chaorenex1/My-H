@@ -12,6 +12,7 @@ converges at the next rebuild boundary (compaction).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, List
 
 from agent.message_content import flatten_message_text
@@ -36,9 +37,52 @@ def split_runtime_boundary(prompt: str) -> tuple:
     return (identity, runtime_marker, runtime) if prompt.endswith(RUNTIME_ENVIRONMENT_END) else (prompt, "", "")
 
 
+_WORKSTATION_RE = re.compile(r"<workstation>\n(.*?)</workstation>", re.DOTALL)
+
+
+def _labeled_value(block: str, label: str) -> str:
+    """``Label: value`` from a block of ``- Label: value`` lines; "" when absent."""
+    prefix = f"{label}:"
+    for line in block.splitlines():
+        candidate = line.strip()
+        if candidate.startswith("- "):
+            candidate = candidate[2:].strip()
+        if candidate.startswith(prefix):
+            return candidate[len(prefix):].strip()
+    return ""
+
+
+def _workstation_match(prompt: str):
+    """The real ``<workstation>`` block: the one inside the final ``<project-context>``.
+
+    Memory/plugin/system-message prose can quote the tag earlier in the prompt; only the
+    project-context tail is the renderer's output. A prompt without project context falls
+    back to the last workstation block.
+    """
+    text = prompt or ""
+    tail_start = text.rfind("<project-context>")
+    match = _WORKSTATION_RE.search(text, max(tail_start, 0))
+    if match is None:
+        matches = list(_WORKSTATION_RE.finditer(text))
+        match = matches[-1] if matches else None
+    return match
+
+
+def workstation_value(prompt: str, label: str) -> str:
+    """``Label: value`` from the persisted ``<workstation>`` block; "" when it has none."""
+    match = _workstation_match(prompt)
+    return _labeled_value(match.group(1), label) if match else ""
+
+
 def runtime_host_value(prompt: str, label: str) -> str:
-    """``Label: value`` from the host lines of a persisted prompt (``Current working directory``);
-    new prompts delimit runtime hints, legacy prompts put them before context.  "" when absent."""
+    """``Label: value`` from the host lines of a persisted prompt (``Current working directory``).
+
+    Current prompts carry the runtime lines inside ``<workstation>``; a legacy prompt keeps
+    them in the ``# Hermes runtime environment`` block or before the project context.  "" when
+    absent."""
+    workstation = workstation_value(prompt, label)
+    if workstation:
+        return workstation
     _identity, runtime_marker, runtime = split_runtime_boundary(prompt)
     prefix = f"{label}:"
     host_lines = (runtime.split("\n\n", 1)[0] if runtime_marker else prompt).splitlines()
@@ -51,10 +95,15 @@ def runtime_host_value(prompt: str, label: str) -> str:
 
 
 def identity_line_value(prompt: str, label: str) -> str:
-    """``Label: value`` from the trailer paragraph that ends the identity portion (the final
-    runtime block is embedder prose, never identity).  Memory, context files and plugin prose
-    come earlier and may hold ``Label:`` lines of their own; they are never read as identity,
-    even when the trailer omits the label because its value is empty."""
+    """``Label: value`` from the persisted identity fields.
+
+    Current prompts keep ``Model:``/``Provider:``/``Platform:`` in ``<workstation>`` (the
+    label may carry the workstation's ``- `` bullet). Legacy prompts keep them in the
+    trailer that ends the identity portion; memory, context files and plugin prose come
+    earlier and may hold ``Label:`` lines of their own, so they are never read as identity."""
+    workstation = workstation_value(prompt, label)
+    if workstation:
+        return workstation
     prefix = f"{label}:"
     trailer = split_runtime_boundary(prompt)[0].rsplit("\n\n", 1)[-1]
     matches = [line[len(prefix):].strip() for line in trailer.splitlines() if line.startswith(prefix)]

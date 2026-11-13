@@ -2,17 +2,17 @@
 
 适用 `agent/prompts/AGENTS.md`（条件装配）与根 `AGENTS.md`。
 
-模板是 Jinja2 leaf；`manifest.json` 是唯一注册表（tier / gate / budget / truncate / override / context_keys）。改模板不改 manifest，除非同时新增变量或段。
+模板是 Jinja2 leaf；`manifest.json` 是唯一注册表（`scope` / tier / gate / budget / truncate / override / context_keys）。改模板不改 manifest，除非同时新增变量或段。`scope: system` 的模板由装配器接线；`scope: request` 由请求调用点渲染。只建文件、不登记 manifest 的占位模板（`workspace.md`、`plugin-sections.md`、`system-message.md`）不参与装配。
 
 ## 规则 1：段模板正文必须按变量 `tools` 动态裁剪
 
-适用范围：`manifest.json` 注册的段模板（`sections[].path`）。非 manifest 的注入模板（`project-prompt.md`、`kanban-guidance.md`、`subagent-system-prompt.md`、各 notice/reminder）由渲染它们的调用方决定出现与否，**不要给它们加 `tools` 门**——它们本就可以无条件写工具名（`project-prompt.md` 就无条件写 `rg`/`read_file`/`patch`）。
+适用范围：`manifest.json` 注册的段模板（`sections[].path`）。非 manifest 的注入模板（`project-prompt.md`、`kanban-guidance.md`、各 notice/reminder）由渲染它们的调用方决定出现与否，**不要给它们加 `tools` 门**——它们本就可以无条件写工具名（`project-prompt.md` 就无条件写 `rg`/`read_file`/`patch`）。`subagent-system-prompt.md` 已登记 `scope: request`，同样不参与系统提示装配。
 
 `tools` 是本会话可用工具名的排序列表，由 `renderer._available_tools()` → `toolsets.resolve_tool_names()` 解析；`terminal` 可用时内部再并入 `PM_DEFAULT_TOOLSETS`（`rg`、`ast-grep` 是 shell 二进制，注册表看不到）。因此段模板里：
 
 - 任何提到某个工具的行、小节、整段，MUST 包条件：`{% if "read_file" in tools %}- ... {% endif %}`。可用能力不存在时该内容整段消失，不留空行——链式写法 `{% endif %}{% if ... %}`（见 `09-tool-policy.md`）。
 - NEVER 在条件外写死工具名，NEVER 广告本会话没有的能力（renderer docstring 的硬约束：`a section never advertises a missing capability`）。
-- 段的整体存废由 manifest `gate` 决定（`tools` / `skills` / `tool_search` / `coding_repo` / `subagent` / `kanban` / `memory` / `background_review`），不要在模板里重复判段级开关。
+- 段的整体存废由 renderer 块入口决定（`tools` / `skills` / `coding_repo` / `subagent` / `memory` 等），`gate` 只是 manifest 登记元数据，装配器不读它；不要在模板里重复判段级开关。
 - 工具清单 `08-tool-inventory.md` 只循环渲染器给的 `tool_groups`（`tool_inventory_rows(available, coding_project=...)`），不自行枚举工具。
 - 变量缺失即渲染失败（`StrictUndefined`）：用到的每个变量都必须在 manifest 的 `context_keys`/`context_types` 里声明。
 

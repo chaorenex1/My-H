@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "System-prompt section registry (ADR-18 D1/D2). Order is assembly order within a tier; tier is one of stable/context/volatile and is decided here, never by a template.",
+  "description": "System-prompt section registry (ADR-18 D1/D2, ADR-19 D1). `scope` decides whether a template joins the system prompt (`system`) or is rendered by its request call site (`request`); assembly order is code in `agent/prompts/assembler.py`, and `tier`/`gate` are registration metadata only.",
   "tiers": ["stable", "context", "volatile"],
   "gates": ["always", "tools", "skills", "tool_search", "coding_repo", "subagent", "kanban", "memory", "background_review"],
   "overrides": {
@@ -20,7 +20,8 @@
       "override": false,
       "renderer": null,
       "context_keys": [],
-      "context_types": {}
+      "context_types": {},
+      "scope": "system"
     },
     {
       "key": "identity",
@@ -31,7 +32,7 @@
       "truncate": "error",
       "override": true,
       "renderer": "identity",
-      "context_keys": ["role", "role_desc", "role_section", "auto_graph", "render_mermaid", "render_svg", "reactions"],
+      "context_keys": ["role", "role_desc", "role_section", "auto_graph", "render_mermaid", "render_svg", "reactions", "profile"],
       "context_types": {
         "role": "str",
         "role_desc": "str",
@@ -39,8 +40,10 @@
         "auto_graph": "bool",
         "render_mermaid": "bool",
         "render_svg": "bool",
-        "reactions": "bool"
-      }
+        "reactions": "bool",
+        "profile": "str"
+      },
+      "scope": "system"
     },
     {
       "key": "safety",
@@ -52,7 +55,11 @@
       "override": false,
       "renderer": null,
       "context_keys": ["safety_rules", "safety_override"],
-      "context_types": {"safety_rules": "str", "safety_override": "bool"}
+      "context_types": {
+        "safety_rules": "str",
+        "safety_override": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "communication",
@@ -68,20 +75,8 @@
         "personality": "str",
         "communication_style": "str",
         "platform_hint": "str"
-      }
-    },
-    {
-      "key": "additional_communication",
-      "path": null,
-      "source": "memories/<agent_name>/additionalCommunication.md",
-      "tier": "stable",
-      "gate": "background_review",
-      "budget": 1000,
-      "truncate": "drop_oldest_lines",
-      "override": false,
-      "renderer": "additional_communication",
-      "context_keys": [],
-      "context_types": {}
+      },
+      "scope": "system"
     },
     {
       "key": "internal_urls",
@@ -97,7 +92,8 @@
         "internal_urls": "list",
         "hermes_help_guidance": "str",
         "kanban_guidance": "str"
-      }
+      },
+      "scope": "system"
     },
     {
       "key": "memories",
@@ -108,14 +104,7 @@
       "truncate": "tail",
       "override": false,
       "renderer": "memories",
-      "context_keys": [
-        "memories_guidance",
-        "memories_user",
-        "memories_self",
-        "memories_work",
-        "memories_provider",
-        "user_profile_enabled"
-      ],
+      "context_keys": ["memories_guidance", "memories_user", "memories_self", "memories_work", "memories_provider", "user_profile_enabled"],
       "context_types": {
         "memories_guidance": "str",
         "memories_user": "str",
@@ -123,7 +112,8 @@
         "memories_work": "str",
         "memories_provider": "str",
         "user_profile_enabled": "bool"
-      }
+      },
+      "scope": "system"
     },
     {
       "key": "skills",
@@ -140,7 +130,8 @@
         "skill_view": "bool",
         "skill_manage": "bool",
         "skills_list": "bool"
-      }
+      },
+      "scope": "system"
     },
     {
       "key": "rules",
@@ -152,7 +143,12 @@
       "override": false,
       "renderer": "rules",
       "context_keys": ["generic_rules", "domain_rules", "rule_view"],
-      "context_types": {"generic_rules": "list", "domain_rules": "list", "rule_view": "bool"}
+      "context_types": {
+        "generic_rules": "list",
+        "domain_rules": "list",
+        "rule_view": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "tool_inventory",
@@ -164,7 +160,25 @@
       "override": false,
       "renderer": "tool_inventory",
       "context_keys": ["tool_groups"],
-      "context_types": {"tool_groups": "list"}
+      "context_types": {
+        "tool_groups": "list"
+      },
+      "scope": "system"
+    },
+    {
+      "key": "autoload_skills",
+      "path": "autoload-skills.md",
+      "tier": "stable",
+      "gate": "skills",
+      "scope": "system",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "autoload_skills",
+      "context_keys": ["autoload_skills"],
+      "context_types": {
+        "autoload_skills": "str"
+      }
     },
     {
       "key": "tool_policy",
@@ -175,14 +189,7 @@
       "truncate": "tail",
       "override": true,
       "renderer": "tool_policy",
-      "context_keys": [
-        "tools",
-        "delegation_bias",
-        "eager_tasks",
-        "eager_tasks_always",
-        "inline_first",
-        "max_concurrency"
-      ],
+      "context_keys": ["tools", "delegation_bias", "eager_tasks", "eager_tasks_always", "inline_first", "max_concurrency"],
       "context_types": {
         "tools": "list",
         "delegation_bias": "str",
@@ -190,7 +197,8 @@
         "eager_tasks_always": "bool",
         "inline_first": "bool",
         "max_concurrency": "int"
-      }
+      },
+      "scope": "system"
     },
     {
       "key": "workflow",
@@ -202,7 +210,11 @@
       "override": true,
       "renderer": "workflow",
       "context_keys": ["tools", "subagent"],
-      "context_types": {"tools": "list", "subagent": "bool"}
+      "context_types": {
+        "tools": "list",
+        "subagent": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "delivery",
@@ -214,7 +226,10 @@
       "override": false,
       "renderer": "delivery",
       "context_keys": ["subagent"],
-      "context_types": {"subagent": "bool"}
+      "context_types": {
+        "subagent": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "critical",
@@ -226,12 +241,15 @@
       "override": false,
       "renderer": "critical",
       "context_keys": ["subagent"],
-      "context_types": {"subagent": "bool"}
+      "context_types": {
+        "subagent": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "project_context",
       "path": "project-prompt.md",
-      "tier": "context",
+      "tier": "volatile",
       "gate": "always",
       "budget": null,
       "truncate": "head_tail",
@@ -239,7 +257,10 @@
       "renderer": "project_context",
       "context_keys": [
         "environment",
+        "environment_notes",
         "model",
+        "provider",
+        "platform",
         "context_files",
         "dir_context_files",
         "include_workspace_tree",
@@ -248,11 +269,15 @@
         "workspace_roots",
         "active_repo_context",
         "subagent",
-        "append_prompt"
+        "append_prompt",
+        "environment_probe"
       ],
       "context_types": {
         "environment": "list",
+        "environment_notes": "list",
         "model": "str",
+        "provider": "str",
+        "platform": "str",
         "context_files": "list",
         "dir_context_files": "list",
         "include_workspace_tree": "bool",
@@ -261,8 +286,10 @@
         "workspace_roots": "list",
         "active_repo_context": "str",
         "subagent": "bool",
-        "append_prompt": "str"
-      }
+        "append_prompt": "str",
+        "environment_probe": "bool"
+      },
+      "scope": "system"
     },
     {
       "key": "subagent_role",
@@ -280,7 +307,8 @@
         "plan_reference": "bool",
         "peers": "str",
         "completion": "str"
-      }
+      },
+      "scope": "request"
     },
     {
       "key": "eager_task",
@@ -292,7 +320,10 @@
       "override": false,
       "renderer": "eager_task",
       "context_keys": ["task_batch"],
-      "context_types": {"task_batch": "bool"}
+      "context_types": {
+        "task_batch": "bool"
+      },
+      "scope": "request"
     },
     {
       "key": "eager_todo",
@@ -304,7 +335,10 @@
       "override": false,
       "renderer": "eager_todo",
       "context_keys": ["forced"],
-      "context_types": {"forced": "bool"}
+      "context_types": {
+        "forced": "bool"
+      },
+      "scope": "request"
     },
     {
       "key": "irc_incoming",
@@ -323,7 +357,8 @@
         "interrupting": "bool",
         "relay_on_stop": "bool",
         "message": "str"
-      }
+      },
+      "scope": "request"
     },
     {
       "key": "subagent_system_prompt",
@@ -365,7 +400,8 @@
         "has_output_schema": "bool",
         "yield_schema": "str",
         "output_schema_overrides_agent": "bool"
-      }
+      },
+      "scope": "request"
     },
     {
       "key": "subagent_user_prompt",
@@ -377,7 +413,10 @@
       "override": false,
       "renderer": "subagent_user_prompt",
       "context_keys": ["assignment"],
-      "context_types": {"assignment": "str"}
+      "context_types": {
+        "assignment": "str"
+      },
+      "scope": "request"
     },
     {
       "key": "subagent_async_pending",
@@ -389,7 +428,12 @@
       "override": false,
       "renderer": "subagent_async_pending",
       "context_keys": ["count", "multiple", "jobs"],
-      "context_types": {"count": "int", "multiple": "bool", "jobs": "str"}
+      "context_types": {
+        "count": "int",
+        "multiple": "bool",
+        "jobs": "str"
+      },
+      "scope": "request"
     },
     {
       "key": "subagent_completion_probe",
@@ -400,20 +444,15 @@
       "truncate": "tail",
       "override": false,
       "renderer": "subagent_completion_probe",
-      "context_keys": [
-        "inflight_lines",
-        "has_previous",
-        "previous_ago",
-        "previous_percent",
-        "previous_stage"
-      ],
+      "context_keys": ["inflight_lines", "has_previous", "previous_ago", "previous_percent", "previous_stage"],
       "context_types": {
         "inflight_lines": "list",
         "has_previous": "bool",
         "previous_ago": "str",
         "previous_percent": "int",
         "previous_stage": "str"
-      }
+      },
+      "scope": "request"
     },
     {
       "key": "subagent_yield_reminder",
@@ -430,7 +469,8 @@
         "structured": "bool",
         "retry_count": "int",
         "max_retries": "int"
-      }
+      },
+      "scope": "request"
     }
   ]
 }

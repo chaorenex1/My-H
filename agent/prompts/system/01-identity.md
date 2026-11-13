@@ -22,7 +22,9 @@
 {% endif -%}
 {% endset -%}
 § Role
-{{ role_desc | default(default_role_desc, true) }}
+{% if profile|default('') %}Active Hermes profile: {{ profile }}.
+
+{% endif %}{{ role_desc | default(default_role_desc, true) }}
 
 # {{ role | default(default_role, true) }}
 {% if role_section|default('', true) %}{{ role_section }}{% else %}{{ default_role_section }}{% endif -%}

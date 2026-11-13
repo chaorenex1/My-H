@@ -450,35 +450,36 @@ def _prepare_run_context(context: str, *, task_id: str, agent_name: str,
     return context
 
 
-def _subagent_prompts(system: str, context: str, message: str, *, wrap_assignment: bool,
-                      structured: bool = False,
+def _subagent_prompts(agent: Any, system: str, context: str, message: str, *,
+                      wrap_assignment: bool, structured: bool = False,
                       output_schema: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
-    """Render the child Role/Coop/Completion prompt and wrap an assignment.
+    """Render the child ``§ Subagent Role`` block and wrap the assignment.
 
-    A run without a definition body keeps the legacy shape (context appended to the user turn)
-    so a bare prompt is never wrapped in an empty ``§ Role`` block. A broken template must not
-    fail the run: the fallback is the same legacy shape.
+    The block is this run's ``system_message`` (context tier); ``build_system_prompt_parts``
+    fills ``stable`` with the shared main base (``subagent=True``: hand-off wording) and
+    registers ``_subagent_role`` so every rebuild — including compression — reproduces the
+    same base + role bytes as :func:`assemble_subagent`. A run without a definition body keeps
+    the bare-prompt contract, with ``context`` appended to the user turn.
     """
-    if not str(system or "").strip():
-        return system, _prompt(message, context)
-    try:
-        from agent.prompts.renderer import (
-            render_subagent_system_prompt,
-            render_subagent_user_prompt,
-        )
+    from agent.prompts.assembler import SubagentRole
+    from agent.prompts.renderer import render_subagent_prompt, render_subagent_user_prompt
 
-        rendered_system = render_subagent_system_prompt(
-            agent=str(system), context=context,
-            structured=bool(structured),
-            has_output_schema=bool(output_schema),
-            yield_schema=(json.dumps(dict(output_schema), ensure_ascii=False)
-                          if output_schema else ""))
-        rendered_message = (render_subagent_user_prompt(assignment=message)
-                            if wrap_assignment else message)
-        return rendered_system, rendered_message
-    except Exception:  # health: allow BLE001 -- the prompt must never fail a run
-        logger.warning("agent_run: subagent prompt rendering failed", exc_info=True)
-        return system, _prompt(message, context)
+    if not str(system or "").strip():
+        # No definition body: never build a role block. ``assemble_subagent`` still rejects an
+        # empty role when a caller asks for one directly.
+        return "", _prompt(message, context)
+    role = SubagentRole(
+        body=str(system),
+        context=str(context or ""),
+        structured=bool(structured),
+        has_output_schema=bool(output_schema),
+        yield_schema=(json.dumps(dict(output_schema), ensure_ascii=False)
+                      if output_schema else ""),
+    )
+    agent._subagent_role = role
+    rendered_message = (render_subagent_user_prompt(assignment=message)
+                        if wrap_assignment else message)
+    return render_subagent_prompt(role), rendered_message
 
 
 def _yield_snapshot(agent: Any) -> Any:
@@ -516,7 +517,7 @@ def _execute_turn(agent: Any, message: str, *, context: str,
     ``output`` validation.
     """
     system, prompt = _subagent_prompts(
-        system, context, message, wrap_assignment=wrap_assignment,
+        agent, system, context, message, wrap_assignment=wrap_assignment,
         structured=getattr(agent, "_yield_state", None) is not None,
         output_schema=schema)
     result = agent.run_conversation(
@@ -760,8 +761,8 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         cache_scope=str(cache_scope or "").strip(),
     )
     # The definition's front matter is the per-agent source for prompt policy switches
-    # (``delegation_bias``, ``eager_tasks``, ...). Section 09 reads it back through
-    # ``agent.system_prompt._tool_policy_part``; without this the definition never applies.
+    # (``delegation_bias``, ``eager_tasks``, ...). ``system_prompt._delegation_policy`` reads
+    # it back for section 09; without this the definition never applies.
     agent._agent_definition_metadata = dict(definition_metadata or {})
     finalized = False
     if advisor:

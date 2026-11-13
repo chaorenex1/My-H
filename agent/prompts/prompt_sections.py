@@ -32,6 +32,9 @@ TRUNCATE_HEAD_TAIL = "head_tail"
 TRUNCATE_DROP_OLDEST_LINES = "drop_oldest_lines"
 TRUNCATE_ERROR = "error"
 _CONTEXT_TYPES = frozenset({"str", "bool", "list", "int"})
+# Assembly scope (ADR-19 D5): only ``system`` sections belong to the system prompt; ``request``
+# sections are rendered by their call site and must never be joined into it.
+_SCOPES = frozenset({"system", "request"})
 
 _TRUNCATE_STRATEGIES = frozenset(
     {TRUNCATE_TAIL, TRUNCATE_HEAD_TAIL, TRUNCATE_DROP_OLDEST_LINES, TRUNCATE_ERROR}
@@ -60,6 +63,7 @@ class PromptSection:
     renderer: str | None
     context_keys: tuple[str, ...]
     context_types: Mapping[str, str]
+    scope: str = "system"
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
@@ -83,9 +87,14 @@ def load_sections(path: Path = MANIFEST_PATH) -> dict[str, PromptSection]:
             renderer=raw.get("renderer"),
             context_keys=tuple(raw.get("context_keys", ())),
             context_types=dict(raw.get("context_types", {})),
+            scope=raw.get("scope", "system"),
         )
         if section.key in sections:
             raise PromptSectionError(f"duplicate prompt section key: {section.key}")
+        if not isinstance(section.scope, str) or section.scope not in _SCOPES:
+            raise PromptSectionError(
+                f"{section.key}: unknown scope {section.scope!r} (expected one of {sorted(_SCOPES)})"
+            )
         if section.truncate not in _TRUNCATE_STRATEGIES:
             raise PromptSectionError(f"{section.key}: unknown truncate strategy {section.truncate!r}")
         if section.path and not (SYSTEM_PROMPT_DIR / section.path).is_file():
@@ -235,11 +244,21 @@ def apply_budget(text: str, section: PromptSection) -> str:
     return _truncate_tail(text, section.budget)
 
 
-def render_section(key: str, context: Mapping[str, Any] | None = None) -> str:
-    """Render one section by manifest key. Unknown keys and Python-only sections raise."""
+def render_section(
+    key: str, context: Mapping[str, Any] | None = None, *, scope: str | None = None
+) -> str:
+    """Render one section by manifest key. Unknown keys and Python-only sections raise.
+
+    ``scope`` refuses a key registered for another assembly channel, so a request-level
+    template can never leak into the system prompt (or the reverse).
+    """
     section = load_sections().get(key)
     if section is None:
         raise PromptSectionError(f"unknown prompt section: {key}")
+    if scope is not None and section.scope != scope:
+        raise PromptSectionError(
+            f"{key}: scope {section.scope!r} is not {scope!r}; use the matching render entry"
+        )
     if not section.path:
         raise PromptSectionError(f"{key}: section has no template (renderer={section.renderer!r})")
     text = environment().get_template(section.path).render(**validate_context(section, context))

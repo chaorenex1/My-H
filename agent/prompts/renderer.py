@@ -2,8 +2,10 @@
 
 ``prompt_sections`` is context-agnostic: it renders whatever the manifest declares and
 validates types against it. This module is the typed seam for the sections that accept
-caller variables, plus :func:`render_head` (00–03) and :func:`render_closing` (10–12),
-which render their ranges through that one pipeline and join them in manifest order.
+caller variables. Three block entry points return finished bodies:
+:func:`render_role` (01–03), :func:`render_runtime` (04/06–08) and
+:func:`render_closing` (10–12); :func:`agent.prompts.assembler.assemble_main` joins them
+with the single-section renderers in code order.
 
 Usage::
 
@@ -12,7 +14,6 @@ Usage::
     render_safety(rules="- No force-push.", override=True)
     render_communication(personality="- Dry.", platform="- omp-ui.")
     render_role("desktop")  # § Role + the desktop default from system/platforms/desktop.md
-    render_head(identity={"role": "Hermes Agent"}, safety={"rules": "- No force-push."})
     render_memories(agent_name="default")  # 05, from $HERMES_HOME/memories
     render_closing(subagent=True)  # 10–12: workflow, delivery, critical
 """
@@ -21,24 +22,30 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
-from hermes_constants import get_hermes_home
+from hermes_constants import get_hermes_home, get_skills_dir
 
 from agent.prompts.hermes_help import hermes_agent_help_guidance, is_hermes_agent_help
 from agent.prompts.kanban import is_kanban_intent, kanban_guidance
-from agent.prompts.platforms import IDENTITY_CAPS, load_platform_hints
+from agent.prompts.platforms import IDENTITY_CAPS, resolve_platform_hint
 from agent.prompts.project_context import render_project_context
-from agent.prompts.prompt_sections import SYSTEM_PROMPT_DIR, read_prompt_text, render_section
+from agent.prompts.prompt_sections import (
+    SYSTEM_PROMPT_DIR,
+    read_prompt_text,
+    render_section,
+)
 from agent.prompts.rules import project_languages as rule_project_languages
 from agent.prompts.rules import rule_prompt
-from agent.prompts.skills import bundled_skill_rows
+from agent.prompts.skills import bundled_skill_rows, skill_rows
 from agent.prompts.toolsets import PM_DEFAULT_TOOLSETS, resolve_tool_names, tool_inventory_rows
 from agent.prompts.urls import internal_url_rows
 
+if TYPE_CHECKING:  # the assembler owns the dataclass; avoid an import cycle at runtime
+    from agent.prompts.assembler import SubagentRole
+
 logger = logging.getLogger(__name__)
 
-HEAD_SECTIONS = ("rfc2119", "identity", "safety", "communication")
 HEAD_SEPARATOR = "\n\n"
 RUNTIME_HEADING = "§ Runtime"
 MEMORIES_GUIDANCE_PATH = SYSTEM_PROMPT_DIR / "memories-guidance.md"
@@ -52,6 +59,7 @@ def render_rfc2119() -> str:
 
 def render_identity(
     *,
+    profile: str | None = None,
     role: str | None = None,
     role_desc: str | None = None,
     role_section: str | None = None,
@@ -62,6 +70,7 @@ def render_identity(
 ) -> str:
     """01 — role and personality; ``None`` keeps that template default."""
     context = {
+        "profile": profile or "",
         "role": role,
         "role_desc": role_desc,
         "role_section": role_section,
@@ -70,7 +79,9 @@ def render_identity(
         "render_svg": render_svg,
         "reactions": reactions,
     }
-    return render_section("identity", {key: value for key, value in context.items() if value is not None})
+    return render_section("identity", {
+        key: value for key, value in context.items() if value is not None or key == "profile"
+    })
 
 
 def render_safety(*, rules: str = "", override: bool = False) -> str:
@@ -147,13 +158,17 @@ def render_memories(
     root = Path(home) if home is not None else get_hermes_home()
     memories = root / "memories"
     agent_dir = memories / "agents" / name
+    work_path = agent_dir / "MEMORY.md"
+    if name == DEFAULT_AGENT_NAME and not work_path.is_file():
+        # The built-in store writes the main agent's work memory at the memories root.
+        work_path = memories / "MEMORY.md"
     return render_section(
         "memories",
         {
             "memories_guidance": _memories_guidance(),
             "memories_user": _read_memory_file(memories / "USER.md") if user_profile_enabled else "",
             "memories_self": _read_memory_file(agent_dir / "AI_SELF.md"),
-            "memories_work": _read_memory_file(agent_dir / "MEMORY.md"),
+            "memories_work": _read_memory_file(work_path),
             "memories_provider": memories_provider,
             "user_profile_enabled": user_profile_enabled,
         },
@@ -173,6 +188,13 @@ def _available_tools(
     if "terminal" in available:
         available.update(PM_DEFAULT_TOOLSETS)
     return available
+
+
+def _owned_kanban_task() -> str:
+    """The dispatcher-owned board task for this execution, or "" outside a worker."""
+    from agent.delegation_context import owned_kanban_task
+
+    return owned_kanban_task()
 
 
 def render_tool_policy(
@@ -204,6 +226,8 @@ def render_tool_policy(
         raise ValueError(f"max_concurrency must be a non-negative int, got {max_concurrency!r}")
 
     available = _available_tools(toolsets, enable_tools)
+    if not available:
+        return ""
     return render_section(
         "tool_policy",
         {
@@ -266,22 +290,33 @@ def render_critical(*, subagent: bool = False) -> str:
     return render_section("critical", {"subagent": subagent})
 
 
-def render_closing(*, subagent: bool = False, **workflow: Any) -> str:
-    """Render 10–12 through one pipeline, blank-line joined in manifest order."""
-    return HEAD_SEPARATOR.join(
-        part.strip()
-        for part in (
-            render_workflow(subagent=subagent, **workflow),
-            render_delivery(subagent=subagent),
-            render_critical(subagent=subagent),
-        )
-    )
+def render_closing(
+    *,
+    subagent: bool = False,
+    project_dir: str | Path | None = None,
+    **workflow: Any,
+) -> str:
+    """Render 10–12 in one call, blank-line joined in manifest order.
+
+    A non-coding session has no Verify phase to hand off, so its workflow section is
+    omitted; delivery and critical always apply. The block judges its own project kind
+    (same detection as :func:`render_runtime`); no caller gate decides it.
+    """
+    project = Path(project_dir) if project_dir is not None else Path.cwd()
+    parts = [
+        render_workflow(subagent=subagent, **workflow) if rule_project_languages(project) else "",
+        render_delivery(subagent=subagent),
+        render_critical(subagent=subagent),
+    ]
+    return HEAD_SEPARATOR.join(part.strip() for part in parts if part.strip())
 
 
 def render_runtime(
     *,
     skills: Sequence[str] | None = None,
+    skills_dir: str | Path | None = None,
     project_dir: str | Path | None = None,
+    platform: str = "",
     first_input: str | None = None,
     toolsets: Sequence[str] | None = None,
     enable_tools: Sequence[str] | None = None,
@@ -294,11 +329,13 @@ def render_runtime(
     discovered internally (built-in + language-matched ``$HERMES_HOME/rules``) from
     *project_dir* (default: cwd), then bucketed into ``<generic-rules>`` (always-apply)
     and ``<domain-rules>`` (rulebook); a rule registered with the session's TTSR matcher
-    is listed in neither block. A non-programming project omits the rules section.
-    The internal-location list is fixed in code as well — there is no caller parameter
-    for it, so extra directories cannot be injected into the prompt. When *first_input*
-    asks for help with Hermes Agent itself (judged by ``is_hermes_agent_help``), the
-    packaged help guidance is appended to that block.
+    is listed in neither block. The block judges the project kind itself: a
+    non-programming project omits the rules section and the codegraph inventory. The
+    internal-location list is fixed in code as well — there is no caller parameter for
+    it, so extra directories cannot be injected into the prompt. When *first_input* asks
+    for help with Hermes Agent itself (judged by ``is_hermes_agent_help``), the packaged
+    help guidance is appended to that block; the kanban judgment runs only when the
+    session actually holds kanban tools.
 
     *toolsets* may only name default-loaded built-in sets; a non-empty *enable_tools*
     replaces it with an explicit tool allowlist. Skills/guidance/tool-inventory render
@@ -306,40 +343,64 @@ def render_runtime(
     """
     available = resolve_tool_names(toolsets=toolsets, enable_tools=enable_tools)
     project = Path(project_dir) if project_dir is not None else Path.cwd()
+    coding_project = bool(rule_project_languages(project))
 
     parts: list[str] = []
     skill_map = {tool: tool in available for tool in ("skill_view", "skill_manage", "skills_list")}
     if any(skill_map.values()):
-        rows = bundled_skill_rows() if skills is None else list(skills)
+        if skills is not None:
+            rows = list(skills)
+        else:
+            session_skills = Path(skills_dir) if skills_dir is not None else get_skills_dir()
+            try:
+                import model_tools
+                skill_toolsets = {model_tools.get_toolset_for_tool(name) for name in available} - {None, ""}
+            except Exception:  # health: allow BLE001 -- toolset derivation is advisory; the index must still render
+                skill_toolsets = None
+            rows = (skill_rows(session_skills, available_tools=set(available),
+                               available_toolsets=skill_toolsets, platform=platform)
+                    if session_skills.is_dir() else [])
+            if not rows:
+                # A profile that has not synced its skills tree yet still advertises the
+                # bundled catalog instead of silently rendering an empty skills block.
+                rows = bundled_skill_rows()
         parts.append(render_section("skills", {"skills": rows, **skill_map}))
 
-    rules = rule_prompt(project)
-    if rules is not None:
-        parts.append(render_section("rules", {
-            "generic_rules": list(rules.generic),
-            "domain_rules": list(rules.domain),
-            "rule_view": "rule_view" in available,
-        }))
+    if coding_project:
+        rules = rule_prompt(project)
+        if rules is not None:
+            parts.append(render_section("rules", {
+                "generic_rules": list(rules.generic),
+                "domain_rules": list(rules.domain),
+                "rule_view": "rule_view" in available,
+            }))
 
-    help_guidance = ""
-    kanban_text = ""
-    if first_input:
-        if is_hermes_agent_help(first_input):
-            help_guidance = hermes_agent_help_guidance(with_skills=skill_map["skill_view"])
-        # Cheap gate first: the default toolset has no kanban tools, so only sessions that
-        # actually hold them pay for the side-channel judgment.
-        if any(name.startswith("kanban_") for name in available) and is_kanban_intent(first_input):
-            kanban_text = kanban_guidance()
+    help_text = (
+        hermes_agent_help_guidance(with_skills=skill_map["skill_view"])
+        if first_input and is_hermes_agent_help(first_input) else ""
+    )
+    # Cheap gate first: the default toolset has no kanban tools, so only sessions
+    # that actually hold them pay for the side-channel judgment. A dispatcher-owned
+    # worker gets the lifecycle block regardless of the first message: it owns a task
+    # and every turn needs the protocol.
+    holds_kanban = any(name.startswith("kanban_") for name in available)
+    if holds_kanban and "kanban_show" in available and _owned_kanban_task():
+        kanban_text = kanban_guidance()
+    else:
+        kanban_text = (
+            kanban_guidance()
+            if first_input and holds_kanban and is_kanban_intent(first_input)
+            else ""
+        )
     parts.append(render_section(
         "internal_urls",
         {
             "internal_urls": internal_url_rows(),
-            "hermes_help_guidance": help_guidance,
+            "hermes_help_guidance": help_text,
             "kanban_guidance": kanban_text,
         },
     ))
 
-    coding_project = bool(rule_project_languages(project))
     inventory = tool_inventory_rows(available, coding_project=coding_project)
     if inventory:
         parts.append(render_section("tool_inventory", {"tool_groups": inventory}))
@@ -355,20 +416,22 @@ def render_role(
     safety: Mapping[str, Any] | None = None,
     personality: str = "",
     style: str = "",
+    tool_names: Sequence[str] = (),
+    profile: str = "",
 ) -> str:
     """§ Role block for one platform: 01 identity, 02 safety, 03 communication.
 
-    The ``# Platform`` block takes ``system/platforms/<platform>.md``; an unknown or
-    empty platform omits it. Identity starts from the platform's capability gates
-    (``IDENTITY_CAPS``); explicit ``identity`` keys win. ``personality``/``style`` reach
-    section 03 unchanged.
+    The hint resolves here — built-in/plugin text plus the config overlay, the desktop
+    TUI clarifier and a cron agent's delivery channel — never through ``SessionFacts``.
+    Identity starts from the platform's capability gates (``IDENTITY_CAPS``); explicit
+    ``identity`` keys win. ``personality``/``style`` reach section 03 unchanged.
     """
-    hint = load_platform_hints().get(platform, "") if platform else ""
+    hint = resolve_platform_hint(platform, tool_names=tool_names) if platform else ""
     identity_context = {**IDENTITY_CAPS.get(platform, {}), **dict(identity or {})}
     return HEAD_SEPARATOR.join(
         part.strip()
         for part in (
-            render_identity(**identity_context),
+            render_identity(profile=profile or None, **identity_context),
             render_safety(**dict(safety or {})),
             render_communication(personality=personality, style=style, platform=hint),
         )
@@ -392,46 +455,32 @@ def render_communication(
     )
 
 
-def render_head(
-    *,
-    identity: Mapping[str, Any] | None = None,
-    safety: Mapping[str, Any] | None = None,
-    communication: Mapping[str, Any] | None = None,
-) -> str:
-    """Render 00–03 through one pipeline, blank-line joined in manifest order.
+def render_autoload_skills(*, autoload_skills: str) -> str:
+    """Pinned ``skills.auto_load`` bodies, rendered as their own block; "" when none."""
+    body = str(autoload_skills or "").strip()
+    return render_section("autoload_skills", {"autoload_skills": body}) if body else ""
 
-    ``identity``, ``safety`` and ``communication`` take the same keywords as their
-    per-section entry methods, so an unknown key fails here instead of reaching a
-    template.
+
+def render_request(key: str, context: Mapping[str, Any]) -> str:
+    """Render a ``scope=request`` template; a system section is rejected.
+
+    Request templates ride a user/tool row and never enter the assembled prompt (ADR-19 D10).
+    The scope guard is the enforcement point: an accidental system key here would duplicate a
+    block the assembler already owns. Interpolated content (an IRC message, § Context, a plan
+    body) stays byte-exact, so only outer whitespace is trimmed; blank-line cleanup belongs to
+    Jinja whitespace control in the template, never a regex here.
     """
-    return HEAD_SEPARATOR.join(
-        part.strip()
-        for part in (
-            render_rfc2119(),
-            render_identity(**dict(identity or {})),
-            render_safety(**dict(safety or {})),
-            render_communication(**dict(communication or {})),
-        )
-    )
-
-
-def _render_request(key: str, context: Mapping[str, Any]) -> str:
-    """Render a request-level template with only outer whitespace trimmed.
-
-    Interpolated content (an IRC message, § Context, a plan body) must stay byte-exact, so
-    blank-line cleanup belongs to Jinja whitespace control in the template, never a regex here.
-    """
-    return render_section(key, context).strip()
+    return render_section(key, context, scope="request").strip()
 
 
 def render_eager_task(*, task_batch: bool = True) -> str:
     """Per-turn delegation reminder (``delegation.eager_tasks``)."""
-    return _render_request("eager_task", {"task_batch": bool(task_batch)})
+    return render_request("eager_task", {"task_batch": bool(task_batch)})
 
 
 def render_eager_todo(*, forced: bool = False) -> str:
     """Todo reminder, forced before substantive work when the host asks for it."""
-    return _render_request("eager_todo", {"forced": bool(forced)})
+    return render_request("eager_todo", {"forced": bool(forced)})
 
 
 def render_irc_incoming(
@@ -444,7 +493,7 @@ def render_irc_incoming(
     relay_on_stop: bool = True,
 ) -> str:
     """One inbound peer message envelope; ``sender`` is resolved by the host, never the model."""
-    return _render_request(
+    return render_request(
         "irc_incoming",
         {
             "from": str(sender),
@@ -466,7 +515,7 @@ def render_subagent_role(
     completion: str = "",
 ) -> str:
     """Child Role/Context/Peers/Completion block from a definition or caller system message."""
-    return _render_request(
+    return render_request(
         "subagent_role",
         {
             "role": str(role),
@@ -478,53 +527,37 @@ def render_subagent_role(
     )
 
 
-def render_subagent_system_prompt(
-    *,
-    agent: str,
-    context: str = "",
-    plan_reference: str = "",
-    plan_reference_path: str = "",
-    worktree: str = "",
-    irc_self_id: str = "",
-    irc_peers: Sequence[str] = (),
-    irc_omitted_count: int = 0,
-    irc_parked_count: int = 0,
-    structured: bool = False,
-    work_pool_yield_items: bool = False,
-    has_output_schema: bool = False,
-    yield_schema: str = "",
-    output_schema_overrides_agent: bool = False,
-) -> str:
-    """The complete child system prompt: role body, assignment context, peers and completion.
+def render_subagent_prompt(role: SubagentRole) -> str:
+    """The role block alone: ``§ Subagent Role``, context, plan, peers and completion.
 
-    ``agent`` is the definition body with front matter removed. Peers arrive pre-formatted so
-    the template never has to interpret host records. ``structured``/``yield_schema`` are wired
-    by the named-agent yield path; a definition without ``output`` renders the plain contract.
+    This is the only entry for ``system/subagent-system-prompt.md``; ``assemble_subagent``
+    appends its bytes after the shared base. ``body`` is the definition body with front matter
+    removed. Peers arrive pre-formatted so the template never interprets host records.
     """
-    return _render_request(
+    return render_request(
         "subagent_system_prompt",
         {
-            "agent": str(agent),
-            "context": str(context or ""),
-            "plan_reference": str(plan_reference or ""),
-            "plan_reference_path": str(plan_reference_path or ""),
-            "worktree": str(worktree or ""),
-            "irc_self_id": str(irc_self_id or ""),
-            "irc_peers": [str(peer) for peer in irc_peers],
-            "irc_omitted_count": int(irc_omitted_count or 0),
-            "irc_parked_count": int(irc_parked_count or 0),
-            "structured": bool(structured),
-            "work_pool_yield_items": bool(work_pool_yield_items),
-            "has_output_schema": bool(has_output_schema),
-            "yield_schema": str(yield_schema or ""),
-            "output_schema_overrides_agent": bool(output_schema_overrides_agent),
+            "agent": str(role.body),
+            "context": str(role.context or ""),
+            "plan_reference": str(role.plan_reference or ""),
+            "plan_reference_path": str(role.plan_reference_path or ""),
+            "worktree": str(role.worktree or ""),
+            "irc_self_id": str(role.irc_self_id or ""),
+            "irc_peers": [str(peer) for peer in role.irc_peers],
+            "irc_omitted_count": int(role.irc_omitted_count or 0),
+            "irc_parked_count": int(role.irc_parked_count or 0),
+            "structured": bool(role.structured),
+            "work_pool_yield_items": bool(role.work_pool_yield_items),
+            "has_output_schema": bool(role.has_output_schema),
+            "yield_schema": str(role.yield_schema or ""),
+            "output_schema_overrides_agent": bool(role.output_schema_overrides_agent),
         },
     )
 
 
 def render_subagent_user_prompt(*, assignment: str) -> str:
     """Wrap one child assignment as the user turn."""
-    return _render_request("subagent_user_prompt", {"assignment": str(assignment)})
+    return render_request("subagent_user_prompt", {"assignment": str(assignment)})
 
 
 def render_subagent_async_pending(
@@ -532,7 +565,7 @@ def render_subagent_async_pending(
 ) -> str:
     """Remind a child that its yield landed while owned background jobs still run."""
     jobs_count = int(count)
-    return _render_request(
+    return render_request(
         "subagent_async_pending",
         {
             "count": jobs_count,
@@ -551,7 +584,7 @@ def render_subagent_completion_probe(
     previous_stage: str = "",
 ) -> str:
     """One orchestrator progress probe; ``inflight_lines`` are pre-formatted tool summaries."""
-    return _render_request(
+    return render_request(
         "subagent_completion_probe",
         {
             "inflight_lines": [str(line) for line in inflight_lines],
@@ -568,7 +601,7 @@ def render_subagent_yield_reminder(
     retry_count: int = 1, max_retries: int = 3,
 ) -> str:
     """Forced wrap-up at the budget wall, or the idle-session no-tool-call reminder."""
-    return _render_request(
+    return render_request(
         "subagent_yield_reminder",
         {
             "budget_stop": bool(budget_stop),
@@ -580,29 +613,29 @@ def render_subagent_yield_reminder(
 
 
 __all__ = [
-    "HEAD_SECTIONS",
     "HEAD_SEPARATOR",
     "MEMORIES_GUIDANCE_PATH",
     "RUNTIME_HEADING",
+    "render_autoload_skills",
     "render_closing",
     "render_communication",
     "render_critical",
     "render_delivery",
     "render_eager_task",
     "render_eager_todo",
-    "render_head",
     "render_identity",
     "render_irc_incoming",
     "render_memories",
     "render_project_context",
+    "render_request",
     "render_rfc2119",
     "render_role",
     "render_runtime",
     "render_safety",
     "render_subagent_async_pending",
     "render_subagent_completion_probe",
+    "render_subagent_prompt",
     "render_subagent_role",
-    "render_subagent_system_prompt",
     "render_subagent_user_prompt",
     "render_subagent_yield_reminder",
     "render_tool_policy",

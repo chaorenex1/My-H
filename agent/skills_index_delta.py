@@ -113,8 +113,11 @@ def stage_skills_index_note(agent: Any, prompt: Any, conversation_history: Any) 
     if not stored:
         return False
     try:
-        from agent.system_prompt import _skills_prompt
-        current = index_entries(_skills_prompt(agent))
+        from agent.prompts.skills import skill_rows
+        from agent.system_prompt import _agent_skills_dir
+
+        rows = skill_rows(_agent_skills_dir(agent))
+        current = index_entries("<available_skills>\n" + "\n".join(f"- {row}" for row in rows) + "\n</available_skills>")
     except Exception:
         logger.debug("skills index delta: current index unavailable", exc_info=True)
         return False
