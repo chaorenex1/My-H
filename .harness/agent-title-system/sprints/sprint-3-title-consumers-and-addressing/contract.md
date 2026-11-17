@@ -168,7 +168,7 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 ### 测试环境
 
 - 所有新测试用临时 `HERMES_HOME`（`monkeypatch.setenv`，复用 `tests/conftest.py` 既有 fixture 模式）；不得读写操作者真实 store。
-- 在 Git Bash/Windows 下用 `pytest -q` 运行；路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
+- 测试入口一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`（仓库规则：禁止裸 `pytest`，见 `AGENTS.md` / `docs/coding-rules.md`）；sprint-local 的 `eval-<feature>.sh` 必须调用该 runner，并把输出与退出码落到 `evidence/`。路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
 - 证据写入 `evidence/AS-<n>-pytest.txt`，至少包含所涉测试文件的 `-q` 汇总与失败时的断言原文。
 
 ### 迁移（AS-4）
@@ -187,7 +187,7 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 
 ### 异步（AS-2、AS-3）
 
-- 标签工作走 `agent/hermes_threading.py::spawn_context_thread(..., daemon=True)` 或等价 daemon 线程，继承 profile 与 accounting；退出时不 join。
+- 标签工作走 `hermes_threading.py::spawn_context_thread(..., daemon=True)` 或等价 daemon 线程，继承 profile 与 accounting；退出时不 join。
 - spawn/回合开始不得等待标签：测试用阻塞的假模型 + `threading.Event` 证明返回先于标签完成。
 - 计划为空、gate 关闭、assignment 为空、dispatcher-owned worker：不调用模型、不建线程、不写。
 - 失败只 `debug`；不得向用户抛错，不得把失败文本写进 transcript。

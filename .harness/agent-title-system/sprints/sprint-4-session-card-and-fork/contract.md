@@ -261,6 +261,9 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 - **Evidence**：每个 AS 的 pytest 输出保存到
   `sprints/sprint-4-session-card-and-fork/evidence/AS-<n>.pytest.txt`（含命令、通过/失败
   计数与关键断言），Evaluator 的冲刺脚本以这些文件为判定依据。
+- **测试入口**：一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`；sprint-local 的
+  `eval-<feature>.sh` 调用该 runner 并保留输出/退出码，禁止裸 `pytest`（`AGENTS.md`、
+  `docs/coding-rules.md`）。
 
 ## Negotiation Log
 

@@ -146,6 +146,9 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
   `title_model_plan()`、`agent_session.title` 列、子代理标签与 `agent_message` 寻址
   （均属 P1–P3）。`title-marker-instruction.md` 保持仅存档、不注册、不改写。
 - `task_label` 在本 sprint 只完成注册与渲染契约；把它接到子代理创建路径是 sprint 3 的工作。
+- 测试入口一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`；sprint-local 的
+  `eval-<feature>.sh` 调用该 runner 并保留输出/退出码，禁止裸 `pytest`（`AGENTS.md`、
+  `docs/coding-rules.md`）。
 
 ## Negotiation Log
 

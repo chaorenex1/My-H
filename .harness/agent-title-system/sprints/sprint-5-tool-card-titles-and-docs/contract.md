@@ -211,6 +211,9 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 - **范围边界**：不做会话卡片/fork（sprint 4）、不做 `agent_session.title`、不做子代理标签与
   `agent_message` 寻址、不做 schema 迁移、不改 ADR-17 漂移阈值、不新增配置键。工具卡标题的
   唯一所有者仍是 ADR-4 D13 + `derive_title()`；本 sprint 只登记与对账。
+- **测试入口**：一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`；sprint-local 的
+  `eval-<feature>.sh` 调用该 runner 并保留输出/退出码，禁止裸 `pytest`（`AGENTS.md`、
+  `docs/coding-rules.md`）。
 
 ## Negotiation Log
 

@@ -198,6 +198,7 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 9. **解析复用 sprint 1。** 执行器用 sprint 1 交付的单一标记解析入口判断“接受 / 候选失败 / 终止”；`<title/>` 与 `<title>none</title>` 是终止而非失败。实现时以 sprint 1 实际导出的符号为准（从 `agent/title_generator.py` 的公开面导入），不得在 router 内复制标记解析逻辑，也不得为绕过依赖而自建第二套解析。
 10. **计数用 fake，不用计时。** 所有模型调用断言基于 fake `call_llm` 的调用记录（路由、task、timeout、fallback 标志、顺序、次数）；不测量耗时，不启动后台线程，不访问网络。测试写临时 `HERMES_HOME/config.yaml`，复用 `tests/agent/conftest.py` 的隔离与快重试夹具。
 11. **模块边界。** `agent/title_router.py` 模块级导入 `call_llm`，测试以 `monkeypatch.setattr("agent.title_router.call_llm", fake)` 拦截；router 内不得在模块导入期读取配置（配置只在函数调用期读取）。
+12. **测试入口。** 一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`；sprint-local 的 `eval-<feature>.sh` 调用该 runner 并保留输出/退出码，禁止裸 `pytest`（`AGENTS.md`、`docs/coding-rules.md`）。
 
 ## Negotiation Log
 
