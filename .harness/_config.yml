@@ -1,0 +1,28 @@
+schema_version: 1
+project_type: api
+generator_backend: omp
+sprint_level_generator_override: true
+# This repository is a Python agent/CLI: every epic is verified with pytest,
+# not a browser. custom-script is the primary evaluator tool; the Evaluator
+# writes .harness/scripts/eval-<feature>.sh per sprint and runs pytest there.
+evaluator_tools:
+  - custom-script
+  - curl
+hook_level: strict
+tracker: github
+max_iterations: 8
+max_wall_time_sec: 28800
+max_cost_usd: 20.0
+rubric_stagnation_n: 3
+allowed_mcp_servers: [playwright, github]
+negotiation_max_rounds: 3
+
+mid_impl_replan:
+  enabled: true
+  min_consecutive_signals: 2
+  max_per_sprint: 2
+  axis_band_threshold: 0.05
+
+# Shared substrate: docs/coding-rules.md, docs/review_rules.md,
+# docs/issue-to-pr-workflow.md all present at install time.
+shared_foundation: present
