@@ -220,7 +220,7 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1 (verdict pass; Fn 1.0 / Craft 0.9 / Consistency 0.95 / Documentation 0.9)
+- **Last commit**: (recorded below in the outcome commit)
+- **Aborted reason** (if any): none
+- **PR**: (recorded after Step 8)

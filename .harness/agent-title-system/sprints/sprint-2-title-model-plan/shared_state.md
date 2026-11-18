@@ -27,7 +27,7 @@
   Format: `sprint-<N>-contract.md @ <SHA>`
 -->
 
-- _awaiting negotiation completion_
+- sprint-2 contract frozen @ 90468cada771f12c9e1a7382fe0c578a347bbcef
 
 ## Negotiation
 <!--
@@ -38,6 +38,7 @@
 - [2026-11-18T08:16:00Z] round=1 agent=generator signal=counter delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.8/max_iter=6 file=feedback/generator-neg-1.md
 - [2026-11-18T08:26:00Z] round=1 agent=evaluator signal=counter delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.85/max_iter=8 + agent/AGENTS.md in scope file=feedback/evaluator-neg-1.md
 - [2026-11-18T08:30:00Z] round=2 agent=generator signal=accept delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.85/max_iter=8 + note-5 wording fix file=feedback/generator-neg-2.md
+- [2026-11-18T08:44:00Z] round=2 agent=evaluator signal=accept delta=thresholds frozen (1.0/0.85/0.9/0.85, max_iter=8) + note-5 paragraph + AS-3 body file=feedback/evaluator-neg-2.md
 
 ## WorkLog
 <!--
@@ -46,7 +47,7 @@
   Detailed per-iteration notes go to feedback/generator-<iter>.md.
 -->
 
-- _no iterations yet_
+- [2026-11-18T09:10:00Z] iter=1 agent=generator action=title_model_plan + run_title_plan + 14 tests + AGENTS.md bullet commit=(pending) — see feedback/generator-1.md
 
 ## Evaluation
 <!--
@@ -56,7 +57,7 @@
   feedback/evaluator-<iter>.md and evidence/.
 -->
 
-- _no evaluations yet_
+- [2026-11-18T09:25:00Z] iter=1 agent=evaluator verdict=pass axes=functionality 1.0 / craft 0.9 / consistency 0.95 / documentation 0.9 evidence=evidence/iter-1/ (69/69 probe checks, 182 tests in the attributable gate) — see feedback/evaluator-1.md
 
 ## Decisions
 <!--
@@ -67,4 +68,4 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
-- _no decisions yet_
+- [2026-11-18T08:44:00Z] decision: contract frozen (round 2 mutual accept; no Planner ruling) @ 90468cada771f12c9e1a7382fe0c578a347bbcef

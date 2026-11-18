@@ -91,3 +91,57 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T07:52:32Z | agent=omp | phase=pr | edit | agent/prompts/renderer.py
 [2026-11-18T08:00:05Z] decision: sprint-1 PR opened https://github.com/chaorenex1/My-H/pull/9
 [2026-11-18T08:00:39Z] decision: sprint-1 done (PR #9); transition to sprint-2-title-model-plan; backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T08:08:43Z] branch: harness/agent-title-system/sprint-2-title-model-plan (created) from harness/agent-title-system/sprint-1-title-protocol
+- 2026-11-18T08:11:33Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-neg-1.md
+- 2026-11-18T08:11:37Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-neg-1-report.json
+[2026-11-18T08:21:46Z] warn: contract note 5 ("空 provider 或空 model 的路由不进入计划") diverges from ADR-21 D3 step 2 (only provider=auto means unconfigured; resolve_aux_model supplies provider default); routed to negotiation round 2
+[2026-11-18T08:21:46Z] warn: jq on Windows emits CRLF; harness validators read $(jq -r) as "<value>\r" and force status-invalid. Workaround: ~/.local/bin/jq shim (tr -d , exit code preserved). Repo scripts unchanged
+- 2026-11-18T08:21:54Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/evaluator-neg-1.md
+[2026-11-18T08:23:10Z] negotiation: round=1 agent=generator signal=counter delta=Doc=0.8,max_iter=6 file=feedback/generator-neg-1.md
+[2026-11-18T08:23:10Z] negotiation: round=1 agent=evaluator signal=counter delta=Doc=0.85,max_iter=8,AGENTS.md-in-scope file=feedback/evaluator-neg-1.md
+- 2026-11-18T08:27:20Z | agent=omp | phase=negotiation | write | agent://NegotiateSprint2R2
+- 2026-11-18T08:28:50Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-neg-2.md
+- 2026-11-18T08:28:59Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-neg-2.md
+- 2026-11-18T08:28:59Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-neg-2-report.json
+[2026-11-18T08:30:39Z] negotiation: round=2 agent=generator signal=accept delta=Doc=0.85,max_iter=8,note-5-wording file=feedback/generator-neg-2.md
+- 2026-11-18T08:34:03Z | agent=omp | phase=negotiation | write | agent://EvalNegSprint2R2
+- 2026-11-18T08:37:37Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/evaluator-neg-2.md
+- 2026-11-18T08:39:27Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:39:39Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:39:47Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:39:58Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:40:13Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:40:29Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:41:09Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:41:39Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+- 2026-11-18T08:42:12Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-2-title-model-plan/contract.md
+[2026-11-18T08:43:50Z] decision: sprint-2 contract frozen @ 90468cada771f12c9e1a7382fe0c578a347bbcef
+[2026-11-18T08:43:50Z] negotiation: round=2 agent=evaluator signal=accept delta=thresholds 1.0/0.85/0.9/0.85 + note-5 + AS-3 body file=feedback/evaluator-neg-2.md
+- 2026-11-18T08:52:35Z | agent=omp | phase=impl | write | agent/title_router.py
+- 2026-11-18T08:54:47Z | agent=omp | phase=impl | write | tests/agent/test_title_router.py
+- 2026-11-18T08:55:46Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T08:56:20Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:56:20Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:56:20Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:56:20Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:56:20Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:35Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:44Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:56:44Z | agent=omp | phase=impl | edit | tests/agent/test_title_router.py
+- 2026-11-18T08:58:09Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:58:33Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T08:59:59Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T09:01:35Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/eval-title-model-plan.sh
+- 2026-11-18T09:03:19Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T09:05:20Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-1.md
+- 2026-11-18T09:05:26Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/generator-1-report.json
+- 2026-11-18T09:07:00Z | agent=omp | phase=impl | edit | agent/title_router.py
+[2026-11-18T09:08:51Z] agent=generator | phase=impl | omp-done | thread=unknown files=4 status=done
+- 2026-11-18T09:24:59Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/evidence/iter-1/probe_title_model_plan.py
+- 2026-11-18T09:30:36Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/evaluator-1.md
+[2026-11-18T09:34:31Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.95 documentation=0.9"
