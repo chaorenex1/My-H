@@ -20,22 +20,23 @@ acceptance_scenarios:
 rubric:
   - axis: Functionality
     weight: high
-    threshold: "?"
+    threshold: 1.0
     description: All acceptance scenarios pass end-to-end via the sprint-local pytest script
   - axis: Craft
     weight: std
-    threshold: "?"
+    threshold: 0.85
     description: Code is readable, tested, and follows project conventions
   - axis: Consistency
     weight: std
-    threshold: "?"
+    threshold: 0.9
     description: Manifest/renderer/parser contracts match ADR-19 and ADR-21 D4/D5
   - axis: Documentation
     weight: low
-    threshold: "?"
+    threshold: 0.8
     description: Docstrings and prompt-template registration docs match the shipped behavior
-max_iterations: "?"
-status: pending-negotiation
+max_iterations: 6
+max_negotiation_rounds: 3
+status: active
 ---
 
 # Sprint 1 Contract — title-protocol
@@ -126,10 +127,10 @@ Evidence: `sprints/sprint-1-title-protocol/evidence/AS-5.txt`
 
 | Axis | Weight | Threshold | Scoring notes |
 |---|---|---|---|
-| Functionality | high | TBD in Negotiation | Binary-ish: every AS passes or sprint fails |
-| Craft | std | TBD in Negotiation | Parser/guard unit tests, no dead symbols, follows `AGENTS.md` |
-| Consistency | std | TBD in Negotiation | ADR-19 manifest contract + ADR-21 D4/D5 exactly; no legacy aliases |
-| Documentation | low | TBD in Negotiation | Docstrings / `docs/prompt-system.md` registration list not contradicted |
+| Functionality | high | 1.0 | Binary: every AS passes end-to-end through the sprint-local pytest script, or the sprint fails |
+| Craft | std | 0.85 | Parser/guard unit tests, no dead symbols, `scripts/run_tests.sh` only, follows `AGENTS.md`; Critical findings are non-negotiable |
+| Consistency | std | 0.9 | ADR-19 manifest contract + ADR-21 D4/D5 exactly; `UndefinedError → PromptSectionError` conversion is contractual (AS-1), not interpretive slack |
+| Documentation | low | 0.8 | `docs/prompt-system.md` request-level + archive lists, `website/docs` JSON-protocol references, module docstrings; doc omission is Critical per `docs/review_rules.md` §8 |
 
 Total pass condition: **every axis meets its threshold**. Weight only affects
 Evaluator's ordering when reporting failures (high-weight fails reported first).
@@ -156,22 +157,21 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 
 ### Round 1
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `counter` — Functionality 1.0 / Craft 0.85 / Consistency 0.85 / Documentation 0.7 / max_iterations 6. Grounded in real seams: `render_request` → `render_section(scope="request")` already rejects unknown/scope-mismatched keys; `strip_think_blocks` reuse; `sessions retitle-skills` already routes through `generate_title`; AS-5 scan delegated to the sprint eval script so pytest stays behaviour-only.
+- **Evaluator**: `counter` — accepts Functionality 1.0, Craft 0.85, max_iterations 6; raises Consistency to 0.9 and Documentation to 0.8. Grounds: `PromptSectionError` is documented as the render-failure base (AS-1 makes the `UndefinedError` conversion contractual, not a risk); doc surface is finite and `docs/review_rules.md` §8 makes omission Critical; `title-marker-instruction.md` must be *added* to the archive list, not "kept"; `_is_provisional_greeting_title` keeps three live callers so it stays out of the retirement set.
 
 ### Round 2
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `accept` — adopts the Evaluator's round-1 proposal verbatim (F1.0 / C0.85 / Co0.9 / D0.8, max_iterations 6). Round resolves immediately per protocol; Evaluator turn skipped.
+- **Evaluator**: skipped — Generator signalled `accept`.
 
 ### Round 3
 
-- **Generator**:
-- **Evaluator**:
+- Not used (agreement reached in round 2).
 
 ### Ruling
 
-- **Planner**:
+- Not required (no stalemate).
 
 ## Sprint Outcome
 

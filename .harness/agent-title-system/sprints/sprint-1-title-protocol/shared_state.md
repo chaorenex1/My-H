@@ -20,7 +20,12 @@
   + acceptance_scenarios). Update when Planner issues a re-plan.
 -->
 
-- _not yet populated_
+- goal: 命名协议唯一化——注册命名提示词，冻结 `<title>` 标记解析契约，退役 JSON schema 路径
+- AS-1 请求级注册 `title_system`（context `title_language`）/ `task_label`，StrictUndefined 下可渲染
+- AS-2 `title-system.md` 的 Jinja 语言行：空值不输出，非空输出 `- Write the title in <language>.`
+- AS-3 单一 `<title>` 标记解析契约（闭合/自闭合/`none`/无标签散文/多行取首非空行）
+- AS-4 共享守卫剥离引号/`Title:`/句末标点，>80 字符或 >12 词或 0 词拒绝（不截断），先剥 `<think>`
+- AS-5 JSON schema 路径四符号无定义无调用点，`retitle-skills` 复用同一解析器，`title-marker-instruction.md` 保持未注册
 
 ## Contract
 <!--
@@ -36,7 +41,10 @@
   live in feedback/{role}-<iter>.md. Keep this terse: round, outcome.
 -->
 
-- _awaiting round 1_
+- [2026-11-18T05:27:47Z] round=1 agent=generator signal=counter delta=F1.0/C0.85/Co0.85/D0.7 iter6 file=feedback/generator-neg-1.md
+- [2026-11-18T05:27:47Z] round=1 agent=evaluator signal=counter delta=F1.0/C0.85/Co0.9/D0.8 iter6 file=feedback/evaluator-neg-1.md
+- [2026-11-18T05:32:05Z] round=2 agent=generator signal=accept delta=adopts F1.0/C0.85/Co0.9/D0.8 iter6 file=feedback/generator-neg-2.md
+- [2026-11-18T05:32:05Z] round=2 agent=evaluator signal=skipped delta=generator accepted round-1 proposal file=(none)
 
 ## WorkLog
 <!--
