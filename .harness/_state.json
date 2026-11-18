@@ -40,7 +40,7 @@
   ],
   "completed": false,
   "pending_human": true,
-  "pending_worker_exit": false,
+  "pending_worker_exit": true,
   "sprint_branch": "harness/agent-title-system/sprint-1-title-protocol",
   "tier_a_last": null,
   "tier_a_history": [],

@@ -342,3 +342,12 @@ infografico/
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# harness skill — backup / mcp-warned / feedback / evidence / runtime artifacts
+.harness/*.backup-*
+.harness/.mcp-wildcard-warned
+.harness/*/sprints/*/feedback/
+.harness/*/sprints/*/evidence/
+.harness/ralph.log
+.harness/ralph.pid
+.harness/NEXT_SESSION_PROMPT.md
