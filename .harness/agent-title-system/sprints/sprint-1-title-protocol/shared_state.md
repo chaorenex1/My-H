@@ -33,7 +33,7 @@
   Format: `sprint-<N>-contract.md @ <SHA>`
 -->
 
-- _awaiting negotiation completion_
+- `sprint-1-contract.md @ 3bb8222f938633b5b8bd841bd27a9cec708dcc55` (status: active; max_iterations=6; rubric F1.0 / C0.85 / Co0.9 / D0.8)
 
 ## Negotiation
 <!--
@@ -74,4 +74,4 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
-- _no decisions yet_
+- [2026-11-18T05:32:45Z] decision: contract frozen after negotiation rounds=2 (generator accepted evaluator round-1 proposal); commit=3bb8222f938633b5b8bd841bd27a9cec708dcc55
