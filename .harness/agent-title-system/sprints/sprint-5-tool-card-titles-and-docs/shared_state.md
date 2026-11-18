@@ -29,7 +29,7 @@
   Format: `sprint-<N>-contract.md @ <SHA>`
 -->
 
-- sprint-5 contract frozen @ __SHA__ (rubric F 1.0 / Craft 0.85 / Consistency 0.9 / Documentation 0.9, max_iterations 8)
+- sprint-5 contract frozen @ 8c8f2c0b61 (rubric F 1.0 / Craft 0.85 / Consistency 0.9 / Documentation 0.9, max_iterations 8)
 
 ## Negotiation
 <!--
