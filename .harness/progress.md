@@ -328,3 +328,4 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T16:16:53Z] decision: sprint-5 negotiation round-1 evaluator dispatched, awaiting result
 - 2026-11-18T16:19:11Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-neg-1.md
 [2026-11-18T16:20:16Z] negotiation: round=1 generator=counter evaluator=counter (thresholds agreed, contract-text corrections requested)
+[2026-11-18T16:21:03Z] decision: sprint-5 negotiation round-2 generator dispatched, awaiting result
