@@ -26,14 +26,14 @@
   "max_cost_usd": 20,
   "cumulative_cost_usd": 1.27,
   "start_time": "2026-11-18T16:01:54Z",
-  "last_agent": null,
-  "next_action": "harness-loop:start-sprint-5-negotiation",
+  "last_agent": "generator",
+  "next_action": "harness-loop:negotiation-round-1-evaluator",
   "last_commit": "a0eea82aa51e30de84250d441d4493ccbf871262",
   "features_pass_fail": [],
   "completed": false,
   "pending_human": false,
   "pending_worker_exit": true,
-  "sprint_branch": null,
+  "sprint_branch": "harness/agent-title-system/sprint-5-tool-card-titles-and-docs",
   "tier_a_last": null,
   "tier_a_history": [],
   "tier_a_summary": {
@@ -54,7 +54,7 @@
     "4": "https://github.com/chaorenex1/My-H/issues/7",
     "5": "https://github.com/chaorenex1/My-H/issues/8"
   },
-  "effective_generator_backend": null,
+  "effective_generator_backend": "omp",
   "sprint_prs": {
     "1": "https://github.com/chaorenex1/My-H/pull/9",
     "2": "https://github.com/chaorenex1/My-H/pull/10",

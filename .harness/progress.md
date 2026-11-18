@@ -319,3 +319,8 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T15:33:42Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-4.md
 [2026-11-18T15:34:15Z] decision: sprint-4 PR opened https://github.com/chaorenex1/My-H/pull/12
 [2026-11-18T16:01:54Z] decision: operator paused after sprint-4 (PR #12); cursor advanced to sprint-5 negotiation, no worker dispatched
+[2026-11-18T16:06:06Z] backend pinned: omp (source: contract.md frontmatter; state cache was null)
+[2026-11-18T16:06:06Z] branch: harness/agent-title-system/sprint-5-tool-card-titles-and-docs (created) from harness/agent-title-system/sprint-4-session-card-and-fork
+- 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1.md
+- 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1-report.json
+[2026-11-18T16:11:05Z] decision: sprint-5 negotiation round-1 generator dispatched (backend=omp), awaiting result
