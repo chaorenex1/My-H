@@ -88,3 +88,4 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T07:26:31Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.95 documentation=0.9"
 - 2026-11-18T07:28:59Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-1.md
 [2026-11-18T07:33:38Z] stop: reason=pr-create-failed detail=git push blocked by GitHub push protection on a1a6a4a4cd (Google OAuth sample creds in omp-ui vendor rules.json); retried once, same result; operator unblock required
+- 2026-11-18T07:52:32Z | agent=omp | phase=pr | edit | agent/prompts/renderer.py
