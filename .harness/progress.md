@@ -220,3 +220,5 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T11:43:08Z | agent=omp | phase=evaluation | write | proc://bg_164/kill
 - 2026-11-18T11:56:04Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/evaluator-1.md
 [2026-11-18T11:57:55Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.92 documentation=0.9"
+- 2026-11-18T11:59:22Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-3.md
+[2026-11-18T11:59:58Z] decision: sprint-3 PR opened https://github.com/chaorenex1/My-H/pull/11

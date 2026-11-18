@@ -67,4 +67,5 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
+- [2026-11-18T12:14:00Z] decision: PR opened sprint-3 https://github.com/chaorenex1/My-H/pull/11 (bundling=split)
 - [2026-11-18T12:08:00Z] decision: sprint-3 iter-1 pass at 7eaad6cbbb14ee4791444148de286ed36e7ee24e; phase=pr
