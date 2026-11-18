@@ -67,3 +67,4 @@
 -->
 
 - _no decisions yet_
+- [2026-11-18T16:11:45Z] round=1 agent=generator signal=counter delta="F1.0/C0.85/Cons0.9/Doc0.9 max_iter=8; asks Evaluator to rule AS-5 assertion surface" file=feedback/generator-neg-1.md

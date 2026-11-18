@@ -324,3 +324,5 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1.md
 - 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1-report.json
 [2026-11-18T16:11:05Z] decision: sprint-5 negotiation round-1 generator dispatched (backend=omp), awaiting result
+[2026-11-18T16:11:45Z] agent=generator | phase=negotiation | omp-done | files=2 status=done progress=round-1
+[2026-11-18T16:16:53Z] decision: sprint-5 negotiation round-1 evaluator dispatched, awaiting result
