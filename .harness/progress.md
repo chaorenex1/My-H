@@ -318,3 +318,4 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T15:33:00Z] decision: sprint-4 iter-1 checkpoint 133d4afac3 (contract status done, phase pr)
 - 2026-11-18T15:33:42Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-4.md
 [2026-11-18T15:34:15Z] decision: sprint-4 PR opened https://github.com/chaorenex1/My-H/pull/12
+[2026-11-18T16:01:54Z] decision: operator paused after sprint-4 (PR #12); cursor advanced to sprint-5 negotiation, no worker dispatched
