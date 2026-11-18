@@ -348,3 +348,29 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T16:31:22Z] decision: sprint-5 contract frozen @ 8c8f2c0b61 (rubric F1.0/C0.85/Cons0.9/Doc0.9, max_iterations=8; negotiation resolved round 2 by generator accept)
 [2026-11-18T16:31:22Z] negotiation: round=2 generator=accept evaluator=skipped (contract frozen)
 [2026-11-18T16:32:28Z] decision: sprint-5 impl iter-1 generator dispatched, awaiting result
+- 2026-11-18T16:39:12Z | agent=omp | phase=impl | write | tests/tools/test_eval_card_metadata_contract.py
+- 2026-11-18T16:39:41Z | agent=omp | phase=impl | write | tests/tools/test_eval_card_metadata_contract.py
+- 2026-11-18T16:40:40Z | agent=omp | phase=impl | write | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:43:14Z | agent=omp | phase=impl | edit | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:44:03Z | agent=omp | phase=impl | edit | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:44:30Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:44:40Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:44:48Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T16:45:09Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T16:45:13Z | agent=omp | phase=impl | edit | hermes_cli/aux_slots.py
+- 2026-11-18T16:45:23Z | agent=omp | phase=impl | edit | hermes_cli/config_defaults_auxiliary.py
+- 2026-11-18T16:45:56Z | agent=omp | phase=impl | write | tests/ci/test_title_docs_contract.py
+- 2026-11-18T16:55:57Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:56:17Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:57:38Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:58:14Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:58:23Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:59:51Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:01:46Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:03:38Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:05:00Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/debug-resolve.sh
+- 2026-11-18T17:05:58Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:07:26Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T17:09:41Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1.md
+- 2026-11-18T17:09:46Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1-report.json
+[2026-11-18T17:11:41Z] agent=generator | phase=impl | omp-done | files=8 status=done iter=1 (validator: 0 violations)
