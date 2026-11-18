@@ -103,7 +103,7 @@ cache break — keep it the only one. Full detail:
   `_relay_sync_stream`, where `agent/auxiliary_hooks.py` emits `pre_auxiliary_call` /
   `post_auxiliary_call` (observer-only, fail-open, `aux_task` set); the main-loop
   `pre/post_api_request` events must NOT fire for aux calls (#79733).
-- **Titles**: `agent/title_router.py` — override→tiny→commit_message→smol→current, deduped by route triple, one `fallback=False` call each.
+- **Titles**: `agent/title_generator.py` — fork first, plan fallback, card top-up; a card is a `sessions.title` string sub-form; no Nerd Font.
 - Fallback models and credential pools are resolution-chain code: E2E them with real imports
   against a temp `HERMES_HOME`, not mocks (root rubric).
 

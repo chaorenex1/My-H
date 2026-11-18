@@ -220,3 +220,102 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T11:43:08Z | agent=omp | phase=evaluation | write | proc://bg_164/kill
 - 2026-11-18T11:56:04Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/evaluator-1.md
 [2026-11-18T11:57:55Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.92 documentation=0.9"
+- 2026-11-18T11:59:22Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-3.md
+[2026-11-18T11:59:58Z] decision: sprint-3 PR opened https://github.com/chaorenex1/My-H/pull/11
+[2026-11-18T12:00:10Z] decision: sprint-3 done (PR #11); transition to sprint-4-session-card-and-fork; backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T13:23:39Z] backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T13:23:39Z] branch: harness/agent-title-system/sprint-4-session-card-and-fork (created) from harness/agent-title-system/sprint-3-title-consumers-and-addressing
+[2026-11-18T13:23:39Z] negotiation: sprint-4 round 1 dispatch generator
+- 2026-11-18T13:23:51Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/shared_state.md
+- 2026-11-18T13:27:49Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-1.md
+- 2026-11-18T13:27:49Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-1-report.json
+[2026-11-18T13:28:50Z] agent=generator | phase=negotiation | omp-done | thread=GenNegSprint4R1 files=0 status=done
+[2026-11-18T13:28:50Z] negotiation: round=1 agent=generator signal=counter delta="F1.0/C0.85/K0.9/D0.85, iter 8" file=feedback/generator-neg-1.md
+- 2026-11-18T13:39:39Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/evaluator-neg-1.md
+[2026-11-18T13:41:09Z] agent=evaluator | phase=negotiation | omp-done | thread=EvalNegSprint4R1 files=1 status=done
+[2026-11-18T13:41:09Z] negotiation: round=1 generator=counter evaluator=counter
+[2026-11-18T13:41:09Z] negotiation: round 2 dispatch generator
+- 2026-11-18T13:48:03Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-2.md
+- 2026-11-18T13:48:14Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-2-report.json
+- 2026-11-18T13:49:35Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:49:59Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:26Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:44Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:53:55Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+[2026-11-18T13:55:37Z] negotiation: round=2 generator=accept evaluator=skipped (round resolved on accept; evaluator round-1 counter adopted)
+[2026-11-18T13:56:39Z] decision: sprint-4 contract frozen @ 747baf507fa794384e042bdc4f1a190eaddb9750
+- 2026-11-18T13:57:42Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/shared_state.md
+- 2026-11-18T14:20:00Z | agent=omp | phase=impl | write | agent/title_card.py
+- 2026-11-18T14:20:25Z | agent=omp | phase=impl | write | agent/prompts/system/title-card.md
+- 2026-11-18T14:20:25Z | agent=omp | phase=impl | write | agent/prompts/system/title-fork.md
+- 2026-11-18T14:20:32Z | agent=omp | phase=impl | edit | agent/prompts/system/manifest.json
+- 2026-11-18T14:20:38Z | agent=omp | phase=impl | edit | hermes_cli/config_defaults_auxiliary.py
+- 2026-11-18T14:20:47Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T14:21:06Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T14:21:28Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:21:41Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:21:58Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:22:07Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:22:12Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:22:30Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:23:44Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:23:51Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:24:03Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:24:09Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:24:14Z | agent=omp | phase=impl | edit | agent/turn_context.py
+- 2026-11-18T14:24:30Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:24:41Z | agent=omp | phase=impl | edit | hermes_state_titles.py
+- 2026-11-18T14:24:55Z | agent=omp | phase=impl | edit | hermes_state_titles.py
+- 2026-11-18T14:25:33Z | agent=omp | phase=impl | edit | tests/agent/test_title_drift.py
+- 2026-11-18T14:25:39Z | agent=omp | phase=impl | edit | tests/agent/test_title_drift.py
+- 2026-11-18T14:25:45Z | agent=omp | phase=impl | edit | tests/agent/test_prompt_sections.py
+- 2026-11-18T14:25:52Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T14:27:33Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T14:31:21Z | agent=omp | phase=impl | edit | agent/prompts/system/title-fork.md
+- 2026-11-18T14:31:48Z | agent=omp | phase=impl | write | tests/agent/test_title_card.py
+- 2026-11-18T14:31:58Z | agent=omp | phase=impl | edit | tests/agent/test_title_card.py
+- 2026-11-18T14:32:15Z | agent=omp | phase=impl | write | tests/hermes_state/test_session_title_cards.py
+- 2026-11-18T14:33:43Z | agent=omp | phase=impl | write | tests/agent/test_title_fork.py
+- 2026-11-18T14:34:14Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:34:21Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:34:39Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:34:52Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:35:03Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:35:11Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:36:16Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:36:16Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:38:34Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:39:46Z | agent=omp | phase=impl | edit | tests/agent/test_prompt_sections.py
+- 2026-11-18T14:42:57Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T14:43:03Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T14:43:13Z | agent=omp | phase=impl | edit | docs/prompt-system.md
+- 2026-11-18T14:43:13Z | agent=omp | phase=impl | edit | website/docs/developer-guide/prompt-assembly.md
+- 2026-11-18T14:43:21Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T14:43:46Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T14:43:59Z | agent=omp | phase=impl | edit | agent/AGENTS.md
+- 2026-11-18T14:45:09Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/eval-session-card-and-fork.sh
+- 2026-11-18T14:45:34Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:51:32Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:51:39Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:51:47Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:51:56Z | agent=omp | phase=impl | edit | tests/agent/test_title_fork.py
+- 2026-11-18T14:53:26Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/eval-session-card-and-fork.sh
+- 2026-11-18T14:56:06Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T14:58:27Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-1.md
+- 2026-11-18T14:58:37Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-1-report.json
+- 2026-11-18T15:09:33Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/evidence/iter-1/phase3_independent_probe.py
+- 2026-11-18T15:22:31Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/evidence/iter-1/eval-session-card-and-fork-evaluator.sh
+- 2026-11-18T15:23:34Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/evidence/iter-1/eval-session-card-and-fork-evaluator.sh
+- 2026-11-18T15:25:19Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/evaluator-1.md
+- 2026-11-18T15:25:39Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/evaluator-1-report.json
+[2026-11-18T15:29:15Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.9 documentation=0.9"
+[2026-11-18T15:33:00Z] decision: sprint-4 iter-1 checkpoint 133d4afac3 (contract status done, phase pr)
+- 2026-11-18T15:33:42Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-4.md
+[2026-11-18T15:34:15Z] decision: sprint-4 PR opened https://github.com/chaorenex1/My-H/pull/12
+[2026-11-18T16:01:54Z] decision: operator paused after sprint-4 (PR #12); cursor advanced to sprint-5 negotiation, no worker dispatched

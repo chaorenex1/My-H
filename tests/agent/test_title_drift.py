@@ -404,7 +404,7 @@ def test_refresh_auto_title_never_bumps_a_higher_authority_or_a_user_name(db):
 def test_as1_drift_regeneration_uses_the_configured_generator_and_the_expected_title_cas(
     monkeypatch, tmp_path, db, caplog,
 ):
-    """A drifted ``llm`` title is regenerated through the plan generator (fork normalised) and
+    """A drifted ``llm`` title is regenerated through the plan path (drift never starts a fork) and
     replaced with ``refresh_auto_title(expected_title=…)`` — never an unconditional write."""
     import logging
     from types import SimpleNamespace
@@ -463,7 +463,6 @@ def test_as1_drift_regeneration_uses_the_configured_generator_and_the_expected_t
         ("title_generation", "openrouter", "title-model")
     ]
     assert refresh_calls == [{"source": "llm", "expected_title": "Fix parser crash on empty input"}]
-    assert "generator=fork normalised to the plan path" in caplog.text
 
 
 def test_as1_model_upgrade_off_closes_the_drift_path(monkeypatch, tmp_path, db):

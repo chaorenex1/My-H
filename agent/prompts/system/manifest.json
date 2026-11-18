@@ -565,6 +565,38 @@
       "scope": "request"
     },
     {
+      "key": "title_card",
+      "path": "title-card.md",
+      "tier": "context",
+      "gate": "always",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": ["nerd_fonts"],
+      "context_types": {
+        "nerd_fonts": "bool"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "title_fork",
+      "path": "title-fork.md",
+      "tier": "context",
+      "gate": "always",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": ["card", "title_language", "nerd_fonts"],
+      "context_types": {
+        "card": "bool",
+        "title_language": "str",
+        "nerd_fonts": "bool"
+      },
+      "scope": "request"
+    },
+    {
       "key": "task_label",
       "path": "task-label.md",
       "tier": "context",

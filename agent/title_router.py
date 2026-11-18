@@ -107,6 +107,19 @@ def _title_slot_route(
     )
 
 
+@dataclass(frozen=True)
+class TitlePlanResult:
+    """One plan execution: the accepted title, and whether a terminal decline ended it.
+
+    ``declined`` is the model's prescribed ``<title/>`` / ``<title>none</title>``: the naming
+    attempt is over, so a caller must not retry candidates or synthesise a title. An exhausted
+    plan is ``title=None, declined=False`` — a failure, not a decision.
+    """
+
+    title: Optional[str]
+    declined: bool = False
+
+
 class _Plan:
     """Depth-first candidate accumulator; ``seen`` is the dedupe key set that also cuts cycles."""
 
@@ -231,14 +244,33 @@ def run_title_plan(
     call: Optional[Callable[..., Any]] = None,
     request_options: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
-    """Run ``plan`` serially, one ``call_llm`` per candidate, and return the first accepted title.
+    """Run ``plan`` serially and return the first accepted title, else ``None``.
+
+    Thin wrapper over :func:`run_title_plan_attempt` for callers that only need the title;
+    ``None`` is both "exhausted" and "declined" there, which is why the session titler that must
+    tell those apart uses the attempt form.
+    """
+    return run_title_plan_attempt(
+        plan, messages, call=call, request_options=request_options
+    ).title
+
+
+def run_title_plan_attempt(
+    plan: Iterable[TitleCandidate],
+    messages: list[dict[str, Any]],
+    *,
+    call: Optional[Callable[..., Any]] = None,
+    request_options: Optional[dict[str, Any]] = None,
+) -> TitlePlanResult:
+    """Run ``plan`` serially, one ``call_llm`` per candidate, and report the first accepted title.
 
     Every call carries the candidate's explicit route, its ``task`` (limits, billing and log
     attribution), its ``timeout`` and ``fallback=False``: the plan already expanded every
     configured chain, so the auxiliary client must not walk one a second time. A candidate that
     raises, answers empty, or answers unusably falls through to the next one; a terminal decline
     (``<title/>`` or ``<title>none</title>``, parsed by ``agent.title_parser``) ends the attempt
-    with ``None``. No retries, no concurrency, no best-of — ``None`` leaves stage 0 in place.
+    with ``declined=True``. No retries, no concurrency, no best-of — ``title=None`` leaves stage 0
+    in place.
 
     ``call`` is the transport seam (defaults to this module's ``call_llm``, so a test can stand in
     one recorder) and ``request_options`` are the caller's own request settings — the session
@@ -277,7 +309,7 @@ def run_title_plan(
                 candidate.provider,
                 candidate.model or "<default>",
             )
-            return None
+            return TitlePlanResult(None, declined=True)
         if parsed.title:
-            return parsed.title
-    return None
+            return TitlePlanResult(parsed.title)
+    return TitlePlanResult(None)

@@ -1621,11 +1621,26 @@ No background `auto-title` thread starts and no automatic title-model request is
 explicit repair command `hermes sessions retitle-skills` still calls the model. `enabled: false`
 still disables both stages.
 
-`auxiliary.title_generation.generator` selects how a session title is generated: `plan` walks the
-ordered title-model candidates, `fork` (the default) runs a forked side turn that shares the
-reply's prefix. The fork path is not implemented yet, so `fork` — and an unset key — is normalised
-to the `plan` path and records a debug-level degradation marker instead of leaving the session
-unnamed.
+`auxiliary.title_generation.generator` selects how a session title is generated: `fork`
+(the default, and what an unset key means) names the session from a side turn that replays the
+main reply's system prompt, tools and history, so the request hits the reply's prompt cache;
+`plan` walks the ordered title-model candidates instead. A fork that produces nothing — a
+timeout, a provider refusal, an empty reply, or an unavailable session model — falls back to the
+plan, so naming never silently skips. The fork side turn never writes the transcript, moves the
+session's latest message or spends a tool call.
+
+`auxiliary.title_generation.card_icons` controls the card that heads the title: `emoji`
+(the default) stores `<icon> <CODE>: <title>` inside `sessions.title` itself (for example
+`🅿️ PARK: Fix flaky park tests`), and `boring` stores the plain title. The card is not a column
+or a payload field: it is stripped for comparison, drift and title search, so `resume` still
+finds a carded session by its plain name. `boring` also asks the model for no card and sends no
+separate card request. Naming never consumes Nerd Fonts: the naming prompts always render with
+the icon font off, and a model's `nf` attribute is discarded.
+
+After a fork fallback, a plain plan title receives one `title-card` request to add the icon and
+code; a failed or unusable card reply leaves the plain title, and the request is never retried.
+When a title is regenerated because the conversation drifted, it keeps the card it already had
+(unless `card_icons: boring`), and a card-only difference is not treated as a rewrite.
 
 On a `custom` main provider (llama.cpp, Ollama, vLLM, LM Studio and other self-hosted
 OpenAI-compatible servers) the title model call is sent **after** the turn's reply has

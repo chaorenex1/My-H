@@ -1,10 +1,14 @@
 """Auto-generate short session titles from the user's opening message.
 
 Two stages, both off the critical path: an **instant** deterministic title (written before the model
-is called, cannot fail), then an **upgrade** from one small-model call (cheap tier, thinking off,
-``<title>`` marker protocol per ADR-21 D4: the prompt renders from ``title-system.md`` and the
-reply is parsed by ``agent.title_parser``). Storage enforces provenance ``derived < llm < user``:
-stage 2 only replaces stage 1 and neither replaces a name the user typed."""
+is called, cannot fail), then an **upgrade** from one small-model call under the ``<title>`` marker
+protocol (ADR-21 D4, parsed by ``agent.title_parser``). The upgrade defaults to a **fork** side turn
+over the main reply's warm prefix (``title-fork.md``); a fork that produces nothing falls back to the
+**plan** of ordered title-model candidates (``title-system.md``). Only a plan result gets one
+``title-card`` top-up request when cards are on. A card is a string sub-form of the stored title
+(``🅿️ PARK: Fix flaky park tests``, ``agent.title_card``), never a column. Storage enforces
+provenance ``derived < llm < user``: stage 2 only replaces stage 1 and neither replaces a name the
+user typed."""
 
 import logging
 import os
@@ -19,6 +23,7 @@ from agent.auxiliary_client import call_llm
 from agent.context_compressor import LEGACY_SUMMARY_PREFIX
 from agent.delegation_context import is_dispatcher_owned_worker_context
 from agent.message_content import flatten_message_text
+from agent.title_card import keep_title_card, parse_card_reply, split_card_title
 
 logger = logging.getLogger(__name__)
 
@@ -129,27 +134,32 @@ def _auto_title_enabled() -> bool:
 
 
 def _title_generator() -> str:
-    """``auxiliary.title_generation.generator``, normalised onto the one implemented path.
+    """``auxiliary.title_generation.generator``, normalized onto the two implemented paths.
 
     ADR-21 D6 names two generators: ``fork`` (the default) runs the titling as a side turn sharing
-    the main reply's prefix, and ``plan`` spends the ordered candidate plan. Sprint 3 implements
-    the plan path only, so ``fork`` — and an unset key, which resolves to the same default — is
-    normalised here rather than skipping naming silently. The marker is DEBUG because ``fork`` is
-    the default: a WARNING would fire on every ordinary run. Sprint 4 replaces the normalisation.
+    the main reply's prefix, and ``plan`` spends the ordered candidate plan. ``fork`` also covers an
+    unset key and an unknown value: the default must never leave a session unnamed over a typo, and
+    a failed fork falls back to the plan anyway.
     """
-    requested = ""
     try:
         requested = str(_title_config().get("generator") or "").strip().lower()
     except Exception:
         logger.debug("Failed to read title_generation.generator", exc_info=True)
-    if requested == "plan":
-        return "plan"
-    logger.debug(
-        "title generation: generator=%s normalised to the plan path (the fork side turn lands "
-        "in a later sprint)",
-        requested or "unset",
-    )
-    return "plan"
+        requested = ""
+    return "plan" if requested == "plan" else "fork"
+
+
+def _card_icons() -> str:
+    """``auxiliary.title_generation.card_icons``; ``boring`` turns every card off (ADR-21 D11).
+
+    Only ``boring`` disables the card: it is the naming pipeline's gate, not a parser mode
+    (``split_card_title`` always parses, so de-carded comparison and search keep working).
+    """
+    try:
+        return str(_title_config().get("card_icons") or "emoji").strip().lower()
+    except Exception:
+        logger.debug("Failed to read title_generation.card_icons", exc_info=True)
+        return "emoji"
 
 
 def _model_title_upgrade_enabled() -> bool:
@@ -394,6 +404,7 @@ def generate_title(
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
     max_input_chars: int = MAX_TITLE_INPUT_CHARS,
+    on_terminal: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """Title from the opening message alone (waiting for the assistant made this slow and bought
     nothing). ``runtime_validator`` runs right before the request; False skips silently.
@@ -402,6 +413,8 @@ def generate_title(
     snapshot), the call is skipped silently — no request is sent, so a stale title request can't reload a
     model the runtime already unloaded (#19027). ``max_input_chars`` lets a caller pass an already bounded
     conversation context (title drift) without the opening-message budget cutting its latest turns.
+    ``on_terminal`` fires on the model's prescribed ``<title/>`` decline: ``None`` is then a decision
+    ("nothing to name"), not a failure, and the caller must not synthesise a title.
     """
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
@@ -422,12 +435,11 @@ def generate_title(
         return None
     try:
         from agent.prompts.renderer import render_request
-        from agent.title_router import run_title_plan, title_model_plan
+        from agent.title_router import run_title_plan_attempt, title_model_plan
 
         # ADR-21 D6/D3: the titler is a consumer of the sprint-2 plan — it resolves the route
         # ladder once (cheap lane first, session model last) and spends at most one call per
         # candidate. An empty plan (both gates off, or nothing configured) means zero calls.
-        _title_generator()  # leaves the fork→plan degradation marker when it normalises
         plan = title_model_plan(main_runtime, require_model_upgrade=False)
         if not plan:
             logger.debug("Title generation skipped: no title-model candidate is configured")
@@ -471,13 +483,139 @@ def generate_title(
         # The marker parser (inside the executor) owns the shared guard (quotes / `Title:` /
         # punctuation stripped; an answer-shaped output is rejected, not truncated) and the
         # `<title/>` / `<title>none</title>` decline, which ends this naming attempt.
-        return run_title_plan(plan, messages, call=_call, request_options=options)
+        result = run_title_plan_attempt(plan, messages, call=_call, request_options=options)
+        if result.declined:
+            _safe_callback(on_terminal, (), "%s terminal callback failed", "Title generation")
+        return result.title
     except Exception as e:
         # WARNING so it shows in agent.log without debug mode; stack at debug.
         logger.warning("Title generation failed: %s", e)
         logger.debug("Title generation traceback", exc_info=True)
         _report_failure(failure_callback, e, "Title generation")
         return None
+
+
+def run_title_fork(parent: Any, prompt: str, *, history: Optional[list[dict[str, Any]]] = None) -> str:
+    """One naming side turn over *parent*'s warm prefix; ``""`` when it produced nothing.
+
+    Reuses the shared ephemeral-fork lifecycle (``agent.ephemeral_prompt``): same runtime, cached
+    system prompt and ``tools[]`` as the parent, an empty tool whitelist, ``max_iterations=1``, no
+    ``task_cfg`` (so the fork is never routed away from the parent model and the history is
+    replayed verbatim rather than digested), and usage billed to ``title_generation``. Never
+    raises: a timeout, a provider refusal or an empty reply is a fallback signal, not an error.
+    """
+    from agent.ephemeral_prompt import run_ephemeral_prompt
+
+    try:
+        answer = run_ephemeral_prompt(
+            parent,
+            prompt,
+            task="title_generation",
+            max_iterations=1,
+            max_output_tokens=TITLE_MAX_TOKENS,
+            history=history,
+        )
+    except Exception as exc:
+        logger.warning("title-fork: outcome=error (%s)", exc)
+        logger.debug("title-fork traceback", exc_info=True)
+        return ""
+    if not answer:
+        logger.debug("title-fork: outcome=fallback (empty reply)")
+        return ""
+    logger.debug("title-fork: outcome=ok")
+    return answer
+
+
+def _first_nonempty(text: str) -> str:
+    return next((line.strip() for line in (text or "").splitlines() if line.strip()), "")
+
+
+def parse_fork_reply(raw: str) -> tuple[Optional[str], bool]:
+    """``(title, terminal)`` from one naming side turn's reply.
+
+    The card forms are the fork prompt's own output shape, so the card split runs before the shared
+    guard: ``<title emoji=… code=…>Fix …</title>`` and ``🅿️ PARK: Fix …`` both yield the carded
+    title, while prose keeps the ``<title>`` marker parser's first-line/guard behaviour. A terminal
+    ``<title/>`` is reported so the caller stops instead of falling back to the plan.
+    """
+    from agent.title_parser import clean_title, parse_title_output
+
+    probe = parse_title_output(raw)
+    if probe.terminal:
+        return None, True
+    card, plain = split_card_title(raw)
+    if card is not None or plain != _first_nonempty(raw):
+        guarded = clean_title(plain)
+        if not guarded:
+            return None, False
+        return (f"{card}: {guarded}" if card else guarded), False
+    return probe.title, False
+
+
+def _title_fork_message(opener: str, *, cards: bool) -> str:
+    """The fork's one user turn: the registered ``title_fork`` request plus the turn's opener."""
+    from agent.prompts.renderer import render_request
+
+    request = render_request(
+        "title_fork",
+        {"card": cards, "title_language": _title_language(), "nerd_fonts": False},
+    )
+    return f"{request}\n\n{opener}" if opener else request
+
+
+def _fork_title(agent: Any, opener: str, *, cards: bool) -> tuple[Optional[str], bool, bool]:
+    """``(title, terminal, produced)`` from one fork attempt over the parent's snapshot.
+
+    The fork is an integration boundary (its own process state, provider, timeout), so a raise is a
+    fallback signal as much as an empty reply is: naming must never fail the caller's turn.
+    """
+    history = list(getattr(agent, "_session_messages", None) or [])
+    try:
+        reply = run_title_fork(agent, _title_fork_message(opener, cards=cards), history=history)
+    except Exception as exc:  # health: allow BLE001 -- a fork failure falls back to the plan
+        logger.warning("title-fork: outcome=error (%s)", exc)
+        logger.debug("title-fork traceback", exc_info=True)
+        return None, False, False
+    if not reply:
+        return None, False, False
+    title, terminal = parse_fork_reply(reply)
+    if terminal:
+        return None, True, False
+    return title, False, title is not None
+
+
+def request_title_card(plain_title: str, *, main_runtime: dict | None = None) -> Optional[str]:
+    """One ``title-card`` request for *plain_title*; the parsed card, or ``None``.
+
+    A single call on the ``title_generation`` route (the one place the auxiliary pin applies besides
+    the plan), with no retry: a failed, empty or unusable reply leaves the plain title and never
+    spends a second request. Only the outcome is logged, never the title.
+    """
+    from agent.prompts.renderer import render_request
+
+    try:
+        response = call_llm(
+            task="title_generation",
+            messages=[
+                {
+                    "role": "system",
+                    "content": render_request("title_card", {"nerd_fonts": False}),
+                },
+                {"role": "user", "content": plain_title},
+            ],
+            main_runtime=main_runtime,
+            max_tokens=TITLE_MAX_TOKENS,
+            temperature=None,
+            reasoning_config={"enabled": False},
+            fallback=False,
+        )
+        card = parse_card_reply(response.choices[0].message.content or "")
+    except Exception as exc:
+        logger.warning("title-card: outcome=error (%s)", exc)
+        logger.debug("title-card traceback", exc_info=True)
+        return None
+    logger.debug("title-card: outcome=%s", "ok" if card else "cancel")
+    return card
 
 
 def _has_upgraded_title(session_db, session_id: str) -> bool:
@@ -559,6 +697,70 @@ def apply_instant_title(
         return None
 
 
+def _naming_attempt(
+    user_message: str,
+    *,
+    agent: Any,
+    main_runtime: dict | None,
+    failure_callback: Optional[FailureCallback],
+    runtime_validator: Optional[RuntimeValidator],
+    title_preview: str | None,
+) -> tuple[Optional[str], bool]:
+    """``(title, terminal)`` for one stage-1 attempt: fork first, plan on a fork fallback.
+
+    The fork is the default generator and the only path that needs the live parent. A fork that
+    produces nothing falls back to ``generate_title``'s ordered plan; only a *plan* result of a
+    fork-requested naming earns the single ``title-card`` top-up (ADR-21 D11). ``boring`` strips
+    cards from whichever generator answered and sends no card request at all.
+    """
+    if not _auto_title_enabled():
+        logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
+        return None, False
+    if runtime_validator is not None:
+        try:
+            if not runtime_validator():
+                logger.debug("Title generation skipped: runtime validator returned False")
+                return None, False
+        except Exception:  # fail open: a broken validator must not disable titling
+            logger.debug("Title runtime validator raised; proceeding", exc_info=True)
+    cards = _card_icons() != "boring"
+    generator = _title_generator()
+    opener = build_title_input(user_message, title_preview)
+    title: Optional[str] = None
+    produced_by_fork = False
+    if generator == "fork" and agent is not None and opener.strip():
+        title, terminal, produced_by_fork = _fork_title(agent, opener, cards=cards)
+        if terminal:
+            return None, True
+    if not produced_by_fork:
+        declined = False
+
+        def _note_terminal() -> None:
+            nonlocal declined
+            declined = True
+
+        title = generate_title(
+            user_message,
+            failure_callback=failure_callback,
+            main_runtime=main_runtime,
+            runtime_validator=runtime_validator,
+            title_preview=title_preview,
+            on_terminal=_note_terminal,
+        )
+        if declined:
+            return None, True
+    if not title:
+        return None, False
+    card, plain = split_card_title(title)
+    if card is not None:
+        title = f"{card}: {plain}" if cards else plain
+    elif cards and generator == "fork" and not produced_by_fork:
+        top_up = request_title_card(plain, main_runtime=main_runtime)
+        if top_up:
+            title = f"{top_up}: {plain}"
+    return title, False
+
+
 def auto_title_session(
     session_db,
     session_id: str,
@@ -568,11 +770,16 @@ def auto_title_session(
     title_callback: Optional[TitleCallback] = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
+    agent: Any = None,
 ) -> None:
     """Generate and store the model title (daemon-thread target); skips sessions already carrying an
     ``llm``/``user`` title (a ``derived`` one is expected — upgrading it is the point). Never lets an
     exception escape (the threading excepthook would spray a traceback into the terminal); the canonical
-    trigger is the post-``hermes update`` window where lazy imports read NEW source against OLD modules."""
+    trigger is the post-``hermes update`` window where lazy imports read NEW source against OLD modules.
+
+    ``agent`` is the live parent: the default ``fork`` generator names the session from a side turn
+    over its cache-warm prefix, and its absence (an unavailable session model) falls through to
+    the plan."""
     try:
         if not session_db or not session_id or _has_upgraded_title(session_db, session_id):
             return
@@ -587,10 +794,19 @@ def auto_title_session(
         # Same for the accounting context, so the title call's token usage is recorded against this session
         # (task='title_generation', #23270).
         set_accounting_context(session_db, session_id)
-        title, source = generate_title(
-            user_message, failure_callback=failure_callback, main_runtime=main_runtime,
-            runtime_validator=runtime_validator, title_preview=title_preview,
-        ), "llm"
+        title, terminal = _naming_attempt(
+            user_message,
+            agent=agent,
+            main_runtime=main_runtime,
+            failure_callback=failure_callback,
+            runtime_validator=runtime_validator,
+            title_preview=title_preview,
+        )
+        if terminal:
+            # The model's prescribed `<title/>`: nothing to name, and no candidate may be retried.
+            logger.debug("Auto-title ended on the model's <title/> decline")
+            return
+        source = "llm"
         if title and _is_provisional_greeting_title(title):
             source = "derived"
         if not title:  # the inline attempt declined collisions; off the critical path the lineage scan is affordable
@@ -663,11 +879,15 @@ def maybe_auto_title(
     title_callback: Optional[TitleCallback] = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
+    agent: Any = None,
 ) -> Optional[threading.Thread]:
     """Instant inline title, then a daemon-thread upgrade. Call at the START of a turn, before the model.
 
-    Returns the upgrade thread: already started, or — when ``title_upgrade_must_wait_for_turn`` — left
-    UNSTARTED for the caller to hand to ``start_title_upgrade`` once the turn's model request settled."""
+    ``agent`` rides into ``auto_title_session`` for the default ``fork`` generator: the side turn
+    replays that parent's system prompt, tools and history, so the naming request hits its prompt
+    cache. Returns the upgrade thread: already started, or — when ``title_upgrade_must_wait_for_turn``
+    — left UNSTARTED for the caller to hand to ``start_title_upgrade`` once the turn's model request
+    settled."""
     if not session_db or not session_id or not user_message:
         return None
     # History may be pre- or post-message. Past the opening turn, skip once the session holds an
@@ -705,7 +925,7 @@ def maybe_auto_title(
     # profile under multiplex, titling X's session with the default profile's model and billing its key.
     from hermes_threading import spawn_context_thread
     upgrade_kwargs = dict(failure_callback=failure_callback, main_runtime=main_runtime, title_callback=title_callback,
-                          runtime_validator=runtime_validator)
+                          runtime_validator=runtime_validator, agent=agent)
     if isinstance(title_preview, str) and title_preview.strip():
         upgrade_kwargs["title_preview"] = title_preview
     upgrade = spawn_context_thread(
@@ -884,13 +1104,19 @@ def _regenerate_title_from_recent(agent, session_db, session_id: str, recent: li
 
 def _refresh_title_if_drifted(agent, session_db, session_id: str, title: str, source: str,
                               recent: list[dict]) -> Optional[str]:
-    """Judge ``fits`` and refresh the title when the conversation moved away from it."""
+    """Judge ``fits`` and refresh the title when the conversation moved away from it.
+
+    The judge and the write comparison both work on the de-carded text: a card that differs is not
+    a rewrite. A regenerated plain title keeps the stored card under ``emoji`` and is stored plain
+    under ``boring`` (``keep_title_card`` is not called there — no card is ever added back).
+    """
     from agent.judgment import JudgmentError, JudgmentRequest, judge, load_questions
 
+    plain_title = split_card_title(title)[1]
     try:
         question = load_questions("title-drift")["fits"]
         result = judge(
-            JudgmentRequest(state={"title": title, "recent": recent}, questions={"fits": question}),
+            JudgmentRequest(state={"title": plain_title, "recent": recent}, questions={"fits": question}),
             purpose="title-drift",
             timeout_ms=TITLE_DRIFT_JUDGE_TIMEOUT_MS,
         )
@@ -908,7 +1134,15 @@ def _refresh_title_if_drifted(agent, session_db, session_id: str, title: str, so
         return None
 
     refreshed = _regenerate_title_from_recent(agent, session_db, session_id, recent)
-    if not refreshed or refreshed == title or _is_provisional_greeting_title(refreshed):
+    if not refreshed:
+        return None
+    if _card_icons() == "boring":
+        refreshed = split_card_title(refreshed)[1]
+    else:
+        refreshed = keep_title_card(refreshed, title)
+    if (not refreshed or refreshed == title
+            or split_card_title(refreshed)[1] == plain_title
+            or _is_provisional_greeting_title(refreshed)):
         return None
     refresh = getattr(session_db, "refresh_auto_title", None)
     if not callable(refresh):

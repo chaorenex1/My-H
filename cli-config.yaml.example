@@ -991,7 +991,8 @@ advisor:
 #   title_generation:
 #     enabled: true          # set false to disable auto-title generation
 #     model_upgrade_enabled: true  # set false to keep the instant derived title and skip the model call
-#     generator: fork        # plan | fork; fork is normalised to the plan path until it lands
+#     generator: fork        # fork | plan; fork replays the reply's prefix and falls back to the plan
+#     card_icons: emoji      # emoji | boring; boring stores the plain title and sends no card request
 #     provider: "auto"
 #     model: ""
 #     timeout: 30
