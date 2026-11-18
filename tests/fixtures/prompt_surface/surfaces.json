@@ -2,7 +2,7 @@
   "cli-code.claude": {
     "prompt_tokens": {
       "context": 0,
-      "stable": 8912,
+      "stable": 10563,
       "volatile": 0
     },
     "tool_tokens": 16753,

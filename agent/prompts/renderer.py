@@ -29,7 +29,7 @@ from hermes_constants import get_hermes_home, get_skills_dir
 from agent.prompts.hermes_help import hermes_agent_help_guidance, is_hermes_agent_help
 from agent.prompts.kanban import is_kanban_intent, kanban_guidance
 from agent.prompts.platforms import IDENTITY_CAPS, resolve_platform_hint
-from agent.prompts.project_context import render_project_context
+from agent.prompts.project_context import effective_project_dir, render_project_context
 from agent.prompts.prompt_sections import (
     SYSTEM_PROMPT_DIR,
     read_prompt_text,
@@ -40,6 +40,7 @@ from agent.prompts.rules import rule_prompt
 from agent.prompts.skills import bundled_skill_rows, skill_rows
 from agent.prompts.toolsets import PM_DEFAULT_TOOLSETS, resolve_tool_names, tool_inventory_rows
 from agent.prompts.urls import internal_url_rows
+from agent.ttsr_prompts import escape_harness_tags
 
 if TYPE_CHECKING:  # the assembler owns the dataclass; avoid an import cycle at runtime
     from agent.prompts.assembler import SubagentRole
@@ -302,7 +303,7 @@ def render_closing(
     omitted; delivery and critical always apply. The block judges its own project kind
     (same detection as :func:`render_runtime`); no caller gate decides it.
     """
-    project = Path(project_dir) if project_dir is not None else Path.cwd()
+    project = effective_project_dir(project_dir)
     parts = [
         render_workflow(subagent=subagent, **workflow) if rule_project_languages(project) else "",
         render_delivery(subagent=subagent),
@@ -342,7 +343,7 @@ def render_runtime(
     from the resulting tool names, so a section never advertises a missing capability.
     """
     available = resolve_tool_names(toolsets=toolsets, enable_tools=enable_tools)
-    project = Path(project_dir) if project_dir is not None else Path.cwd()
+    project = effective_project_dir(project_dir)
     coding_project = bool(rule_project_languages(project))
 
     parts: list[str] = []
@@ -483,6 +484,53 @@ def render_eager_todo(*, forced: bool = False) -> str:
     return render_request("eager_todo", {"forced": bool(forced)})
 
 
+# Request notices are bounded here, not by a manifest budget: a ``tail`` truncation of an
+# XML envelope would cut its closing tag and let the model read an unterminated block (ADR-20 D3).
+_NOTICE_ROW_CHARS = 320
+_NOTICE_MAX_SEARCHES = 3
+_NOTICE_MAX_ACTIONS = 8
+
+
+def _notice_row(value: Any, *, max_chars: int = _NOTICE_ROW_CHARS) -> str:
+    """One preformatted notice bullet: single line, clipped, harness tags escaped."""
+    text = " ".join(str(value or "").split())
+    if len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return escape_harness_tags(text)
+
+
+def _notice_rows(values: Sequence[Any], *, limit: int) -> list[str]:
+    return [row for row in (_notice_row(value) for value in values) if row][:limit]
+
+
+def render_session_tool_search_notice(*, searches: Sequence[str]) -> str:
+    """Latest session tool searches (newest first, at most 3); "" when none.
+
+    ``searches`` are preformatted one-line rows (query and matched tool names) owned by the
+    session ledger; this helper bounds and escapes them, never re-parses tool payloads.
+    """
+    rows = _notice_rows(searches, limit=_NOTICE_MAX_SEARCHES)
+    return render_request("session_tool_search_notice", {"searches": rows}) if rows else ""
+
+
+def render_session_skill_search_notice(*, searches: Sequence[str]) -> str:
+    """Latest session skill searches (newest first, at most 3); "" when none."""
+    rows = _notice_rows(searches, limit=_NOTICE_MAX_SEARCHES)
+    return render_request("session_skill_search_notice", {"searches": rows}) if rows else ""
+
+
+def render_background_review_skill_reminder(*, actions: Sequence[str]) -> str:
+    """Skill writes a background review already landed; "" when the review changed no skills."""
+    rows = _notice_rows(actions, limit=_NOTICE_MAX_ACTIONS)
+    return render_request("background_review_skill_reminder", {"actions": rows}) if rows else ""
+
+
+def render_background_review_memory_reminder(*, actions: Sequence[str]) -> str:
+    """Memory writes a background review already landed; "" when it changed no memories."""
+    rows = _notice_rows(actions, limit=_NOTICE_MAX_ACTIONS)
+    return render_request("background_review_memory_reminder", {"actions": rows}) if rows else ""
+
+
 def render_irc_incoming(
     *,
     sender: str,
@@ -612,11 +660,21 @@ def render_subagent_yield_reminder(
     )
 
 
+def render_workpool_batch(*, pool: str, batch: str, items: Sequence[str]) -> str:
+    """One workpool batch turn; ``items`` are raw item texts, numbered 1-based here."""
+    rows = [{"index": index + 1, "text": str(text)}
+            for index, text in enumerate(items)]
+    return render_request("workpool_batch", {
+        "pool": str(pool), "batch": str(batch), "items": rows})
+
+
 __all__ = [
     "HEAD_SEPARATOR",
     "MEMORIES_GUIDANCE_PATH",
     "RUNTIME_HEADING",
     "render_autoload_skills",
+    "render_background_review_memory_reminder",
+    "render_background_review_skill_reminder",
     "render_closing",
     "render_communication",
     "render_critical",
@@ -632,6 +690,8 @@ __all__ = [
     "render_role",
     "render_runtime",
     "render_safety",
+    "render_session_skill_search_notice",
+    "render_session_tool_search_notice",
     "render_subagent_async_pending",
     "render_subagent_completion_probe",
     "render_subagent_prompt",
@@ -641,4 +701,5 @@ __all__ = [
     "render_tool_policy",
     "render_tool_policy_from_config",
     "render_workflow",
+    "render_workpool_batch",
 ]

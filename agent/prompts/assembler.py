@@ -163,6 +163,7 @@ def assemble_main(ctx: RenderContext) -> str:
             append_prompt=facts.append_prompt,
             environment_probe=facts.environment_probe,
             skip_context_files=facts.skip_context_files,
+            session_id=facts.session_id,
         ),
     )
     return _join(parts)

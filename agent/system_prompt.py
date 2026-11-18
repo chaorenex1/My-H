@@ -31,6 +31,7 @@ from agent.prompts.assembler import (
     assemble_subagent_parts,
 )
 from agent.prompts.platforms import resolve_platform_hint
+from agent.prompts.project_context import effective_project_dir
 from agent.runtime_cwd import resolve_context_cwd
 from hermes_constants import get_default_hermes_root
 from utils import is_truthy_value
@@ -211,9 +212,11 @@ def _context_length(agent: Any) -> Optional[int]:
 def _context_cwd(agent: Any):
     """TERMINAL_CWD when set (gateway); None lets discovery fall back to the launch dir.
     Desktop launch artifacts skip the session cwd but still honor the profile-scoped
-    TERMINAL_CWD."""
+    TERMINAL_CWD. A home cwd redirects to the profile's empty workspace (ADR-19 D10), so
+    repo detection and context discovery never scan the user's home."""
     launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
-    return resolve_context_cwd(include_session_override=not launch_artifact)
+    cwd = resolve_context_cwd(include_session_override=not launch_artifact)
+    return effective_project_dir(cwd) if cwd is not None else None
 
 
 def _workspace_roots(agent: Any, cwd) -> tuple[str, ...]:

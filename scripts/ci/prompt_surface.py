@@ -87,6 +87,10 @@ def _pin_environment() -> None:
     # Import psutil under the real platform first: it selects its OS backend at import time, and
     # the ``linux`` pin below would make it look for ``resource`` on a Windows host.
     __import__("psutil")
+    # Ripgrep backs project-language detection, and the ``linux`` pin hides the host's binary
+    # from ``_rg_binary``. Resolve it first so the code surface stays a coding repo.
+    from agent.prompts import rules as prompt_rules
+    rg_binary = prompt_rules._rg_binary()
     sys.platform = "linux"  # skills index ``platforms:`` gate
 
     import hermes_time
@@ -100,6 +104,23 @@ def _pin_environment() -> None:
     # The toolchain probe line reports the host's python/node/pip; it is environment, not code.
     from tools import env_probe
     env_probe.get_environment_probe_line = lambda **_k: ""  # type: ignore[assignment]
+    # The code surface renders ``<project-context>``: pin every host input it reads, so the
+    # committed bytes do not depend on the machine, its home layout or a running Bot Screen.
+    from agent import prompt_builder as prompt_builder_module
+    from hermes_platform.host import facts as host_facts
+    host_facts.os_family = lambda: "linux"  # type: ignore[assignment]
+    host_facts.os_release = lambda: "test"  # type: ignore[assignment]
+    host_facts.native_arch = lambda: "amd64"  # type: ignore[assignment]
+    prompt_builder_module._local_host_hints = lambda: [  # type: ignore[assignment]
+        "Host: linux (test)\n"
+        "User home directory: /home/surface\n"
+        "Current working directory: /home/surface/code\n"
+        "Scratch directory: /home/surface/.hermes/cache/scratch (TMPDIR points here)"
+    ]
+    prompt_builder_module.is_wsl = lambda: False  # type: ignore[assignment]
+    prompt_builder_module._bot_screen_hint = lambda: ""  # type: ignore[assignment]
+    prompt_builder_module._embedder_environment_hint = lambda: ""  # type: ignore[assignment]
+    prompt_rules._rg_binary = lambda: rg_binary  # type: ignore[assignment]
 
 
 class _ImportFailures(logging.Handler):
@@ -149,7 +170,7 @@ def _render_surface(home: Path, platform: str, model: str, code: bool) -> tuple[
     os.chdir(cwd)
     agent = AIAgent(
         model=model, api_key="inspect-only", base_url="https://openrouter.ai/api/v1",
-        quiet_mode=True, save_trajectories=False, platform=platform, skip_context_files=True,
+        quiet_mode=True, save_trajectories=False, platform=platform, skip_context_files=not code,
         session_id=SESSION_ID, enabled_toolsets=_enabled_toolsets(platform),
     )
     if platform == "subagent":
@@ -166,8 +187,18 @@ def _render_surface(home: Path, platform: str, model: str, code: bool) -> tuple[
 def _render_child(out: Path) -> int:
     home = Path(os.environ["HOME"]).resolve()
     (home / "plain").mkdir(parents=True, exist_ok=True)
-    (home / "code").mkdir(parents=True, exist_ok=True)
-    (home / "code" / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
+    code_dir = home / "code"
+    code_dir.mkdir(parents=True, exist_ok=True)
+    # Two source files make the code surface a coding repo; fixed mtimes keep the workspace
+    # tree's newest-first order stable across runs and machines.
+    for name, stamp, body in (
+        ("pyproject.toml", 1_700_000_000, '[project]\nname = "demo"\n'),
+        ("main.py", 1_700_000_100, "print('demo')\n"),
+        ("util.py", 1_700_000_200, "VALUE = 1\n"),
+    ):
+        path = code_dir / name
+        path.write_text(body, encoding="utf-8")
+        os.utime(path, (stamp, stamp))
     sys.path.insert(0, str(ROOT))
     failures = _ImportFailures()
     logging.getLogger().addHandler(failures)
