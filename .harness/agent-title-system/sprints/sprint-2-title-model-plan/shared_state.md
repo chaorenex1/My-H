@@ -15,12 +15,11 @@
 # Shared State — Sprint <N> (<feature-name>)
 
 ## Plan
-<!--
-  Orchestrator summarises Planner's brief here (copied from contract.md goal
-  + acceptance_scenarios). Update when Planner issues a re-plan.
--->
 
-- _not yet populated_
+- **Goal**: 交付 `title_model_plan()` + `run_title_plan()`：按固定顺序（显式 `title_generation` route → `tiny` → `commit_message` → `smol` → 当前会话模型）产出有序、去重的显式候选路由；执行器逐条 `fallback=False` 单次调用，按拥有该候选的 task 计时/计费；门控关闭或空计划时零模型调用。
+- **Acceptance scenarios**: AS-1 无 pin 只调当前模型一次；AS-2 pin 排序 tiny→commit_message→smol→current；AS-3 显式 route 仅非默认时作为候选 0；AS-4 链 DFS 展开 + 三元组去重 + 防环；AS-5 门控/空计划零调用；AS-6 单次调用、失败续跑、成功即停、`<title/>` 与 `<title>none</title>` 终止。
+- **Test surface**: `tests/agent/test_title_router.py`（唯一主测试面），`scripts/run_tests.sh` 执行。
+
 
 ## Contract
 <!--
@@ -36,7 +35,9 @@
   live in feedback/{role}-<iter>.md. Keep this terse: round, outcome.
 -->
 
-- _awaiting round 1_
+- [2026-11-18T08:16:00Z] round=1 agent=generator signal=counter delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.8/max_iter=6 file=feedback/generator-neg-1.md
+- [2026-11-18T08:26:00Z] round=1 agent=evaluator signal=counter delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.85/max_iter=8 + agent/AGENTS.md in scope file=feedback/evaluator-neg-1.md
+- [2026-11-18T08:30:00Z] round=2 agent=generator signal=accept delta=Fn=1.0/Craft=0.85/Cons=0.9/Doc=0.85/max_iter=8 + note-5 wording fix file=feedback/generator-neg-2.md
 
 ## WorkLog
 <!--

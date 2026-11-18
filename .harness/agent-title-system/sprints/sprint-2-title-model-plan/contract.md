@@ -22,22 +22,22 @@ acceptance_scenarios:
 rubric:
   - axis: Functionality
     weight: high
-    threshold: "?"
+    threshold: 1.0
     description: AS-1 至 AS-6 全部通过；顺序、去重、门控、终止与失败续跑均可从 pytest 输出观察。
   - axis: Craft
     weight: std
-    threshold: "?"
+    threshold: 0.85
     description: 路由/执行逻辑可读且无第二套配置解析；测试用 fake call_llm 记录调用而非计时；遵循 agent/AGENTS.md 的 facade + sibling 与 late-import 规则。
   - axis: Consistency
     weight: std
-    threshold: "?"
+    threshold: 0.9
     description: 复用现有 aux task 配置、main runtime 归一化、fallback chain 读取与门控；不改变 call_llm 语义、既有标题行为或公开配置形状。
   - axis: Documentation
     weight: low
-    threshold: "?"
+    threshold: 0.85
     description: 公共入口 docstring 说明顺序、去重键、门控与终止语义；本 sprint 不新增用户文档。
-max_iterations: "?"
-status: pending-negotiation
+max_iterations: 8
+status: active
 ---
 
 # Sprint 2 Contract — title-model-plan
@@ -50,6 +50,7 @@ status: pending-negotiation
   - `title_model_plan(main_runtime)`：构造有序、去重的显式候选列表。
   - `run_title_plan(plan, messages, ...)`：按计划逐条单次调用 `call_llm`，返回首个被接受的标题或 `None`。
 - 新增 `tests/agent/test_title_router.py` 作为本 sprint 的唯一主测试面；复用现有 aux 测试夹具与临时 `HERMES_HOME`。
+- 更新 `agent/AGENTS.md` §"Model and provider resolution"（:99-107）：新增一条 bullet 命名 `agent/title_router.py`，说明 stage-1 候选顺序（显式覆盖 → tiny → commit_message → smol → 当前会话模型）、归一化三元组去重与 `fallback=False` 单次执行。
 - 候选对象至少暴露 `task`、`provider`、`model`、`base_url`、`timeout` 五个字段（dataclass 或映射均可），测试按字段名读取。
 
 ### Out of scope
@@ -112,7 +113,8 @@ Then  plan[0] 的 task=title_generation、provider=openrouter、model=explicit-t
       base_url=https://ex.example/v1、timeout=20；
       其后依次是 tiny、commit_message、smol、current 的候选；
       将 title_generation 改回 provider=auto、model/base_url/api_key 均为空后重新构造计划，
-      计划中不再存在 task=title_generation 的候选（角色候选从 tiny 开始）。
+      计划中不再存在前置候选 0（角色候选从 tiny 开始；末尾仍按三元组去重保留当前会话模型的
+      task=title_generation 候选，或在该路由已被前序角色候选覆盖时合并）。
 ```
 
 Evidence: `sprints/sprint-2-title-model-plan/evidence/AS-3.txt`
@@ -191,7 +193,7 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 2. **不改 `call_llm` 内部。** 计划层把每个候选展开成显式路由后调用 `call_llm(provider=…, model=…, base_url=…, task=<role>, timeout=…, fallback=False, messages=…)`；禁止为了让计划工作而修改 `auxiliary_client.py` 的 fallback/重试/路由解析。`base_url` 为空时传 `None`。
 3. **“每个候选只一次”是计划层语义。** 断言的是 `call_llm` 对同一候选只被调用一次；`call_llm` 自身既有的 same-provider transient 重试属于未改动的 transport 行为，不得由计划层再包一层重试或由此被判失败。
 4. **配置读取复用现有入口。** 角色/task 的 route 与 timeout 用 `_get_auxiliary_task_config`；model-keyed 与 per-task 链用 `agent/auxiliary_fallback_chains.py` 的读取函数（`auxiliary_section` / `model_fallback_chains_for_route` 等）；main runtime 用 `_normalize_main_runtime`；门控复用 `title_generator._auto_title_enabled` / `_model_title_upgrade_enabled`（late import，避免模块级循环）。不要复制一套 YAML 解析。
-5. **去重键。** `(provider.strip().lower(), model.strip(), base_url.strip().rstrip("/"))`；provider 只比较归一化值。空 provider 或空 model 的路由不进入计划；当前模型候选要求 `main_runtime` 归一化后同时有 provider 与 model。显式覆盖候选 0 未填的 route 字段按该 task 的现有语义补齐（provider 为 auto/空 → `main_runtime.provider`，model 为空 → `main_runtime.model`，base_url 为空 → `main_runtime.base_url`），补齐后同样参与三元组去重；角色候选只在 `provider` 为非 auto 时参与——`auxiliary.tiny` 等角色即使填了 model，provider 为 auto/空仍按 D3 第 2 条视为未配置、完全不生成候选，因此当前模型候选不会因这类槽位重复。
+5. **去重键。** `(provider.strip().lower(), model.strip(), base_url.strip().rstrip("/"))`；provider 只比较归一化值。空 provider 或空 model 的**链/展开路由**不进入计划（与 `_resolve_fallback_entry` 一致）；当前模型候选要求 `main_runtime` 归一化后同时有 provider 与 model。角色槽位只以 `provider` 为非 `auto`/空 为门控：`auxiliary.tiny` 等角色即使填了 model，provider 为 auto/空仍按 D3 第 2 条视为未配置、完全不生成候选；`model` 为空时保留空串，由 `call_llm` 经 `resolve_provider_client` 的现有阶梯解析（provider 默认 aux 模型 → 主模型），计划层不从 `main_runtime` 借用。候选 0 仅在 `provider` 为 `auto`/空时用 `main_runtime` 补齐其未填的 provider/model/base_url；`provider` 已 pin 时候选 0 的 route 字段整体来自该 task 自身 block，不借 `main_runtime` 的 model/base_url（继承 base task 时同样整块移动：任一 route 字段 pin 后不再继承 base 的 route 字段，`_AUX_ROUTE_KEYS` 单元移动语义）。补齐后的候选 0 仍按上述三元组参与去重，因此当前模型候选不会因这类槽位重复。
 6. **顺序固定。** 显式覆盖候选 0 → 角色 `tiny`、`commit_message`、`smol` → 当前会话模型。每个候选的链展开是深度优先：先输出候选本身，再依次走 `fallback_chains[provider/model]` → `fallback_chains[provider/*]` → `auxiliary.<task>.fallback_chain`，后加入的路由同样递归展开；用 visited 集合防环。链上路由继承发起它的 task（计费/限额/超时归属）。
 7. **超时。** 候选携带 `auxiliary.<owning task>.timeout`；当前模型候选固定用 `auxiliary.title_generation.timeout`（默认 30s）。不要在链条目上读取 entry-level timeout（D3 只授权 task 级超时）。
 8. **门控在构造期生效。** `enabled=false` 或 `model_upgrade_enabled=false` 时 `title_model_plan` 直接返回 `[]`；执行器对空计划必须 0 调用。两个开关都不影响 stage 0（本 sprint 不触达 stage 0）。
@@ -204,22 +206,17 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 
 ### Round 1
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `counter` — Functionality 1.0, Craft 0.85, Consistency 0.9, Documentation 0.8, max_iterations 6. Verified the four reuse entry points are read-time and that `parse_title_output` separates accept / terminal / reject. (`feedback/generator-neg-1.md`)
+- **Evaluator**: `counter` — same axes except Documentation 0.85 and max_iterations 8, plus `agent/AGENTS.md` §"Model and provider resolution" in scope (docs omission would be a non-downgradable Critical). Confirmed `_aux()` defaults every role slot to `provider: auto`, closing the Generator's AS-1/AS-2 premise risk. (`feedback/evaluator-neg-1.md`)
 
 ### Round 2
 
-- **Generator**:
-- **Evaluator**:
-
-### Round 3
-
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `accept` — all three round-1 deltas accepted; proposed one contract-precision fix to note 5 (role slots gate on `provider` only; empty `model` preserved and resolved in `call_llm`; candidate-0 backfill only when `provider` is auto/empty; chain entries keep the strict rule). (`feedback/generator-neg-2.md`)
+- **Evaluator**: `accept` — thresholds frozen at Fn 1.0 / Craft 0.85 / Consistency 0.9 / Documentation 0.85, max_iterations 8; note-5 paragraph accepted with three editorial completions (auto/empty gate, both rungs of the resolution ladder, dedupe participation after backfill, and the unit-move parenthetical scoped to inheritance); AS-3 executable body corrected. (`feedback/evaluator-neg-2.md`)
 
 ### Ruling
 
-- **Planner**:
+- **Planner**: not required — mutual agreement in round 2.
 
 ## Sprint Outcome
 
