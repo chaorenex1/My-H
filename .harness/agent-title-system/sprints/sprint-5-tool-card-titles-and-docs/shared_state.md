@@ -49,7 +49,7 @@
   Detailed per-iteration notes go to feedback/generator-<iter>.md.
 -->
 
-- _no iterations yet_
+- [2026-11-18T17:43:15Z] iter=1 agent=generator action="AS-1..AS-5 contract tests + docs/sample-config/picker-comment sync; zero runtime drift" commit=_pending_
 
 ## Evaluation
 <!--
@@ -59,7 +59,7 @@
   feedback/evaluator-<iter>.md and evidence/.
 -->
 
-- _no evaluations yet_
+- [2026-11-18T17:43:15Z] iter=1 agent=evaluator verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.9 documentation=0.9" (0 critical, 0 improvement, 4 minor) evidence=evidence/iter-1/
 
 ## Decisions
 <!--
@@ -70,6 +70,6 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
-- _no decisions yet_
+- [2026-11-18T17:43:15Z] decision: sprint-5 contract done on iter-1 pass; phase=pr
 - [2026-11-18T16:11:45Z] round=1 agent=generator signal=counter delta="F1.0/C0.85/Cons0.9/Doc0.9 max_iter=8; asks Evaluator to rule AS-5 assertion surface" file=feedback/generator-neg-1.md
 - [2026-11-18T16:20:16Z] round=1 agent=evaluator signal=counter delta="thresholds accepted (F1.0/C0.85/Cons0.9/Doc0.9, max_iter=8); counter on AS-5 source-read MUST violation, AS-2 phantom _lifecycle, AS-1 derive_title spy point, slice traps" file=feedback/evaluator-neg-1.md

@@ -24,7 +24,7 @@ AUX_TASK_META: dict[str, tuple[str, str]] = {
     "review": ("Review", "/review reviewer subagent"),
     "side_question": ("Side question", "quick 'btw' side questions"),
     "mcp": ("MCP", "MCP tool reasoning"),
-    "title_generation": ("Title generation", "session titles"),
+    "title_generation": ("Title generation", "session titles · workload switch + route override"),
     "commit_message": ("Commit message", "git commit message drafts"),
     "memory_query_rewrite": ("Memory query rewrite", "memory retrieval queries"),
     "tts_audio_tags": ("TTS audio tags", "Gemini TTS tag insertion"),

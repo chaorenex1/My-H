@@ -1615,6 +1615,16 @@ If you do not want Hermes to auto-generate titles after the first exchange, set
 `auxiliary.title_generation.enabled: false`. Manual titles still work through
 `/title` and `hermes sessions rename`.
 
+`auxiliary.title_generation` is the session-naming **workload switch** plus an optional explicit
+**route override** — not the only source of a title. Its switches (`enabled`,
+`model_upgrade_enabled`, `generator`, `card_icons`, `language`, `refresh_after_prompts`) decide
+whether and how a session is named; its route fields (`provider`, `model`, `base_url`, `api_key`)
+only pin an explicit candidate. The instant derived title, the default fork side turn and the
+fallback candidate plan below name a session without that route, and tool-card titles plus
+subagent artifacts come from the deterministic instant title (`derive_title()`), which never calls
+a model. A pinned route therefore changes which model may upgrade a session title; it never
+becomes the gate every title has to pass through.
+
 To keep the instant derived title (the first line of your opening message) but never
 spend a model call upgrading it, set `auxiliary.title_generation.model_upgrade_enabled: false`.
 No background `auto-title` thread starts and no automatic title-model request is sent; the
@@ -1626,8 +1636,21 @@ still disables both stages.
 main reply's system prompt, tools and history, so the request hits the reply's prompt cache;
 `plan` walks the ordered title-model candidates instead. A fork that produces nothing — a
 timeout, a provider refusal, an empty reply, or an unavailable session model — falls back to the
-plan, so naming never silently skips. The fork side turn never writes the transcript, moves the
-session's latest message or spends a tool call.
+plan, so naming never silently skips. The plan then walks omp's candidate order — `tiny` →
+`commit_message` → `smol` → the current session model — where a role contributes only when it is
+pinned explicitly (`auto` is skipped, so a stock install falls straight to the current session
+model), expanding each candidate's configured `fallback_chain`s in place and trying an equivalent
+route once (omp calls that middle role `commit`; Hermes has no separate `commit` slot). A pinned
+`auxiliary.title_generation` route heads the candidate plan when it is pinned; an unpinned
+configuration has no fixed position for that slot in the plan. The fork side turn never writes the
+transcript, moves the session's latest message or spends a tool call.
+
+Every naming request — the fork, a plan candidate, or the card top-up — asks for one line in the
+`<title>…</title>` marker format (ADR-21 D4), for example
+`<title>Fix flaky park tests</title>`. `<title/>` and `<title>none</title>` mean the turn has no
+nameable task and end naming for that turn instead of trying another candidate. That markered
+reply is the current request format for every candidate; a model that ignores the marker and
+answers with a plain first line is accepted as a fallback.
 
 `auxiliary.title_generation.card_icons` controls the card that heads the title: `emoji`
 (the default) stores `<icon> <CODE>: <title>` inside `sessions.title` itself (for example

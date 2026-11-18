@@ -374,3 +374,10 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T17:09:41Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1.md
 - 2026-11-18T17:09:46Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1-report.json
 [2026-11-18T17:11:41Z] agent=generator | phase=impl | omp-done | files=8 status=done iter=1 (validator: 0 violations)
+- 2026-11-18T17:23:33Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/phase3_independent_probe.py
+- 2026-11-18T17:23:48Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/eval-tool-card-titles-and-docs-evaluator.sh
+- 2026-11-18T17:26:22Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/eval-tool-card-titles-and-docs-evaluator.sh
+- 2026-11-18T17:40:36Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-1.md
+- 2026-11-18T17:41:14Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-1-report.json
+[2026-11-18T17:43:15Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.9 documentation=0.9"
+[2026-11-18T17:43:15Z] decision: sprint-5 iter-1 checkpoint (contract status done, phase pr)

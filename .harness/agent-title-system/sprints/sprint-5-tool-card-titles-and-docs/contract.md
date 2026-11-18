@@ -38,7 +38,7 @@ rubric:
     threshold: 0.9
     description: Doc and config-comment edits are accurate, complete, and do not restate a retired protocol
 max_iterations: 8
-status: active
+status: done
 ---
 
 # Sprint 5 Contract — tool-card-titles-and-docs
@@ -279,8 +279,10 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1
+- **Last commit**: _pending_
+- **Aborted reason** (if any): none
+- **PR**: _pending_
+- **Verdict**: pass — functionality 1.0 / craft 0.9 / consistency 0.9 / documentation 0.9; 0 Critical, 0 Improvement, 4 Minor
+- **Notes**: AS-1..AS-5 executed by an independent Evaluator probe (10/10 checks); zero runtime drift proven by empty diff over the card/title/frame/metadata modules; all reds attributed to the base with reproduction logs.
 
