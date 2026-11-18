@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "current_epic": "agent-title-system",
-  "current_sprint": 1,
+  "current_sprint": 2,
   "phase": "pr",
   "negotiation_round": 2,
   "iteration": 1,
@@ -23,25 +23,24 @@
   "foundation_sprint_needed": false,
   "max_iterations": 8,
   "max_wall_time_sec": 28800,
-  "max_cost_usd": 20.0,
-  "cumulative_cost_usd": 0.86,
-  "start_time": "2026-11-17T23:58:00Z",
+  "max_cost_usd": 20,
+  "cumulative_cost_usd": 0.96,
+  "start_time": "2026-11-18T08:00:39Z",
   "last_agent": "evaluator",
-  "next_action": "operator: unblock secret-scanning for a1a6a4a4cd, push harness/agent-title-system/sprint-1-title-protocol, then rerun harness-loop to open the PR",
-  "last_commit": "7b2d28fdd43fe9bfb8321de6cb9aefb94949776d",
+  "next_action": "harness-loop:pr-sprint-2",
+  "last_commit": "90468cada771f12c9e1a7382fe0c578a347bbcef",
   "features_pass_fail": [
     {
-      "feature": "title-protocol",
-      "functionality": "pass",
-      "craft": "pass",
-      "consistency": "pass",
-      "documentation": "pass"
+      "sprint": 2,
+      "feature": "title-model-plan",
+      "status": "pass",
+      "iter": 1
     }
   ],
   "completed": false,
-  "pending_human": true,
-  "pending_worker_exit": true,
-  "sprint_branch": "harness/agent-title-system/sprint-1-title-protocol",
+  "pending_human": false,
+  "pending_worker_exit": false,
+  "sprint_branch": "harness/agent-title-system/sprint-2-title-model-plan",
   "tier_a_last": null,
   "tier_a_history": [],
   "tier_a_summary": {
@@ -49,7 +48,7 @@
     "last_at": null,
     "last_pattern": null
   },
-  "aborted_reason": "pr-create-failed: push-protection blocked by pre-existing commit a1a6a4a4cd (omp-ui/src/vendor/catalog/src/compat/rules.json: Google OAuth sample creds)",
+  "aborted_reason": null,
   "mode": "interactive",
   "rubric_stagnation_count": 0,
   "codex_thread_ids": {},
@@ -62,5 +61,8 @@
     "4": "https://github.com/chaorenex1/My-H/issues/7",
     "5": "https://github.com/chaorenex1/My-H/issues/8"
   },
-  "effective_generator_backend": "omp"
+  "effective_generator_backend": "omp",
+  "sprint_prs": {
+    "1": "https://github.com/chaorenex1/My-H/pull/9"
+  }
 }
