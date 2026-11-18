@@ -347,3 +347,4 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T16:30:36Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
 [2026-11-18T16:31:22Z] decision: sprint-5 contract frozen @ 8c8f2c0b61 (rubric F1.0/C0.85/Cons0.9/Doc0.9, max_iterations=8; negotiation resolved round 2 by generator accept)
 [2026-11-18T16:31:22Z] negotiation: round=2 generator=accept evaluator=skipped (contract frozen)
+[2026-11-18T16:32:28Z] decision: sprint-5 impl iter-1 generator dispatched, awaiting result
