@@ -316,3 +316,5 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T15:25:39Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/evaluator-1-report.json
 [2026-11-18T15:29:15Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.9 documentation=0.9"
 [2026-11-18T15:33:00Z] decision: sprint-4 iter-1 checkpoint 133d4afac3 (contract status done, phase pr)
+- 2026-11-18T15:33:42Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-4.md
+[2026-11-18T15:34:15Z] decision: sprint-4 PR opened https://github.com/chaorenex1/My-H/pull/12
