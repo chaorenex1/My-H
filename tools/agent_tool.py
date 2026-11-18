@@ -589,6 +589,8 @@ class _Run:
     autoload_skills: tuple[str, ...] = ()
     advisor: Any = None
     read_summarize: Optional[bool] = None
+    #: Host-only workpool item ids; switches the run's ``yield`` to the keyed protocol.
+    work_pool_yield_items: tuple[str, ...] = ()
     #: Parsed definition front matter; the child's prompt policy reads it back per agent.
     definition_metadata: dict[str, Any] = field(default_factory=dict)
     #: Resident-session rebuild spec (ADR-15 D5/D6); survives a park or a process restart.
@@ -898,7 +900,8 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
     """The ``agent.agent_run.run`` keyword surface for this job."""
     flags = run.flags
     hooks = _live_hooks(run)
-    yield_state = YieldState(schema=run.output_schema) if _yield_tool_enabled() else None
+    yield_state = (YieldState(schema=run.output_schema, keys=run.work_pool_yield_items)
+                   if _yield_tool_enabled() else None)
     on_agent = hooks["on_agent"]
 
     def _on_agent(agent: Any) -> None:
@@ -938,6 +941,7 @@ def _params(run: _Run, history: Optional[list[dict[str, Any]]]) -> dict[str, Any
         "reasoning_effort": run.reasoning_effort,
         "worktree": run.worktree,
         "output_schema": run.output_schema,
+        "work_pool_yield_items": run.work_pool_yield_items,
         "autoload_skills": list(run.autoload_skills),
         "advisor": run.advisor,
         "read_summarize": run.read_summarize,
@@ -997,6 +1001,8 @@ class _Call:
     autoload_skills: tuple[str, ...] = ()
     advisor: Any = None
     read_summarize: Optional[bool] = None
+    #: Host-only workpool item ids; never part of the model-facing task contract.
+    work_pool_yield_items: tuple[str, ...] = ()
 
 
 #: Host defaults per knob; a definition overrides them, a caller argument overrides both.
@@ -1073,6 +1079,19 @@ def _caller_knobs(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     return knobs, all_tools
 
 
+def _work_pool_keys(args: dict[str, Any]) -> tuple[str, ...]:
+    """Host-only workpool item ids; absent for every model-initiated call."""
+    raw = args.get("work_pool_yield_items")
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise ValueError("work_pool_yield_items must be a non-empty array of item ids")
+    keys = tuple(str(item).strip() for item in raw if str(item).strip())
+    if len(keys) != len(raw):
+        raise ValueError("work_pool_yield_items must not contain empty ids")
+    return keys
+
+
 def _caller_output_schema(args: dict[str, Any]) -> Optional[dict[str, Any]]:
     """The caller's ``output_schema`` (a JSON Schema object), validated before any spawn."""
     raw = args.get("output_schema")
@@ -1135,6 +1154,7 @@ def _resident_spec(call: _Call, *, depth: int,
         "prompt_source": call.definition.source,
         "output_schema": call.output_schema,
         "schema_mode": call.schema_mode,
+        "work_pool_yield_items": list(call.work_pool_yield_items),
         "autoload_skills": list(call.autoload_skills),
         "advisor": call.advisor,
         "read_summarize": call.read_summarize,
@@ -1333,6 +1353,7 @@ def _validate(args: dict[str, Any]) -> _Call:
         autoload_skills=tuple(definition.metadata.get("autoloadSkills") or ()),
         advisor=_advisor_option(name, definition),
         read_summarize=definition.metadata.get("read-summarize"),
+        work_pool_yield_items=_work_pool_keys(args),
         flags={key: bool(knobs[key]) for key in
                ("skip_memory", "skip_context_files", "skip_background_review",
                 "load_soul_identity")},
@@ -1382,6 +1403,7 @@ def _execute_call(call: _Call, args: dict[str, Any], *, session_id: str, depth: 
                autoload_skills=call.autoload_skills,
                advisor=call.advisor,
                read_summarize=call.read_summarize,
+               work_pool_yield_items=call.work_pool_yield_items,
                definition_metadata=dict(call.definition.metadata),
                spec=_resident_spec(call, depth=depth, context_inputs=context_inputs),
                keep_alive=keep_alive, bundle=bundle,
@@ -1802,6 +1824,14 @@ AGENT_SCHEMA: dict[str, Any] = {
                 "description": (
                     "JSON Schema the final answer must satisfy; overrides the definition's output "
                     "contract for this call."
+                ),
+            },
+            "work_pool_yield_items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Host-only: workpool item ids. Switches yield to one keyed item per call; "
+                    "model-initiated task calls must omit it."
                 ),
             },
             "schema_mode": {

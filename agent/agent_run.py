@@ -452,7 +452,8 @@ def _prepare_run_context(context: str, *, task_id: str, agent_name: str,
 
 def _subagent_prompts(agent: Any, system: str, context: str, message: str, *,
                       wrap_assignment: bool, structured: bool = False,
-                      output_schema: Optional[Mapping[str, Any]] = None) -> tuple[str, str]:
+                      output_schema: Optional[Mapping[str, Any]] = None,
+                      work_pool_yield_items: Sequence[str] = ()) -> tuple[str, str]:
     """Render the child ``§ Subagent Role`` block and wrap the assignment.
 
     The block is this run's ``system_message`` (context tier); ``build_system_prompt_parts``
@@ -472,6 +473,7 @@ def _subagent_prompts(agent: Any, system: str, context: str, message: str, *,
         body=str(system),
         context=str(context or ""),
         structured=bool(structured),
+        work_pool_yield_items=bool(work_pool_yield_items),
         has_output_schema=bool(output_schema),
         yield_schema=(json.dumps(dict(output_schema), ensure_ascii=False)
                       if output_schema else ""),
@@ -509,7 +511,8 @@ def _execute_turn(agent: Any, message: str, *, context: str,
                   agent_session_id: str, model: str, provider: str,
                   toolsets: Sequence[str], all_tools: bool, history_key: str,
                   account_task: str, record_history: bool,
-                  transcript_path: str = "", wrap_assignment: bool = True) -> AgentRunResult:
+                  transcript_path: str = "", wrap_assignment: bool = True,
+                  work_pool_yield_items: Sequence[str] = ()) -> AgentRunResult:
     """Run one conversation turn on an already-built agent and package its answer.
 
     Shared by :func:`run` (fresh agent per call) and :func:`continue_run` (a resident session's
@@ -519,7 +522,7 @@ def _execute_turn(agent: Any, message: str, *, context: str,
     system, prompt = _subagent_prompts(
         agent, system, context, message, wrap_assignment=wrap_assignment,
         structured=getattr(agent, "_yield_state", None) is not None,
-        output_schema=schema)
+        output_schema=schema, work_pool_yield_items=work_pool_yield_items)
     result = agent.run_conversation(
         prompt, system_message=system or None,
         conversation_history=conversation or None, task_id=task_id)
@@ -606,7 +609,8 @@ def continue_run(agent: Any, message: str, *, context: str = "", system_message:
                  provider: str = "", toolsets: Sequence[str] = (), all_tools: bool = False,
                  history_key: str = "", account_task: str = "",
                  model_role: str = "",
-                 read_summarize: Optional[bool] = None) -> AgentRunResult:
+                 read_summarize: Optional[bool] = None,
+                 work_pool_yield_items: Sequence[str] = ()) -> AgentRunResult:
     """One wake turn on a resident session's kept agent (ADR-15 D5).
 
     The agent is not built, closed or re-registered here: the caller owns its lifetime. The turn
@@ -628,7 +632,8 @@ def continue_run(agent: Any, message: str, *, context: str = "", system_message:
         schema=schema, task_id=task_id or agent_session_id, agent_name=agent_name,
         agent_session_id=agent_session_id, model=model, provider=provider,
         toolsets=toolsets, all_tools=all_tools, history_key=history_key,
-        account_task=account_task, record_history=True, wrap_assignment=False)
+        account_task=account_task, record_history=True, wrap_assignment=False,
+        work_pool_yield_items=work_pool_yield_items)
     return replace(peer, model_role=str(model_role or ""))
 
 
@@ -660,7 +665,8 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
         on_settled: Optional[Callable[[], None]] = None,
         keep_alive: bool = False,
         meta: Optional[Mapping[str, Any]] = None, record_history: bool = True,
-        transcript_path: str = "") -> AgentRunResult:
+        transcript_path: str = "",
+        work_pool_yield_items: Optional[Sequence[str]] = None) -> AgentRunResult:
     """Run one agent loop on *message* and return its answer.
 
     The run owns its ``AIAgent`` and closes it in ``finally`` — unless ``keep_alive`` is set, in
@@ -781,7 +787,8 @@ def run(message: str, *, context: str = "", model: str = "", provider: str = "",
             agent_session_id=agent_session_id, model=final_model, provider=final_provider,
             toolsets=tools, all_tools=all_tools, history_key=history_key,
             account_task=account_task, record_history=record_history,
-            transcript_path=str(transcript_path or ""))
+            transcript_path=str(transcript_path or ""),
+            work_pool_yield_items=tuple(work_pool_yield_items or ()))
         peer = replace(peer, model_role=str(model_role or ""))
         if worktree_info is not None:
             worktree_result = _finalize_worktree(worktree_info, apply="auto")

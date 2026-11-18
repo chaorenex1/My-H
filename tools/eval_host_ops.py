@@ -334,12 +334,34 @@ def _agent_op(args: Any) -> str:
         if agent_name:
             if not _session_grants("agent"):
                 return _error(PermissionError("the 'agent' tool is not enabled in this session"))
-            result = _json_object(_dispatch_tool("agent", {
+            call: dict[str, Any] = {
                 "agent_name": str(agent_name),
                 "user_prompts": prompt,
                 "subject": params.get("label"),
-                "tool_sets": params.get("tools"),
-            }, task_id))
+            }
+            if params.get("tools"):
+                call["enable_tools"] = params.get("tools")
+            if params.get("output_schema") is not None:
+                call["output_schema"] = params.get("output_schema")
+            if params.get("schema_mode") is not None:
+                call["schema_mode"] = params.get("schema_mode")
+            if params.get("isolated") is not None:
+                call["isolated"] = params.get("isolated")
+            if params.get("model") is not None:
+                call["model"] = params.get("model")
+            if params.get("effort") is not None:
+                call["effort"] = params.get("effort")
+            if params.get("solution_space") is not None:
+                call["solution_space"] = params.get("solution_space")
+            if params.get("continue_from") is not None:
+                call["continue_from"] = params.get("continue_from")
+            if params.get("background") is not None:
+                call["background"] = params.get("background")
+            if params.get("work_pool_yield_items") is not None:
+                call["work_pool_yield_items"] = params.get("work_pool_yield_items")
+            if params.get("context"):
+                call["user_prompts"] = f"{params['context']}\n\n{prompt}"
+            result = _json_object(_dispatch_tool("agent", call, task_id))
             handle_id = result.get("agent_session_id") or result.get("id")
             if not isinstance(handle_id, str) or not handle_id:
                 return _ok(error=result.get("error") or "agent() did not return an agent session")
@@ -639,6 +661,11 @@ def _run_completion_worker(record: dict[str, Any], prompt: str, system: Any, mod
 # ---- workpool -------------------------------------------------------------
 
 
+#: One batch turn takes at most this many queued items; the pool's ``limit`` controls
+#: concurrent batch workers, not the batch size.
+_WORKPOOL_BATCH_MAX = 8
+
+
 def _workpool_op(args: Any) -> str:
     try:
         params = args if isinstance(args, dict) else {}
@@ -652,7 +679,8 @@ def _workpool_op(args: Any) -> str:
                 pool = {
                     "name": name, "agent": params.get("agent"), "context": params.get("context"),
                     "tools": params.get("tools"), "limit": int(params.get("limit") or 4),
-                    "ids": [], "queue": [], "workers": 0,
+                    "ids": [], "items": [], "queue": [], "batches": [], "workers": 0,
+                    "next_seq": 1,
                 }
                 state.workpools[name] = pool
             return _ok(name=name, agent=pool["agent"], limit=pool["limit"])
@@ -660,27 +688,34 @@ def _workpool_op(args: Any) -> str:
         if pool is None:
             return _error(ValueError(f"unknown workpool {params.get('name')!r}"))
         if op == "push":
-            items = params.get("items")
-            if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+            texts = params.get("items")
+            if not isinstance(texts, list) or not all(isinstance(item, str) for item in texts):
                 return _error(ValueError("workpool push requires a list of string items"))
+            created = []
             with state.lock:
-                pool["queue"].extend(items)
+                for text in texts:
+                    item = {"id": f"{pool['name']}#{pool['next_seq']}",
+                            "seq": pool["next_seq"], "text": text,
+                            "status": "queued", "batch": "", "output": ""}
+                    pool["next_seq"] += 1
+                    pool["items"].append(item)
+                    pool["queue"].append(item)
+                    created.append(item["id"])
                 _pump_workpool(state, pool)
-                ids = list(pool["ids"])
-            return _ok(ids=ids)
+            return _ok(ids=created)
         if op == "status":
             with state.lock:
+                counts = _workpool_counts(pool)
                 return _ok(name=pool["name"], ids=list(pool["ids"]),
-                           queued=len(pool["queue"]), workers=pool["workers"])
+                           queued=counts["queued"], workers=pool["workers"],
+                           items=counts, batches=len(pool["batches"]))
         if op == "peek":
             with state.lock:
-                ids = list(pool["ids"])
-            snapshots = []
-            for handle_id in ids:
-                record = _get_handle(state, handle_id)
-                if record is not None:
-                    snapshots.append(_agent_snapshot(record))
-            return _ok(items=snapshots)
+                items = [{"id": item["id"], "seq": item["seq"], "status": item["status"],
+                          "text": item["text"], "output": item["output"],
+                          "batch": item["batch"]} for item in pool["items"]]
+            return _ok(items=items, pending=sum(1 for item in items
+                                                if item["status"] in ("queued", "running")))
         if op == "close":
             with state.lock:
                 ids = list(pool["ids"])
@@ -693,22 +728,52 @@ def _workpool_op(args: Any) -> str:
         return _error(exc)
 
 
+def _workpool_counts(pool: dict[str, Any]) -> dict[str, int]:
+    counts = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
+    for item in pool.get("items") or ():
+        counts[str(item.get("status") or "queued")] = counts.get(
+            str(item.get("status") or "queued"), 0) + 1
+    return counts
+
+
 def _pump_workpool(state: _SessionState, pool: dict[str, Any]) -> None:
-    """Start workers up to the pool limit (caller holds ``state.lock``)."""
+    """Start batch workers up to the pool limit (caller holds ``state.lock``)."""
     while pool["queue"] and pool["workers"] < max(1, pool["limit"]):
-        item = pool["queue"].pop(0)
+        batch_items = pool["queue"][:_WORKPOOL_BATCH_MAX]
+        del pool["queue"][:len(batch_items)]
+        batch_id = f"{pool['name']}-b{len(pool['batches']) + 1}"
+        batch = {"id": batch_id, "items": batch_items, "handle_id": "", "status": "running"}
+        for item in batch_items:
+            item["status"] = "running"
+            item["batch"] = batch_id
+        pool["batches"].append(batch)
         pool["workers"] += 1
         thread = spawn_context_thread(
             _workpool_worker, name=f"hermes-eval-pool-{pool['name']}",
-            args=(state, pool, item),
+            args=(state, pool, batch),
         )
         thread.start()
 
 
-def _workpool_worker(state: _SessionState, pool: dict[str, Any], item: str) -> None:
+def _workpool_worker(state: _SessionState, pool: dict[str, Any],
+                     batch: dict[str, Any]) -> None:
     handle_id = ""
+    item_ids = [str(item["id"]) for item in batch["items"]]
     try:
-        params: dict[str, Any] = {"prompt": item}
+        from agent.prompts.renderer import render_workpool_batch
+
+        params: dict[str, Any] = {
+            "prompt": render_workpool_batch(
+                pool=str(pool["name"]), batch=str(batch["id"]),
+                items=[str(item["text"]) for item in batch["items"]]),
+            "output_schema": {
+                "type": "object",
+                "properties": {item_id: {} for item_id in item_ids},
+                "required": item_ids,
+                "additionalProperties": False,
+            },
+            "work_pool_yield_items": item_ids,
+        }
         if pool.get("agent"):
             params["agent"] = pool["agent"]
         if pool.get("context"):
@@ -717,11 +782,34 @@ def _workpool_worker(state: _SessionState, pool: dict[str, Any], item: str) -> N
             params["tools"] = pool["tools"]
         payload = _json_object(_agent_op(params))
         handle_id = str(payload.get("id") or "")
-        if handle_id:
-            with state.lock:
-                pool["ids"].append(handle_id)
-    except Exception:  # health: allow BLE001 -- one item's failure must not wedge the pool
+        if not handle_id:
+            raise RuntimeError(str(payload.get("error") or "workpool batch did not start"))
+        with state.lock:
+            pool["ids"].append(handle_id)
+            batch["handle_id"] = handle_id
+        waited = _json_object(_wait_op({"items": [{"kind": "agent", "id": handle_id}]}))
+        snapshot = (waited.get("items") or [{}])[0]
+        text = str(snapshot.get("text") or snapshot.get("result") or "")
+        data = _json_object(text) if text else {}
+        with state.lock:
+            for item in batch["items"]:
+                value = data.get(item["id"]) if isinstance(data, dict) else None
+                if isinstance(value, dict) and "error" in value:
+                    item["status"], item["output"] = "failed", str(value["error"])
+                elif snapshot.get("status") == "completed" and value is not None:
+                    item["status"], item["output"] = "completed", json.dumps(
+                        value, ensure_ascii=False)
+                else:
+                    item["status"] = "failed"
+                    item["output"] = str(snapshot.get("error") or "item missing from batch result")
+            batch["status"] = "completed"
+    except Exception as exc:  # health: allow BLE001 -- one batch's failure must not wedge the pool
         logger.debug("eval workpool worker failed", exc_info=True)
+        with state.lock:
+            for item in batch["items"]:
+                if item["status"] == "running":
+                    item["status"], item["output"] = "failed", str(exc)
+            batch["status"] = "failed"
     finally:
         with state.lock:
             pool["workers"] -= 1

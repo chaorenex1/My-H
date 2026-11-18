@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 #: Failed schema validations returned to the model before the payload is accepted as-is; the
 #: post-run output validator then reports the contract failure instead of looping forever.
@@ -68,13 +68,22 @@ def _is_true(value: Any, default: bool = True) -> bool:
 
 
 class YieldState:
-    """Per-run yield bookkeeping: one terminal payload and any incremental sections."""
+    """Per-run yield bookkeeping: one terminal payload and any incremental sections.
 
-    def __init__(self, schema: Optional[dict[str, Any]] = None) -> None:
+    ``keys`` switches the tool into workpool-item mode: each call carries a 1-based
+    ``key``, one item is recorded per call, and the last remaining key makes the
+    assembled item map terminal. Without ``keys`` the omp single-result protocol
+    (``data``/``type``/``error``/``final``) is unchanged.
+    """
+
+    def __init__(self, schema: Optional[dict[str, Any]] = None,
+                 keys: Optional[Sequence[str]] = None) -> None:
         self.schema = schema if isinstance(schema, dict) else None
+        self.keys: tuple[str, ...] = tuple(str(key) for key in (keys or ()))
         self.payload: Optional[dict[str, Any]] = None
         self.sections: list[dict[str, Any]] = []
         self.schema_failures = 0
+        self._completed_keys: set[int] = set()
 
     # -- turn lifecycle ---------------------------------------------------------
 
@@ -83,12 +92,21 @@ class YieldState:
         self.payload = None
         self.sections.clear()
         self.schema_failures = 0
+        self._completed_keys.clear()
+
+    @property
+    def remaining_keys(self) -> tuple[int, ...]:
+        """1-based keys not yet recorded, in item order."""
+        return tuple(index + 1 for index in range(len(self.keys))
+                     if index not in self._completed_keys)
 
     # -- recording --------------------------------------------------------------
 
     def record(self, args: dict[str, Any]) -> str:
         """Apply one ``yield`` call and return the tool result the model sees."""
         values = args if isinstance(args, dict) else {}
+        if self.keys:
+            return self._record_keyed(values)
         has_data = "data" in values
         data = values.get("data")
         error = str(values.get("error") or "").strip()
@@ -120,6 +138,51 @@ class YieldState:
                             "retry": True,
                         }, ensure_ascii=False)
         self.payload = {"has_data": has_data, "data": data, "error": ""}
+        return json.dumps({"status": "yielded", "final": True}, ensure_ascii=False)
+
+    def _record_keyed(self, values: dict[str, Any]) -> str:
+        """Record one workpool item; the last remaining key makes the item map terminal."""
+        raw_key = values.get("key")
+        if isinstance(raw_key, bool) or not isinstance(raw_key, int):
+            return json.dumps({"error": "workpool yield requires an integer key"}, ensure_ascii=False)
+        index = raw_key - 1
+        if index < 0 or index >= len(self.keys):
+            return json.dumps(
+                {"error": f"key must be between 1 and {len(self.keys)}"}, ensure_ascii=False)
+        if index in self._completed_keys:
+            return json.dumps(
+                {"error": f"key {raw_key} was already yielded", "remaining": list(self.remaining_keys)},
+                ensure_ascii=False)
+        has_data = "data" in values
+        error = str(values.get("error") or "").strip()
+        if not has_data and not error:
+            return json.dumps(
+                {"error": "workpool yield requires data or error"}, ensure_ascii=False)
+        item_id = self.keys[index]
+        value = {"error": error} if error else values.get("data")
+        section = {"data": value, "type": [item_id]}
+        completed = (*self.sections, section)
+        remaining = tuple(key for key in range(1, len(self.keys) + 1)
+                          if key not in self._completed_keys and key != raw_key)
+        if remaining:
+            self._completed_keys.add(index)
+            self.sections.append(section)
+            return json.dumps({"status": "recorded", "remaining": list(remaining)},
+                              ensure_ascii=False)
+        candidate = self._assemble(completed)
+        if self.schema is not None:
+            valid, errors = self._validate(candidate)
+            if not valid:
+                self.schema_failures += 1
+                if self.schema_failures <= MAX_SCHEMA_RETRIES:
+                    return json.dumps({
+                        "error": "yield data does not match the output schema",
+                        "errors": list(errors),
+                        "retry": True,
+                    }, ensure_ascii=False)
+        self._completed_keys.add(index)
+        self.sections.append(section)
+        self.payload = {"has_data": True, "data": candidate, "error": ""}
         return json.dumps({"status": "yielded", "final": True}, ensure_ascii=False)
 
     def _candidate(self, data: Any, has_data: bool) -> Any:
@@ -242,15 +305,34 @@ YIELD_PARAMETERS: dict[str, Any] = {
 }
 
 
+def _yield_parameters(keys: Sequence[str]) -> dict[str, Any]:
+    if not keys:
+        return YIELD_PARAMETERS
+    properties = dict(YIELD_PARAMETERS["properties"])
+    properties["key"] = {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": len(keys),
+        "description": ("1-based item number from the workpool batch. Yield each item once; "
+                        "the tool response names the remaining keys."),
+    }
+    return {**YIELD_PARAMETERS, "properties": properties}
+
+
 def build_yield_tool(state: YieldState) -> dict[str, Any]:
     """The ``extra_tools`` entry ``agent_run.run`` merges for one named agent."""
+    keyed = bool(state.keys)
+    description = (
+        "Finish this turn explicitly. final=true (default) ends the turn and its data is "
+        "the answer; final=false records an incremental output-schema section and keeps "
+        "working. Without any yield call the final assistant message remains the answer."
+        if not keyed else
+        "Yield one workpool item per call: pass its 1-based key and that item's data (or "
+        "error). The tool response names the remaining keys; the last key ends the turn.")
     return {
         "name": "yield",
-        "description": (
-            "Finish this turn explicitly. final=true (default) ends the turn and its data is "
-            "the answer; final=false records an incremental output-schema section and keeps "
-            "working. Without any yield call the final assistant message remains the answer."),
-        "parameters": YIELD_PARAMETERS,
+        "description": description,
+        "parameters": _yield_parameters(state.keys),
         "handler": state.record,
     }
 

@@ -953,6 +953,7 @@ def _revive_params(session: _Session) -> dict[str, Any]:
         "max_iterations": int(spec.get("max_iterations") or 10),
         "reasoning_effort": spec.get("reasoning_effort") or "",
         "output_schema": spec.get("output_schema"),
+        "work_pool_yield_items": tuple(spec.get("work_pool_yield_items") or ()),
         "autoload_skills": list(spec.get("autoload_skills") or []),
         "advisor": spec.get("advisor"),
         "read_summarize": spec.get("read_summarize"),
