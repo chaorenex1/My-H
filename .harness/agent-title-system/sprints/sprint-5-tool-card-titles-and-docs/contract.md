@@ -282,7 +282,7 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 - **Final iteration**: 1
 - **Last commit**: dff5d3b40a
 - **Aborted reason** (if any): none
-- **PR**: _pending_
+- **PR**: https://github.com/chaorenex1/My-H/pull/13
 - **Verdict**: pass — functionality 1.0 / craft 0.9 / consistency 0.9 / documentation 0.9; 0 Critical, 0 Improvement, 4 Minor
 - **Notes**: AS-1..AS-5 executed by an independent Evaluator probe (10/10 checks); zero runtime drift proven by empty diff over the card/title/frame/metadata modules; all reds attributed to the base with reproduction logs.
 
