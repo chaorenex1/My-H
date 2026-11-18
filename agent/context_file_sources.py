@@ -114,10 +114,8 @@ def context_file_sources_for_agent(agent: Any) -> list[dict[str, Any]]:
     (session cwd, install-tree policy per platform, the agent's own profile home)."""
     if getattr(agent, "skip_context_files", False):
         return []
-    from agent.runtime_cwd import resolve_context_cwd
-    from agent.system_prompt import _agent_home
-    launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
-    cwd = resolve_context_cwd(include_session_override=not launch_artifact)
+    from agent.system_prompt import _agent_home, _context_cwd
+    cwd = _context_cwd(agent)
     ctx_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     return list_context_file_sources(
         cwd=str(cwd) if cwd is not None else None, context_length=ctx_len if isinstance(ctx_len, int) else None,
