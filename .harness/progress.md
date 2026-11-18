@@ -222,3 +222,30 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T11:57:55Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.92 documentation=0.9"
 - 2026-11-18T11:59:22Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-3.md
 [2026-11-18T11:59:58Z] decision: sprint-3 PR opened https://github.com/chaorenex1/My-H/pull/11
+[2026-11-18T12:00:10Z] decision: sprint-3 done (PR #11); transition to sprint-4-session-card-and-fork; backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T13:23:39Z] backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T13:23:39Z] branch: harness/agent-title-system/sprint-4-session-card-and-fork (created) from harness/agent-title-system/sprint-3-title-consumers-and-addressing
+[2026-11-18T13:23:39Z] negotiation: sprint-4 round 1 dispatch generator
+- 2026-11-18T13:23:51Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/shared_state.md
+- 2026-11-18T13:27:49Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-1.md
+- 2026-11-18T13:27:49Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-1-report.json
+[2026-11-18T13:28:50Z] agent=generator | phase=negotiation | omp-done | thread=GenNegSprint4R1 files=0 status=done
+[2026-11-18T13:28:50Z] negotiation: round=1 agent=generator signal=counter delta="F1.0/C0.85/K0.9/D0.85, iter 8" file=feedback/generator-neg-1.md
+- 2026-11-18T13:39:39Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/evaluator-neg-1.md
+[2026-11-18T13:41:09Z] agent=evaluator | phase=negotiation | omp-done | thread=EvalNegSprint4R1 files=1 status=done
+[2026-11-18T13:41:09Z] negotiation: round=1 generator=counter evaluator=counter
+[2026-11-18T13:41:09Z] negotiation: round 2 dispatch generator
+- 2026-11-18T13:48:03Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-2.md
+- 2026-11-18T13:48:14Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/feedback/generator-neg-2-report.json
+- 2026-11-18T13:49:35Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:49:59Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:06Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:26Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:52:44Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+- 2026-11-18T13:53:55Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-4-session-card-and-fork/contract.md
+[2026-11-18T13:55:37Z] negotiation: round=2 generator=accept evaluator=skipped (round resolved on accept; evaluator round-1 counter adopted)
