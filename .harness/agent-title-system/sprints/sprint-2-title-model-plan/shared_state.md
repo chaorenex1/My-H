@@ -68,5 +68,6 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
+- [2026-11-18T09:36:00Z] decision: PR opened sprint-2 https://github.com/chaorenex1/My-H/pull/10 (bundling=split)
 - [2026-11-18T09:28:00Z] decision: sprint-2 iter-1 pass at a49e22db7d3a83f324d795d9f974fb3aa9094616; phase=pr
 - [2026-11-18T08:44:00Z] decision: contract frozen (round 2 mutual accept; no Planner ruling) @ 90468cada771f12c9e1a7382fe0c578a347bbcef

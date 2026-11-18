@@ -27,7 +27,7 @@
   "cumulative_cost_usd": 0.96,
   "start_time": "2026-11-18T08:00:39Z",
   "last_agent": "evaluator",
-  "next_action": "harness-loop:pr-sprint-2",
+  "next_action": "harness-loop:transition-sprint-3",
   "last_commit": "90468cada771f12c9e1a7382fe0c578a347bbcef",
   "features_pass_fail": [
     {
@@ -63,6 +63,7 @@
   },
   "effective_generator_backend": "omp",
   "sprint_prs": {
-    "1": "https://github.com/chaorenex1/My-H/pull/9"
+    "1": "https://github.com/chaorenex1/My-H/pull/9",
+    "2": "https://github.com/chaorenex1/My-H/pull/10"
   }
 }
