@@ -36,7 +36,7 @@ rubric:
     description: Docstrings and prompt-template registration docs match the shipped behavior
 max_iterations: 6
 max_negotiation_rounds: 3
-status: active
+status: done
 ---
 
 # Sprint 1 Contract — title-protocol
@@ -175,8 +175,8 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1 (verdict: pass — functionality 1.0 / craft 0.9 / consistency 0.95 / documentation 0.9 vs thresholds 1.0 / 0.85 / 0.9 / 0.8)
+- **Last commit**: `ITERATION_COMMIT_PLACEHOLDER`
+- **Aborted reason** (if any): none
+- **PR**: pending (Step 8)
 

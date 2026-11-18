@@ -53,7 +53,7 @@
   Detailed per-iteration notes go to feedback/generator-<iter>.md.
 -->
 
-- _no iterations yet_
+- [2026-11-18T06:43:58Z] iter=1 agent=generator action=marker-contract parser + manifest registration + JSON-path retirement + tests/eval/docs commit=pending
 
 ## Evaluation
 <!--
@@ -63,7 +63,7 @@
   feedback/evaluator-<iter>.md and evidence/.
 -->
 
-- _no evaluations yet_
+- [2026-11-18T07:26:31Z] iter=1 agent=evaluator verdict=pass axes=functionality 1.0 / craft 0.9 / consistency 0.95 / documentation 0.9 evidence=evidence/iter-1/
 
 ## Decisions
 <!--
@@ -75,3 +75,4 @@
 -->
 
 - [2026-11-18T05:32:45Z] decision: contract frozen after negotiation rounds=2 (generator accepted evaluator round-1 proposal); commit=3bb8222f938633b5b8bd841bd27a9cec708dcc55
+- [2026-11-18T07:26:31Z] decision: sprint-1 iteration 1 passed all four thresholds; contract status=done, phase=pr (Step 8 PR creation next)

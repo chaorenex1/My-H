@@ -471,6 +471,111 @@
         "max_retries": "int"
       },
       "scope": "request"
+    },
+    {
+      "key": "workpool_batch",
+      "path": "workpool-batch.md",
+      "tier": "context",
+      "gate": "subagent",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": "workpool_batch",
+      "context_keys": ["pool", "batch", "items"],
+      "context_types": {
+        "pool": "str",
+        "batch": "str",
+        "items": "list"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "session_tool_search_notice",
+      "path": "session-tool-search-notice.md",
+      "tier": "context",
+      "gate": "tool_search",
+      "budget": null,
+      "truncate": "error",
+      "override": false,
+      "renderer": "session_tool_search_notice",
+      "context_keys": ["searches"],
+      "context_types": {
+        "searches": "list"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "session_skill_search_notice",
+      "path": "session-skill-search-notice.md",
+      "tier": "context",
+      "gate": "skills",
+      "budget": null,
+      "truncate": "error",
+      "override": false,
+      "renderer": "session_skill_search_notice",
+      "context_keys": ["searches"],
+      "context_types": {
+        "searches": "list"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "background_review_skill_reminder",
+      "path": "background-review-skill-reminder.md",
+      "tier": "context",
+      "gate": "background_review",
+      "budget": null,
+      "truncate": "error",
+      "override": false,
+      "renderer": "background_review_skill_reminder",
+      "context_keys": ["actions"],
+      "context_types": {
+        "actions": "list"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "background_review_memory_reminder",
+      "path": "background-review-memory-reminder.md",
+      "tier": "context",
+      "gate": "background_review",
+      "budget": null,
+      "truncate": "error",
+      "override": false,
+      "renderer": "background_review_memory_reminder",
+      "context_keys": ["actions"],
+      "context_types": {
+        "actions": "list"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "title_system",
+      "path": "title-system.md",
+      "tier": "context",
+      "gate": "always",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": ["title_language"],
+      "context_types": {
+        "title_language": "str"
+      },
+      "scope": "request"
+    },
+    {
+      "key": "task_label",
+      "path": "task-label.md",
+      "tier": "context",
+      "gate": "always",
+      "budget": null,
+      "truncate": "tail",
+      "override": false,
+      "renderer": null,
+      "context_keys": [],
+      "context_types": {},
+      "scope": "request"
     }
   ]
 }

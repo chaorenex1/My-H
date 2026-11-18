@@ -33,11 +33,17 @@ LLM生成的候选词+Judgment决策的工具组合，执行工具调用
 - 已接线：00–12 全部章节、`autoload-skills.md`、`project-prompt.md`（含 `<workstation>` 的
   运行时/模型/provider/platform 行）。
 - 未接线（只建文件、不登记 manifest）：`workspace.md`、`plugin-sections.md`、
-  `system-message.md`。`profile` 名在 `01-identity.md` 顶部；时间/session 行已从系统提示删除。
-- 请求级模板（`irc_incoming`、`eager_task`、`eager_todo`、`subagent_*` reminder）保持
+  `system-message.md`、`title-marker-instruction.md`（ADR-21 D5 命名协议的存档提示词，
+  已被 `title-system.md` + `<title>` 标记解析取代）。`profile` 名在 `01-identity.md` 顶部；
+  时间/session 行已从系统提示删除。
+- 请求级模板（`irc_incoming`、`eager_task`、`eager_todo`、`subagent_*` reminder、
+  `session_tool_search_notice`、`session_skill_search_notice`、
+  `background_review_skill_reminder`、`background_review_memory_reminder`、
+  `title_system`（ADR-21 D5 命名提示词，`title_language` 变量）、`task_label`）保持
   `scope: request`，只由 `renderer.render_request(key, context)` 渲染（拒绝 `system` 键），
   不进入系统提示。`subagent_system_prompt` 是例外：它是子代理角色块，经同一入口渲染后由
-  `assemble_subagent` 追加在共享 base 之后。
+  `assemble_subagent` 追加在共享 base 之后。新模板的注入时机与数据契约见
+  `docs/adr/ADR-20-request-level-injection.md`。
 - 子代理入口：`assemble_subagent(ctx, role)` = `assemble_main(ctx)`（`subagent=True`）+
   `"\n\n"` + `render_subagent_prompt(role)`；角色块恒在末尾，`role.body` 为空即构建失败。
 

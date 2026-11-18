@@ -261,7 +261,13 @@ def render_section(
         )
     if not section.path:
         raise PromptSectionError(f"{key}: section has no template (renderer={section.renderer!r})")
-    text = environment().get_template(section.path).render(**validate_context(section, context))
+    from jinja2 import UndefinedError
+    try:
+        text = environment().get_template(section.path).render(**validate_context(section, context))
+    except UndefinedError as exc:
+        # A declared-but-missing key is a bad context (ADR-18 D13: 漏键即失败): the render
+        # failure surfaces as the registry's own error, not a raw Jinja exception.
+        raise PromptSectionError(f"{key}: {exc.message or 'undefined variable in template'}") from exc
     return apply_budget(text, section)
 
 

@@ -631,6 +631,14 @@ def test_manifest_scope_splits_system_and_request_sections():
         "subagent_async_pending",
         "subagent_completion_probe",
         "subagent_yield_reminder",
+        "session_tool_search_notice",
+        "session_skill_search_notice",
+        "background_review_skill_reminder",
+        "background_review_memory_reminder",
+        "workpool_batch",
+        # ADR-21 D5: the naming service's request-level prompt and task label.
+        "title_system",
+        "task_label",
     }
     system = {key for key, section in sections.items() if section.scope == "system"}
     assert system == set(sections) - request
@@ -710,3 +718,77 @@ def test_render_request_only_accepts_request_scope_templates():
         renderer.render_request("rfc2119", {})
     with pytest.raises(ps.PromptSectionError, match="unknown prompt section"):
         renderer.render_request("does-not-exist", {})
+
+
+def test_title_system_renders_with_and_without_the_language_rule():
+    """AS-1: the registered naming prompt renders under StrictUndefined for both
+    ``title_language`` bytes; the language line appears only when one is set (ADR-21 D5)."""
+    from agent.prompts import renderer
+
+    neutral = renderer.render_request("title_system", {"title_language": ""})
+    french = renderer.render_request("title_system", {"title_language": "French"})
+
+    assert neutral and french
+    assert neutral.startswith("You name coding-agent sessions.")
+    assert "<title>" in neutral and "Write a 3-6 word title" in neutral
+    assert "Write the title in" not in neutral
+    assert french.endswith("- Write the title in French.")
+    assert "- Write the title in French." in french
+
+
+def test_title_system_missing_or_mistyped_language_key_is_rejected():
+    """AS-1: a declared-but-missing key fails the render as the registry's own error
+    (ADR-18 D13 ``漏键即失败``), not a raw Jinja exception; a mistyped one is rejected too."""
+    from agent.prompts import renderer
+
+    with pytest.raises(ps.PromptSectionError):
+        renderer.render_request("title_system", {})
+    with pytest.raises(ps.PromptSectionError):
+        ps.render_section("title_system", {"title_language": 5})
+    with pytest.raises(ps.PromptSectionError):
+        ps.render_section("title_system", {"bogus": "x"})
+
+
+def test_task_label_renders_without_variables_and_rejects_undeclared_ones():
+    """AS-1: the task label is a variable-free request template; undeclared context keys are
+    rejected by ``validate_context``."""
+    from agent.prompts import renderer
+
+    out = renderer.render_request("task_label", {})
+    assert out and out.startswith("# Task")
+    assert "{" not in out and "}" not in out  # no undeclared-variable residue
+    with pytest.raises(ps.PromptSectionError):
+        renderer.render_request("task_label", {"assignment": "Fix the login bug"})
+
+
+def test_title_marker_instruction_stays_unregistered():
+    """AS-1/AS-5: the archived pre-marker prompt file exists but is not a registry key
+    (ADR-21 D5: 仅存档，不注册)."""
+    assert (ps.SYSTEM_PROMPT_DIR / "title-marker-instruction.md").is_file()
+    assert "title-marker-instruction" not in ps.load_sections()
+    with pytest.raises(ps.PromptSectionError, match="unknown prompt section"):
+        ps.render_section("title-marker-instruction")
+
+
+def test_title_system_language_line_is_byte_identical_when_empty():
+    """AS-2: with ``title_language`` empty the render is byte-identical to the template as it
+    shipped before the language rule — the ``{% if %}`` line emits zero bytes, never a blank
+    line; a non-empty language renders the line verbatim at the tail."""
+    raw = ps.read_prompt_text(ps.SYSTEM_PROMPT_DIR / "title-system.md")
+    jinja_line = "{% if title_language %}- Write the title in {{ title_language }}.{% endif %}"
+    assert raw.endswith(jinja_line)  # the language rule rides the file tail, without a trailing newline
+    base = raw[: -len(jinja_line)]  # byte-for-byte the pre-ADR-21 template
+
+    env = ps.environment()
+    without = env.from_string(base).render(title_language="")
+    with_empty = env.from_string(raw).render(title_language="")
+    with_french = env.from_string(raw).render(title_language="French")
+
+    assert with_empty == without  # byte identity: the empty branch adds nothing
+    assert "- Write the title in" not in without
+    assert with_french.endswith("- Write the title in French.")
+    # The registered render agrees with the direct template render.
+    assert ps.render_section("title_system", {"title_language": ""}, scope="request") == with_empty
+    assert ps.render_section(
+        "title_system", {"title_language": "French"}, scope="request"
+    ) == with_french

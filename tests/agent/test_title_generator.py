@@ -1,4 +1,6 @@
-"""Tests for agent.title_generator — auto-generated session titles."""
+"""Tests for agent.title_generator — auto-generated session titles under the ``<title>`` marker
+protocol (ADR-21 D4): the prompt is the registered ``title_system`` request template and replies
+are parsed by ``agent.title_parser`` (its own contract tests live in ``test_title_parser.py``)."""
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -6,7 +8,6 @@ from unittest.mock import MagicMock, patch
 
 from agent.title_generator import (
     MAX_TITLE_INPUT_CHARS,
-    _EXAMPLE_ECHO_REJECT,
     build_title_input,
     derive_title,
     generate_title,
@@ -114,10 +115,10 @@ class TestGenerateTitle:
         """The titling pass must explicitly disable thinking (#91927).
 
         With the aux default reasoning_effort "" (provider default), Gemini
-        bills internal thought tokens against max_tokens=64, the JSON payload
-        never lands, and the prose fallback stores the opening fence
-        ("```json") as the title. Enforce the module's documented
-        thinking-disabled contract at the call site.
+        bills internal thought tokens against the small title budget, the
+        marker never lands, and the prose fallback stores stray thinking text
+        as the title. Enforce the module's documented thinking-disabled
+        contract at the call site.
         """
         captured_kwargs = {}
 
@@ -125,7 +126,7 @@ class TestGenerateTitle:
             captured_kwargs.update(kwargs)
             resp = MagicMock()
             resp.choices = [MagicMock()]
-            resp.choices[0].message.content = '{"title": "Reasoning Off"}'
+            resp.choices[0].message.content = "<title>Reasoning Off</title>"
             return resp
 
         with patch("agent.title_generator.call_llm", side_effect=mock_call_llm):
@@ -136,32 +137,31 @@ class TestGenerateTitle:
     @pytest.mark.parametrize(
         ("content", "expected"),
         [
-            # #83903: a token cap cutting the JSON mid-value or right after the fence opener must not
-            # persist the fragment; the derived title survives instead.
-            ('{"title":"Investigate and fix the login butt', None),
-            ("```json", None),
-            ('{"title"', None),
-            # Legit titles the structural check must keep: emphasized/quoted prose, non-Latin, numeric.
+            # The marker contract parses; a token cap cutting the reply mid-marker must not leak the
+            # tag into the persisted title — the inner text degrades to the prose fallback instead.
+            ("<title>Investigate the login bug</title>", "Investigate the login bug"),
+            ("<title>Investigate and fix the login butt", "Investigate and fix the login butt"),
+            ("Investigate the login bug</title>", "Investigate the login bug"),
+            # Legit titles the shared guard must keep: emphasized/quoted prose, non-Latin, numeric,
+            # a literal fence inside a sentence, bracket-prefixed prose — none are markers to strip.
             ("*Fix the login flow*", "*Fix the login flow*"),
             ("修复登录按钮", "修复登录按钮"),
             ("42", "42"),
-            ('```json\n{"title": "Fix login button"', "Fix login button"),
-            # Bracket/brace-prefixed prose and a literal fence inside a sentence are titles, not
-            # truncated JSON — a provider that ignores response_format still gets its title kept.
+            ("<title>Fix ``` rendering in chat</title>", "Fix ``` rendering in chat"),
             ("[WIP] Fix login flow", "[WIP] Fix login flow"),
-            ("Fix ``` rendering in chat", "Fix ``` rendering in chat"),
         ],
     )
-    def test_truncated_structured_output_never_becomes_the_title(self, content, expected):
+    def test_marker_replies_parse_without_leaking_the_tag(self, content, expected):
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = content
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             assert generate_title("login is broken") == expected
 
-    def test_json_in_reasoning_content_is_used_but_reasoning_prose_is_not(self):
-        """#82291: glm-5/minimax under json_schema return content='' with the JSON in reasoning_content /
-        reasoning. That payload titles the session; chain-of-thought prose never does."""
+    def test_reply_content_is_the_only_parsed_field(self):
+        """Under the marker contract the parser reads the visible content only: a reasoning model
+        whose thinking carries a title payload gets nothing mined out of it, and its visible
+        answer titles the session (#82291's reasoning recovery is retired with the JSON protocol)."""
         def response(content, **reasoning):
             resp = MagicMock(spec=["choices"])
             resp.choices = [MagicMock(spec=["message"])]
@@ -172,37 +172,43 @@ class TestGenerateTitle:
             return resp
 
         cases = [
-            (response("", reasoning_content='{"title": "Check FFmpeg on this machine"}'), "Check FFmpeg on this machine"),
-            (response(None, reasoning='{"title": "Check FFmpeg on this machine"}'), "Check FFmpeg on this machine"),
-            (response("", reasoning_content="The user wants ffmpeg checked. A short title would be"), None),
+            # Visible marker reply titles; the parallel reasoning payload is ignored.
+            (response('<title>Check FFmpeg on this machine</title>',
+                      reasoning_content='<title>Mined from reasoning</title>'),
+             "Check FFmpeg on this machine"),
+            # content-only reply with no marker: the prose fallback takes the first line.
+            (response("Check FFmpeg on this machine"), "Check FFmpeg on this machine"),
+            # Empty content (title hidden in reasoning fields): nothing to parse, no title.
+            (response("", reasoning_content="<title>Check FFmpeg on this machine</title>"), None),
+            (response(None, reasoning="<title>Check FFmpeg on this machine</title>"), None),
         ]
         for resp, expected in cases:
             with patch("agent.title_generator.call_llm", return_value=resp):
                 assert generate_title("check ffmpeg") == expected
 
     def test_strips_think_blocks(self):
-        """Reasoning-model output wrapped in <think>...</think> must not
-        leak into the session title."""
+        """Reasoning-model output wrapped in  <think>… </think> must not
+        leak into the session title; the marker after the block still parses."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = (
-            "<think>The user wants a title. I'll summarize the topic "
-            "concisely.</think>Debugging Python Import Errors"
+            " <think> thought: the user wants a title. I'll summarize the topic "
+            "concisely. </think>" "<title>Debugging Python Import Errors</title>"
         )
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             title = generate_title("help me fix this import")
             assert title == "Debugging Python Import Errors"
-            assert "<think>" not in title
+            assert " <think>" not in title
             assert "summarize" not in title
 
     def test_strips_unterminated_think_block(self):
-        """An unterminated <think> block (no close tag) must still be
+        """An unterminated  <think> block (no close tag) must still be
         stripped so the leaked reasoning doesn't become the title."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = (
-            "<think>Let me reason about a good title for this session"
+            " <think> Let me reason about a good title for this session"
         )
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
@@ -212,15 +218,17 @@ class TestGenerateTitle:
             assert title is None
 
 
-    def test_truncates_long_titles(self):
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "A" * 100
+    def test_rejects_overlong_titles_instead_of_truncating(self):
+        """AS-4: the guard rejects, never truncates — a truncated title is still half an
+        assistant blob the caller would retry on (can1357/oh-my-pi#7306)."""
+        for overlong in ("A" * 81, "A" * 100):
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = f"<title>{overlong}</title>"
 
-        with patch("agent.title_generator.call_llm", return_value=mock_response):
-            title = generate_title("question")
-            assert len(title) == 80
-            assert title.endswith("...")
+            with patch("agent.title_generator.call_llm", return_value=mock_response):
+                title = generate_title("question")
+            assert title is None
 
     def test_rejects_answer_shaped_output(self):
         """A model that ignores the titling task and answers the user's
@@ -259,25 +267,26 @@ class TestGenerateTitle:
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             assert generate_title("question", "answer") == "Investigate the title resolver bug"
 
-    @pytest.mark.parametrize("echo", [
-        wrap.format(example)
-        for example in sorted(_EXAMPLE_ECHO_REJECT)
-        for wrap in ("{}", '"{}"', "({})", "[{}]")
-    ])
-    def test_rejects_prompt_example_echo(self, echo):
-        """A model that parrots one of the prompt's own example titles back
-        must be rejected — a canned example says nothing about the session.
-        Port of QwenLM/qwen-code#9709 (their #9706 bug class)."""
+    @pytest.mark.parametrize("decline", ["<title/>", "<title>none</title>", "<TITLE/>"])
+    def test_marker_decline_ends_the_naming_attempt(self, decline):
+        """AS-3: the tag-form declines return no title without raising — the naming attempt is
+        over for this turn, and no failure is reported to the consumer."""
+        seen = []
+
+        def _cb(task, exc):
+            seen.append((task, exc))
+
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = echo
+        mock_response.choices[0].message.content = decline
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
-            assert generate_title("help me with something unrelated") is None
+            assert generate_title("hey there!", "greeting text", failure_callback=_cb) is None
+        assert seen == []
 
-    def test_friendly_greeting_example_is_allowed(self):
-        """'Friendly greeting' is prescribed output for bare greetings, not an
-        echo failure — it must pass the guard."""
+    def test_prompt_example_echoes_are_no_longer_rejected(self):
+        """The echo guard is retired with the JSON prompt: a model reply passes through the
+        shared guard alone, so even a canned-looking line titles the session."""
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "Friendly greeting"
@@ -285,19 +294,58 @@ class TestGenerateTitle:
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             assert generate_title("hey there!") == "Friendly greeting"
 
-    def test_topical_title_resembling_example_passes(self):
-        """The guard is exact-match only: a genuinely topical title that merely
-        resembles an example must not be rejected."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Fix login button on desktop"
+    def test_naming_request_renders_the_registered_title_system_template(self):
+        """AS-1/AS-2: the system prompt is the registered ``title_system`` request render —
+        the language rule rides the template's ``{% if title_language %}`` line, not string
+        surgery, and the user turn stays the bounded opener."""
+        from agent.prompts.renderer import render_request
 
-        with patch("agent.title_generator.call_llm", return_value=mock_response):
-            assert generate_title("the login button is broken on desktop") == (
-                "Fix login button on desktop"
-            )
+        def capture(**kwargs):
+            captured.update(kwargs)
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = "<title>Prompt Provenance Check</title>"
+            return resp
 
+        captured: dict = {}
+        cfg = {"auxiliary": {"title_generation": {"language": "French"}}}
+        with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
+                patch("agent.title_generator.call_llm", side_effect=capture):
+            assert generate_title("question", "answer text") == "Prompt Provenance Check"
 
+        assert captured["messages"][0] == {
+            "role": "system",
+            "content": render_request("title_system", {"title_language": "French"}),
+        }
+        assert captured["messages"][0]["content"].endswith("- Write the title in French.")
+        assert captured["messages"][1]["role"] == "user"
+
+        captured.clear()
+        with patch("hermes_cli.config.load_config_readonly", return_value={}), \
+                patch("agent.title_generator.call_llm", side_effect=capture):
+            generate_title("question", "answer text")
+        assert captured["messages"][0]["content"] == render_request(
+            "title_system", {"title_language": ""}
+        )
+        assert "Write the title in" not in captured["messages"][0]["content"]
+
+    def test_naming_request_carries_no_response_format(self):
+        """AS-5: ``generate_title`` must not send ``extra_body`` / ``response_format`` — the
+        JSON-schema title path is retired; the marker prompt carries the contract."""
+        captured_kwargs = {}
+
+        def mock_call_llm(**kwargs):
+            captured_kwargs.update(kwargs)
+            resp = MagicMock()
+            resp.choices = [MagicMock()]
+            resp.choices[0].message.content = "<title>No Response Format</title>"
+            return resp
+
+        with patch("agent.title_generator.call_llm", side_effect=mock_call_llm):
+            assert generate_title("question") == "No Response Format"
+
+        assert "extra_body" not in captured_kwargs
+        assert "response_format" not in captured_kwargs
 
     def test_invokes_failure_callback_on_exception(self):
         """failure_callback must fire so the user sees a warning (issue #15775)."""
@@ -431,7 +479,7 @@ class TestMaybeAutoTitle:
         ],
     )
     def test_title_call_waits_for_the_turn_when_it_shares_a_self_hosted_endpoint(self, main_runtime, title_cfg, deferred):
-        """#117296: a self-hosted server serving the main turn and the concurrent json_schema title request
+        """#117296: a self-hosted server serving the main turn and the concurrent title request
         can decode the title into the main reply. The upgrade must not go on the wire until the caller starts
         it after the turn; every other route keeps the turn-start timing."""
         import threading
@@ -579,7 +627,7 @@ class TestMaybeAutoTitle:
         # (``hermes sessions retitle-skills``) still asks the model.
         resp = MagicMock()
         resp.choices = [MagicMock()]
-        resp.choices[0].message.content = '{"title": "Repair startup memory routing"}'
+        resp.choices[0].message.content = "<title>Repair startup memory routing</title>"
         with patch("hermes_cli.config.load_config_readonly", return_value=config), \
              patch("agent.title_generator.call_llm", return_value=resp):
             assert generate_title("repair startup memory routing") == "Repair startup memory routing"

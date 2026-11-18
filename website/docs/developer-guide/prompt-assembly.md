@@ -46,6 +46,15 @@ registry (`scope: system|request` plus budget/truncate metadata). A block decide
 and its own section-level gate (`coding_repo`, tool face, `memory`, `subagent`), and a false gate
 means zero bytes — never a placeholder or blank line.
 
+`render_project_context()` takes only a path: it resolves `<workspace-tree>` itself
+(`project_context.workspace_tree()`), scans only a coding repository (the same detection
+`render_runtime` uses), and formats three levels, newest mtime first, with directories suffixed `/`.
+The first resolve is frozen per `(profile, session_id, path, depth)` for the life of the process, so
+a compression rebuild reproduces the same bytes even after the cross-session `hermes_cache` entry
+(`prompt_workspace_tree`, 1 h TTL, LRU, fail open) expires. `effective_project_dir()` is the single
+entry for the session cwd: a cwd that resolves to `Path.home()` is redirected to
+`$HERMES_HOME/tmp/empty-workspace`, so no prompt ever lists the user's home directory.
+
 `assemble_subagent(ctx, role)` is the child entry: it returns `assemble_main(ctx)` (with
 `subagent=True`, so 10/11 use the hand-off wording) followed by `\n\n` and the
 `render_subagent_prompt(role)` block for `system/subagent-system-prompt.md`. The base is
@@ -57,11 +66,16 @@ bytes and `_cached_system_prompt_static` stays the shared base. A run with no de
 keeps the bare-prompt contract: no role block is built and `context` is appended to the user turn.
 
 Request-level templates (`scope: request` — `irc_incoming`, `eager_task`, `eager_todo`, the
-`subagent_*` reminders) render only through `renderer.render_request(key, context)`. It rejects a
-`system` key and the assembler's block sequence never calls it, so those bytes ride a user/tool
-row. `subagent_system_prompt` is the one request-scope template that is part of the system
+`subagent_*` reminders, the session notices `session_tool_search_notice`,
+`session_skill_search_notice`, `background_review_skill_reminder`,
+`background_review_memory_reminder`, and the naming pair `title_system` (carries the optional
+`title_language`) / `task_label`, ADR-21 D5) render only through `renderer.render_request(key,
+context)`.
+It rejects a `system` key and the assembler's block sequence never calls it, so those bytes ride a
+user/tool row. `subagent_system_prompt` is the one request-scope template that is part of the system
 prompt: `agent_run` renders it through the same entry, and `system_prompt` places it in the
-`context` tier after the shared base.
+`context` tier after the shared base. Injection timing and data contracts for the session notices:
+`docs/adr/ADR-20-request-level-injection.md`.
 
 `system_prompt.build_system_prompt_parts()` keeps its historical return shape for the cache/restore
 contract: `stable` is the assembled body, `context` is the caller's `system_message`, and `volatile`
@@ -73,17 +87,19 @@ placeholder asset and is not registered). A Bot Chat capability epoch is appende
 unwired stamp so `hermes tools enable/disable` still triggers one rebuild per capability change.
 
 Timestamp/session lines no longer live in the system prompt. The runtime host lines
-(host / home / **current working directory** / scratch), `Model:`, `Provider:` and `Platform:` are
-inside the `<workstation>` block of the final `<project-context>` block.
+(host / home / OS / Arch / scratch), `Model:`, `Provider:` and `Platform:` are inside the
+`<workstation>` block of the final `<project-context>` block. Date and cwd are **not** emitted
+there: they arrive as the first-turn request-level `date_cwd_reminder`.
 
-Consequence for stored prompts: `_stored_prompt_matches_runtime()` reads `Model:` / `Provider:` /
-`Current working directory:` from `<workstation>` (`agent/surface_switch.py`), falling back to the
-legacy `# Hermes runtime environment` / trailer layout so prompts persisted before this cutover still
-validate. `Platform:` is not an identity field: a surface switch keeps the stored bytes and delivers
-the current surface's guidance as a one-shot note (`agent/surface_switch.py`). `rewrite_prompt_model_identity()`
-rewrites `Model:` / `Provider:` only inside `<workstation>`, so decoys in memory or context prose are
-never touched. The `<available_skills>` index is compared every turn by `agent/skills_index_delta.py`
-and its difference rides the same note channel.
+Consequence for stored prompts: `_stored_prompt_matches_runtime()` reads `Model:` / `Provider:`
+from `<workstation>` (`agent/surface_switch.py`) and cwd from the session row / request-level
+note, falling back to the legacy `# Hermes runtime environment` / trailer layout so prompts
+persisted before this cutover still validate. `Platform:` is not an identity field: a surface
+switch keeps the stored bytes and delivers the current surface's guidance as a one-shot note
+(`agent/surface_switch.py`). `rewrite_prompt_model_identity()` rewrites `Model:` / `Provider:`
+only inside `<workstation>`, so decoys in memory or context prose are never touched. The
+`<available_skills>` index is compared every turn by `agent/skills_index_delta.py` and its
+difference rides the same note channel.
 
 When `skip_context_files` is set (e.g., subagent delegation), the `<project-context>` block is
 omitted; identity comes from the `01-identity.md` template, not from `SOUL.md`.
@@ -147,7 +163,6 @@ You are in a plain terminal (CLI). ...
 - Arch: x64
 - Host: Linux (6.8)
 - User home directory: /home/alice
-- Current working directory: /home/alice/code/atlas
 - Scratch directory: ~/.hermes/cache/scratch (TMPDIR points here; ...)
 - Model: anthropic/claude-sonnet-4.5
 - Provider: openrouter

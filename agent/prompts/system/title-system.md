@@ -13,3 +13,4 @@ Examples:
 - "the retry queue drops jobs when redis restarts, can u look" → `<title>Fix retry queue dropping jobs</title>`
 - "can we get rid of the npm run build warning about peer deps" → `<title>Remove peer dependency build warning</title>`
 - `<chat>` with only assistant notes like "adding a backoff field to RetryPolicy… now wiring jitter into schedule()" → `<title>Add retry backoff with jitter</title>`
+{% if title_language %}- Write the title in {{ title_language }}.{% endif %}
