@@ -173,10 +173,10 @@ Then  strip()+casefold() 后精确匹配，label 优先于 id/name/subject；
 
 | Axis | Weight | Threshold | Scoring notes |
 |---|---|---|---|
-| Functionality | high | TBD (negotiation) | 七条 AS 的 pytest 断言全部通过；schema/写入/寻址/路径冻结按行为而非实现命名判定 |
-| Craft | std | TBD (negotiation) | 复用既有 `title_model_plan`、`spawn_context_thread`、reconciler、`allocate_topic`；无重复命名逻辑；无对真实 store 的写入 |
-| Consistency | std | TBD (negotiation) | 沿用 `short_name` 列/索引与 `_resolve` 身份优先级；错误文本与既有 `tool_error` 风格一致；命名标记与 sprint 1 契约一致 |
-| Documentation | low | TBD (negotiation) | `AGENT_MESSAGE_SCHEMA.to` 描述与新增列/索引注释同步；不写超出本 sprint 范围的文档 |
+| Functionality | high | 1.0 | 七条 AS 的 pytest 断言全部通过；schema/写入/寻址/路径冻结按行为而非实现命名判定 |
+| Craft | std | 0.85 | 复用既有 `title_model_plan`、`spawn_context_thread`、reconciler、`allocate_topic`；无重复命名逻辑；无对真实 store 的写入 |
+| Consistency | std | 0.9 | 沿用 `short_name` 列/索引与 `_resolve` 身份优先级；错误文本与既有 `tool_error` 风格一致；命名标记与 sprint 1 契约一致 |
+| Documentation | low | 0.85 | `AGENT_MESSAGE_SCHEMA.to` 描述与新增列/索引注释同步；不写超出本 sprint 范围的文档 |
 
 Total pass condition: **every axis meets its threshold**。weight 只影响 Evaluator 报告失败时的排序（high 先报）。
 
@@ -185,7 +185,7 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 ### 测试环境
 
 - 所有新测试用临时 `HERMES_HOME`（`monkeypatch.setenv`，复用 `tests/conftest.py` 既有 fixture 模式）；不得读写操作者真实 store。
-- 测试入口一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`（仓库规则：禁止裸 `pytest`，见 `AGENTS.md` / `docs/coding-rules.md`）；sprint-local 的 `eval-<feature>.sh` 必须调用该 runner，并把输出与退出码落到 `evidence/`。路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
+- 测试入口：优先 `scripts/run_tests.sh <test paths> [-- pytest 参数]`（仓库规则：禁止裸 `pytest`，见 `AGENTS.md` / `docs/coding-rules.md`）。在本工作站上该 wrapper 从 bash 调用不可用（`pwd` 返回 `C:\…`，`_activation.sh` 找不到，re-exec 把 `/mnt/c` 映射成 `C:\mnt\c`），因此以 `scripts/run_tests_parallel.py` 在固定 test 环境解释器下直接运行等价于同一 runner（沿用其 `TZ`/`LANG`/`PYTHONHASHSEED`）；sprint-local 的 `eval-<feature>.sh` 必须调用实际可用的入口，并把输出与退出码落到 `evidence/`。路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
 - 证据写入 `evidence/AS-<n>-pytest.txt`，至少包含所涉测试文件的 `-q` 汇总与失败时的断言原文。
 
 ### 迁移（AS-4）
