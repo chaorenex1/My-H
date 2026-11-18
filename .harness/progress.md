@@ -329,3 +329,19 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T16:19:11Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-neg-1.md
 [2026-11-18T16:20:16Z] negotiation: round=1 generator=counter evaluator=counter (thresholds agreed, contract-text corrections requested)
 [2026-11-18T16:21:03Z] decision: sprint-5 negotiation round-2 generator dispatched, awaiting result
+- 2026-11-18T16:24:44Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-2.md
+- 2026-11-18T16:24:44Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-2-report.json
+- 2026-11-18T16:26:13Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:26:33Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:26:50Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:19Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:45Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:58Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:28:47Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:05Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:19Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:31Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:48Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:03Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:20Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:36Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
