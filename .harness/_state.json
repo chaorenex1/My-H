@@ -27,7 +27,7 @@
   "cumulative_cost_usd": 0.86,
   "start_time": "2026-11-17T23:58:00Z",
   "last_agent": "evaluator",
-  "next_action": "harness-loop:create-pr-sprint-1",
+  "next_action": "operator: unblock secret-scanning for a1a6a4a4cd, push harness/agent-title-system/sprint-1-title-protocol, then rerun harness-loop to open the PR",
   "last_commit": "7b2d28fdd43fe9bfb8321de6cb9aefb94949776d",
   "features_pass_fail": [
     {
@@ -39,7 +39,7 @@
     }
   ],
   "completed": false,
-  "pending_human": false,
+  "pending_human": true,
   "pending_worker_exit": false,
   "sprint_branch": "harness/agent-title-system/sprint-1-title-protocol",
   "tier_a_last": null,
@@ -49,7 +49,7 @@
     "last_at": null,
     "last_pattern": null
   },
-  "aborted_reason": null,
+  "aborted_reason": "pr-create-failed: push-protection blocked by pre-existing commit a1a6a4a4cd (omp-ui/src/vendor/catalog/src/compat/rules.json: Google OAuth sample creds)",
   "mode": "interactive",
   "rubric_stagnation_count": 0,
   "codex_thread_ids": {},
