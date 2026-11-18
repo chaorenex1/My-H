@@ -250,6 +250,6 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 ## Sprint Outcome
 
 - **Final iteration**: 1 (verdict pass; Fn 1.0 / Craft 0.9 / Consistency 0.92 / Documentation 0.9)
-- **Last commit**: (recorded in the outcome commit)
+- **Last commit**: 7eaad6cbbb14ee4791444148de286ed36e7ee24e (iter-1 checkpoint)
 - **Aborted reason** (if any): none
 - **PR**: (recorded after Step 8)

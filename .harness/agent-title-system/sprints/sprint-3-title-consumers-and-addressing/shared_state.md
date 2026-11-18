@@ -67,4 +67,4 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
-- _no decisions yet_
+- [2026-11-18T12:08:00Z] decision: sprint-3 iter-1 pass at 7eaad6cbbb14ee4791444148de286ed36e7ee24e; phase=pr
