@@ -176,7 +176,7 @@ Evaluator's ordering when reporting failures (high-weight fails reported first).
 ## Sprint Outcome
 
 - **Final iteration**: 1 (verdict: pass — functionality 1.0 / craft 0.9 / consistency 0.95 / documentation 0.9 vs thresholds 1.0 / 0.85 / 0.9 / 0.8)
-- **Last commit**: `ITERATION_COMMIT_PLACEHOLDER`
+- **Last commit**: `7b2d28fdd43fe9bfb8321de6cb9aefb94949776d`
 - **Aborted reason** (if any): none
 - **PR**: pending (Step 8)
 
