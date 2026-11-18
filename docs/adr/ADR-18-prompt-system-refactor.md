@@ -364,6 +364,9 @@ query → 检索层（BM25 / rg）→ 候选 ≤K
 
 ### D10. 请求级注入与会话级重写保持不变
 
+> **ADR-20 第二轮修订**：首轮日期/cwd 由 `<workstation>` 改为请求级 `date_cwd_reminder`；
+> host/home/scratch 从 `<workstation>` 直接删除（无替代载体）。本节其余结论不变。
+
 以下内容是“看起来像系统提示、实际是消息”，**不并入系统提示**：
 
 | 机制 | Hermes 等价 | 位置 |
@@ -373,13 +376,15 @@ query → 检索层（BM25 / rg）→ 候选 ≤K
 | 表面切换 | surface switch note | `agent/surface_switch.py:103` |
 | 诊断通知 | `<system-notice>` | `agent/lsp/reporter.py:221` |
 | 增强用户输入 | 无直接等价；`pre_llm_call` 上下文追加到 user 消息 | `website/docs/developer-guide/prompt-assembly.md` §API-call-time-only |
-| 首轮日期/cwd | `Conversation started` + runtime env 已在系统提示内 | `agent/system_prompt.py:495` |
+| 首轮日期/cwd | 请求级 `date_cwd_reminder`（ADR-20 D10）；`<workstation>` 不再输出 date/cwd；host/home/scratch 删除 | 首轮 user 行/turn-note，不在系统提示 |
 | 软工具约束 | 无；靠 `tools[]` + `TOOL_USE_ENFORCEMENT_GUIDANCE` | `agent/prompt_builder.py` |
 | 压缩 summary | compaction summary + skill safety rule | `agent/context_compressor.py` / `agent/context_compressor_tail.py:156` |
 | 记忆 resume 重放 | MEMORY/USER 冻结快照 + 每轮围栏召回 | `tools/memory_tool_store.py:649` |
 
-新增 `<enhanced-user-input>`、`<additional-system-reminder>`、首轮 date-cwd 提醒**不在本 ADR
-范围**；它们会与现有通道重复，并破坏“系统提示是唯一缓存指令面”的设计。
+新增 `<enhanced-user-input>`、`<additional-system-reminder>` **不在本 ADR 范围**；它们会与
+现有通道重复，并破坏“系统提示是唯一缓存指令面”的设计。**首轮 date-cwd 提醒由 ADR-20 D10
+以请求级 `date_cwd_reminder` 落地**，不再由系统提示或 runtime env 承载；`<workstation>` 不再
+输出 date/cwd，host/home/scratch 一并删除。
 
 ### D11. 缓存、持久化与 CI 不变量
 
@@ -639,8 +644,9 @@ override 与 additionalCommunication 是用户可写内容，**按字面文本�
   词法回退始终可用。
 - **新增独立 `skill_search` 核心工具**：`skills_list` 已解析全部技能根；扩展一个可选
   `query` 参数即可，新增常驻 schema 违反 narrow-waist 规则。
-- **首轮 date-cwd 提醒**：日期与 cwd 已在系统提示与 runtime env 中；再加一层会重复并破坏
-  字节稳定。
+- **首轮 date-cwd 提醒（已被 ADR-20 D10 修订）**：旧结论认为日期与 cwd 已在系统提示与
+  runtime env 中；ADR-20 D10 改为请求级 `date_cwd_reminder`，`<workstation>` 不再输出
+  date/cwd（host/home/scratch 删除）。因此不再以“会重复”为由拒绝。
 
 ### D14. 工具面与 `§ Runtime` 的条件渲染
 

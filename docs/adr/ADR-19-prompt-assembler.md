@@ -289,7 +289,8 @@ render_memories() / render_closing() / render_project_context()
 `.md` 是占位资产，不参与装配、不影响字节。`workspace.md`、`plugin-sections.md`、
 `system-message.md` 按此处理（其中 workspace 的内容已在 `project-prompt.md`）。
 `runtime-state.md`、`environment.md`、`profile.md` **不创建**：时间/session 归首轮请求级注入，
-环境信息归 `<workstation>`，profile 名归 identity 顶部。
+环境信息只保留 `<workstation>` 的 OS/Arch（host/home/cwd/scratch 删除，ADR-20 第二轮修订），
+profile 名归 identity 顶部。
 
 已接线的章节必须登记 manifest，装配器不接受"这一节由 renderer 或调用方临时补"的写法。
 
@@ -302,7 +303,7 @@ render_memories() / render_closing() / render_project_context()
 | 分段渲染 | `agent/prompts/renderer.py` | 块入口返回完整正文：取数 + `render_section` |
 | 正文 | `agent/prompts/system/*.md` | 全部提示文本 |
 | 子代理 | `agent/agent_run.py` | `assemble_subagent(ctx, role)` = `assemble_main()` + 角色块；不再单独拼角色提示 |
-| 请求级注入 | 现有调用点（`turn_context.py`、`agent_run.py`） | `render_request()`；不经过系统提示装配 |
+| 请求级注入 | `agent/prompts/assembler.py` + 现有调用点（`turn_context.py`、`agent_run.py`） | `assemble_request()` / `request_notice()`：按模板条目排序、一次 join（ADR-20 D3）；不经过系统提示装配 |
 
 `build_system_prompt_parts()` 的签名与 `{"stable","context","volatile"}` 返回结构不变，
 `reconstruct_static_prefix()`、`_cached_system_prompt_static` 的语义不变。子代理走
@@ -328,12 +329,20 @@ render_memories() / render_closing() / render_project_context()
      工作区快照不再进入系统提示，这些冻结/校验逻辑同 PR 删除，或改为只读 `project-prompt.md`
      的 `<workspace-tree>` / `<workspace-roots>`。
    - `surface_switch.runtime_host_value` / `identity_line_value`：`# Hermes runtime environment`
-     块删除后，host/cwd 从 `<workstation>` 读取。
-   - `conversation_loop._stored_prompt_matches_runtime`：cwd/model 校验改锚 `<workstation>` /
-     `<project-context>`。
+     块删除后，host/home/cwd/scratch 都不再从 `<workstation>` 读取（ADR-20 第二轮修订把这些
+     行直接删除）；`identity_line_value` 只读 Model/Provider/Platform。
+   - `conversation_loop._stored_prompt_matches_runtime`：model 校验锚 `<workstation>` /
+     `<project-context>`；cwd 校验改锚 `date_cwd_reminder` 行的 `cwd`（与构建提示同一
+     resolver），旧会话回退旧提示行（ADR-20 D10）。
    - `chat_completion_helpers.rewrite_prompt_model_identity`：model/provider 锚点保持在
      `<workstation>`。
    - 时间/session 不再出现在系统提示：`_timestamp_line` 及其读取方删除。
+
+> **ADR-20 第二轮修订**：日期/cwd 改走请求级 `date_cwd_reminder`；host/home/scratch 从
+> `<workstation>` 直接删除（无替代载体）。`surface_switch.runtime_host_value` /
+> `conversation_loop._stored_prompt_matches_runtime` 的 cwd 锚点改读 `date_cwd_reminder` 行
+> （旧会话回退旧提示行）。请求级模板统一经 `assemble_request()` 渲染。
+
 4. **prompt schema 版本**：session `model_config` 记录 `prompt_schema: 2`。旧会话逐字重放旧
    prompt，不原地升级；`/new` 或无存储会话才使用装配器产物。
 5. **进程内只读**：模板源一次读入，改 md 需重启（ADR-18 D13 不变）。
@@ -442,7 +451,7 @@ def workspace_tree(project_dir: Path | None = None, *, depth: int = 3,
 |---|---|---|
 | P0 | 装配器 + `scope` + gate 求值 + 边界/分派测试；**不接线** | 旧快照不变；gate 矩阵（每个 gate 真/假）与"gate 假 = 零字节"通过；导入边界、无直接 IO、调用顺序与次数测试通过 |
 | P1 | D5 新章节与旧块处置；`build_system_prompt_parts()` 改调装配器；删除退役常量 | 9 surface 快照重新生成并附 diff；D7.3 列出的每处持久化解析器各有定向测试；`scripts/check` 通过 |
-| P2 | 子代理路径统一到 `assemble_subagent(ctx, role)`；请求级模板改用 `render_request()` | 子代理 prompt 以 `assemble_main()` 字节开头、角色块在末尾；同批子代理 base 前缀完全相同；`subagent` gate 矩阵；无 `system_prompt` 反向导入 |
+| P2 | 子代理路径统一到 `assemble_subagent(ctx, role)`；请求级模板改用 `request_notice()` / `assemble_request()` | 子代理 prompt 以 `assemble_main()` 字节开头、角色块在末尾；同批子代理 base 前缀完全相同；`subagent` gate 矩阵；无 `system_prompt` 反向导入 |
 | P3 | `prompts.budgets` 配置读取（ADR-18 D3 落地）；override / additionalCommunication 不在本阶段 | 预算截断与配置用例；文档与配置漂移测试通过 |
 
 **暂缓**：override 与 additionalCommunication（ADR-18 D4）不进入 P0–P3 的任何一步。

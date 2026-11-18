@@ -983,7 +983,7 @@ SSH/modal 等保留后端自己的 cwd，避免把网关宿主路径 `cd` 到远
 | **多窗口 / pane / 浮动** | 桌面 pane shell；终端有 tmux/zellij | ① 用宿主多路复用器还是网关 ② fork 语义（新会话/同会话）③ 焦点/尺寸同步 | A. 客户端集成 tmux/zellij；B. 网关 pane 注册；C. 不做 | `/fork pane` 在支持的宿主可用；无宿主时给出提示 |
 | **富媒体预览** | 终端无通用图片/视频/PDF/HTML | ① 终端能力协商（kitty/sixel/iterm）② 远程媒体获取（`media.fetch`?）③ 降级文本 ④ 尺寸/缓存 | A. 内联图 + 文本降级；B. 仅文本；C. 新 media RPC | 支持的终端渲染图片；不支持的终端有可读降级 |
 | **Autoresearch / cleanse** | **已决定（ADR-13，2026-11-04，选项 C）**：两项均建立新的 host 后端/网关能力（skill + 斜杠命令 + `autoresearch.*` / `cleanse.*` RPC/事件 + omp-ui dashboard/overlay）；**不新增 CLI 子命令**、core tool 或 daemon | —（见 `docs/adr/ADR-13-omp-autoresearch-cleanse.md`） | **C**（host 后端；cleanse 默认计划，`cleanse.repair` 显式派发） | 见 ADR-13 §验收；RPC/事件落地前面板 `supported:false`，落地后 `pending`，客户端 controller 接线后 `ready`，不伪造 ready |
-| **OMFG / ratchet / prewalk / auto-graph** | **已决定（ADR-12，2026-11-04，选项 C）**：四项均建立新的 host 后端/网关能力；OMFG、auto-graph 先落，prewalk、ratchet 分期 | —（见 `docs/adr/ADR-12-omp-agent-workflows.md`） | **C / C / C / C**（顺序同左列） | 见 ADR-12 §验收；未完成项保持 `pending`/unsupported，不伪造能力 |
+| **OMFG / ratchet / prewalk / auto-graph** | **已决定（ADR-12，2026-11-04，选项 C）**：四项均建立新的 host 后端/网关能力；OMFG、auto-graph 先落，prewalk、ratchet 分期。prewalk 与 auto-graph 的落地契约见 **ADR-25 / ADR-26** | —（见 `docs/adr/ADR-12-omp-agent-workflows.md`、`ADR-25-prewalk-session-handoff.md`、`ADR-26-auto-graph-table-charts.md`） | **C / C / C / C**（顺序同左列） | 见 ADR-12 §验收（prewalk/auto-graph 另见 ADR-25 §D11、ADR-26 §D9）；未完成项保持 `pending`/unsupported，不伪造能力 |
 | **Tern 原生 Surface / Warp 桥** | 终端宿主协议，非网关 | ① 宿主检测 ② 降级策略 ③ 是否值得维护 | A. 客户端可选支持；B. 不做 | 非宿主终端无副作用 |
 
 设计轨道的产出物：每项一份 ADR（问题、约束、选项、决定、验收），落在 `docs/adr/` 或本文件追加；

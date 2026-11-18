@@ -1,7 +1,8 @@
 # ADR-12：omp 专属 agent 工作流的新后端（OMFG / ratchet / prewalk / auto-graph，选项 C）
 
 **状态**：已决定（2026-11-04）；**选项 C：四项均建立新的 host 后端/网关能力**。
-**P2 auto-graph 与 P3 prewalk 已实现（ADR-17 P5）；P1 OMFG 与 P4 ratchet 未实现。**
+**P2 auto-graph 与 P3 prewalk 已实现（ADR-17 P5；落地契约见 ADR-25 / ADR-26）；
+P1 OMFG 与 P4 ratchet 未实现。**
 四个功能分别落在规则作者、eval 编排、会话模型交接、客户端图表四个层，因此按功能分期，不把
 它们合成一个实现。
 
@@ -234,37 +235,26 @@ Hermes 客户端已注册 `tui.autoGraph`（`omp-ui/src/modes/settings.ts:468`�
 
 ### D5. prewalk：会话级 handoff 状态机与 `prewalk.*` RPC
 
-- 会话状态（持久化到 session DB）：`armed`、`from`、`into`、`consumed`、`auto`、`auto_target`、
-  `planning_model`/`planning_thinking`；`/new` 重新按配置武装，resume 继承已消费状态。
-- 方法：`prewalk.arm`、`prewalk.restart`、`prewalk.off`、`prewalk.status`；事件
-  `prewalk.armed`/`prewalk.handoff`。客户端恢复 `/prewalk` 与现有设置项。
-- 钩子：成功的 `todo` 调用（含 `view`）打开 gate；在包含第一个 `edit`/`write` 结果的 assistant
-  turn 结束后切换模型/thinking；一次性 disarm；切换只改会话 active model，不改 model-role 配置。
-- auto：`resolve_judge` 读取移植的 prewalk 问题文件，按 `prewalk|primary|direct` 分类；
-  `prewalk` 概率 ≥ 0.70 且目标可解析才武装；`suggest` 只报告；每个新任务先恢复该任务规划时的
-  model/thinking，再判定，避免 `primary` 任务留在 handoff 目标上。
-- 明确接受一次 provider 缓存重建；不在 turn 中间切换，不做隐式切换；默认 `prewalk.enabled=false`、
-  `prewalk.auto=off`。子代理 prewalk 走 agent 配置/`task.prewalk`/per-agent 覆盖，与父会话隔离。
+**落地契约以 [ADR-25](ADR-25-prewalk-session-handoff.md) 为准。** 本节只保留 2026-11-04 的决策
+背景：会话状态、一次性交接、todo gate、auto 0.70、默认关闭。实际状态字段、RPC/CLI、闸门与触发、
+失败矩阵、以及与 omp 的差异全部由 ADR-25 定义；已知偏差（触发要求成功编辑、`auto=off` 不恢复且
+不清理陈旧 auto 武装、omp-ui 尚无 `/prewalk` 命令）见 ADR-25 D8/后果。
 
 ### D6. auto-graph：新增 `table_chart.plan` judge 方法并接线客户端
 
-- 新增只读 RPC `table_chart.plan`：参数 `{session_id, markdown, table, guess}`；host 移植
-  `auto-graph` 的 judge 问题文件与 `planner.ts` 的答案→`ChartPlan` 逻辑，调用
-  `resolve_judge(purpose="auto-graph")`；返回 `{plan: ChartPlan|null, source: "judge"|"local"}`。
-  15s 超时；无 judge/异常返回 `source:"local"` 与本地 `guess`，不阻塞。
-- 客户端：启动/设置变更调用 `setTableCharts(mode, planner)`；`always` 不调用 planner；`smart`
-  调用 `table_chart.plan`；`auto` 调用一次 `table_chart.plan`，若返回 `source:"local"` 则按
-  `always`（本地猜测）继续；`off` 关闭。`tableChartsVisible` 由模式决定，不再硬编码 `true`。
-- 表格内容只在该次 judge 请求中发送，不持久化、不写入 transcript；usage 记入账本，purpose
-  `auto-graph`。按表格源缓存结果；同一表格不重复请求。
-- 不新增图表渲染后端；图表仍由 pi-tui 在客户端绘制。
+**落地契约以 [ADR-26](ADR-26-auto-graph-table-charts.md) 为准。** 实际是 `table_chart.status`
+能力探测 + `table_chart.plan` 两轮规划；`plan` 参数是 `{profile, markdown, table, guess, mode}`
+（`profile` 是传输作用域，不是 planner payload；没有 `session_id`），返回 `{plan, source}`。
+`auto` 无 native judge 时客户端按 `always`；单表失败逐表回退本地，无 sticky。本节其余参数/行为
+描述为 2026-11-04 的历史背景，不再作为实现契约。
 
 ### D7. 能力声明、命令与文档
 
 - `gateway/panel_inventory.py`：`omfg` 从 `UNSUPPORTED` 改为 `PENDING`（ADR-12 C；方法/事件落地后
   升 `READY`）；`docs/omp-ui-panels.json` 同步重新生成。
 - ratchet/prewalk 不是面板：在 §10 与命令能力表中登记为 `pending`，实现后注册 `/ratchet`、
-  `/prewalk`；headless 下没有审批/显式武装时不得启动。
+  `/prewalk`；headless 下没有审批/显式武装时不得启动。prewalk 现状：CLI `/prewalk` 已注册，
+  omp-ui 客户端入口未完成（ADR-25 后果）。
 - auto-graph 不是面板：保持客户端设置；`runtime.describe` 不新增图表能力字段。
 - §10 行改为 **C / C / C / C**，并链接本 ADR；ADR-11 的 `/omfg` 条目加“由 ADR-12 取代”。
 

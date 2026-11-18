@@ -295,7 +295,7 @@ P0 可独立合并；P1 是唯一一次破坏性切换；P2/P3/P4 互不阻塞�
 
 ### 任务
 
-- [ ] `agent/prompts/project_context.py`
+- [x] `agent/prompts/project_context.py`
   - 新增 `workspace_tree(project_dir=None, *, depth=3, session_id="") -> tuple[str, bool]`：
     每层按 mtime 新→旧；目录名带 `/`；2 空格缩进；深度 ≤ 3；超条目上限置
     `truncated=True`。
@@ -310,12 +310,12 @@ P0 可独立合并；P1 是唯一一次破坏性切换；P2/P3/P4 互不阻塞�
     （与 `render_runtime` 同一判定），不新增配置开关、不进 `AssemblyInputs`。
   - **会话内冻结**：首次解析按 `(profile, session_id, path, depth)` 固定在进程内有界 LRU
     （`maxsize=64`）；压缩重建复用同一字节。1h TTL 只服务跨会话，会话内不因过期重算。
-- [ ] 跨会话缓存（`hermes_cache` 公共 API）
+- [x] 跨会话缓存（`hermes_cache` 公共 API）
   - `get_cache().namespace("prompt_workspace_tree", default_ttl=3600, max_entries=32,
     eviction=EvictionPolicy.LRU)`（调用时创建，解析活动 profile）。
   - key = `f"{resolved_path}|d={depth}"`；value = `{"tree": str, "truncated": bool}`。
   - 缓存 miss/异常一律回退现场解析（fail open），不阻塞提示词构建。
-- [ ] 测试
+- [x] 测试
   - `tests/agent/test_project_context.py`：树格式、mtime 新→旧、深度/条目上限与 truncated、
     非编码仓库不扫描（扫描计数 0）、签名不再接受 `workspace_tree`。
   - 新 `tests/agent/test_workspace_tree_cache.py`：同 session 第二次调用命中会话冻结
@@ -327,9 +327,36 @@ P0 可独立合并；P1 是唯一一次破坏性切换；P2/P3/P4 互不阻塞�
 ### 验收
 
 - `scripts/run_tests.sh tests/agent/test_project_context.py tests/agent/test_workspace_tree_cache.py tests/hermes_cache/`
-- 非编码 surface 快照不变；`coding_repo=True` 的 code workspace surface 快照重生成（附 diff）。
+- 非编码 surface 快照不变；`coding_repo=True` 的 surface 快照重生成（harness 固定 `skip_context_files=True`，无 diff，见状态）。
 - 同一 session 内两次构建（含一次模拟 TTL 过期）字节相同。
 - `python scripts/check`
+
+> 状态（2026-11-13）：P4 已完成。`project_context.workspace_tree()` 自行解析 `<workspace-tree>`
+> （3 层、每层 mtime 新→旧、目录带 `/`、2 空格缩进、200 条目上限置 truncated），只接收路径；
+> `render_project_context()` 删掉 `workspace_tree*` 参数并新增 `session_id`，非编码仓库不扫描。
+> 首次解析按 `(profile, session_id, path, depth)` 走 `lru_cache(maxsize=64)` 冻结，压缩重建同字节；
+> 跨会话走 `hermes_cache` 的 `prompt_workspace_tree`（1h TTL、32 条 LRU、读写异常 fail open）。
+> `effective_project_dir()` 是 cwd 的唯一入口：解析后等于 `Path.home()` 时改道
+> `$HERMES_HOME/tmp/empty-workspace`（`mkdir_under_hermes_home()` + `apply_secure_dir_policy()`），
+> `system_prompt._context_cwd()`、`context_file_sources`、context files 发现与树扫描全部经它。
+> 渲染器 fallback 同源：`render_runtime` / `render_closing` 的 `project_dir=None` 不再直接
+> `Path.cwd()`，改走 `effective_project_dir()`；否则本地 CLI（`resolve_context_cwd()` 为 None）
+> 从 home 启动时，runtime/closing 仍会 `rg --files` 扫描 home 并判定为编码仓库，而尾块判定为空。
+> 顺带修复 P1 遗留的 `runtime_environment_rows` 未定义（`render_project_context` 在非
+> `skip_context_files` 路径上恒 NameError）：现返回 `(rows, notes)`，本地后端给宿主行，
+> remote/sandbox 只给后端状态，WSL/embedder/Bot Screen/环境探针进 notes。
+> 快照：`cli-code` 现在是真正的 code workspace（`skip_context_files=not code`、两个 `.py` 源文件、
+> 固定 `os.utime`），`<project-context>` / `<workspace-tree>` / `§ Workflow` / `<domain-rules>` /
+> codegraph 工具组进入该 surface；其余 9 个 surface 逐字节不变。harness 新增 pin：
+> `hermes_platform.host.facts.{os_family,os_release,native_arch}`、`_local_host_hints`、`is_wsl`、
+> `_bot_screen_hint`、`_embedder_environment_hint`，以及在 `sys.platform` pin 之前捕获的
+> `_rg_binary`（否则 `linux` pin 会隐藏宿主 rg，编码仓库判定变空）。
+> 验收：`test_project_context`、`test_workspace_tree_cache`、`tests/hermes_cache`、
+> `test_prompt_assembler*`、`test_prompt_sections`、`test_system_prompt*`、
+> `test_platform_hint_*`、`test_workstation_prompt_parsers`、`test_context_file_sources`、
+> `test_prompt_surface` 全绿；`scripts/check --base HEAD --only health,ruff` 0 blocking / 0 advisory。
+> 本机 `scripts/run_tests.sh` 在 re-exec 后 PATH 缺 `dirname` 失败，改用同环境变量的逐文件
+> `python -m pytest` 运行。
 
 ---
 
