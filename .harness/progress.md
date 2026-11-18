@@ -90,3 +90,4 @@ Written by the harness hook and by agents; never rewritten.
 [2026-11-18T07:33:38Z] stop: reason=pr-create-failed detail=git push blocked by GitHub push protection on a1a6a4a4cd (Google OAuth sample creds in omp-ui vendor rules.json); retried once, same result; operator unblock required
 - 2026-11-18T07:52:32Z | agent=omp | phase=pr | edit | agent/prompts/renderer.py
 [2026-11-18T08:00:05Z] decision: sprint-1 PR opened https://github.com/chaorenex1/My-H/pull/9
+[2026-11-18T08:00:39Z] decision: sprint-1 done (PR #9); transition to sprint-2-title-model-plan; backend pinned: omp (source: contract.md frontmatter)

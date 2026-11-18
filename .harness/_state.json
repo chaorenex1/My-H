@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "current_epic": "agent-title-system",
-  "current_sprint": 1,
-  "phase": "pr",
-  "negotiation_round": 2,
-  "iteration": 1,
+  "current_sprint": 2,
+  "phase": "negotiation",
+  "negotiation_round": 0,
+  "iteration": 0,
   "foundation_readiness": {
     "severity": "GREEN",
     "verified_at": "2026-11-17T16:29:02Z",
@@ -25,23 +25,15 @@
   "max_wall_time_sec": 28800,
   "max_cost_usd": 20.0,
   "cumulative_cost_usd": 0.86,
-  "start_time": "2026-11-17T23:58:00Z",
-  "last_agent": "evaluator",
-  "next_action": "harness-loop:transition-to-sprint-2",
+  "start_time": "2026-11-18T08:00:39Z",
+  "last_agent": null,
+  "next_action": "harness-loop:negotiate-sprint-2",
   "last_commit": "7b2d28fdd43fe9bfb8321de6cb9aefb94949776d",
-  "features_pass_fail": [
-    {
-      "feature": "title-protocol",
-      "functionality": "pass",
-      "craft": "pass",
-      "consistency": "pass",
-      "documentation": "pass"
-    }
-  ],
+  "features_pass_fail": [],
   "completed": false,
   "pending_human": false,
   "pending_worker_exit": true,
-  "sprint_branch": "harness/agent-title-system/sprint-1-title-protocol",
+  "sprint_branch": null,
   "tier_a_last": null,
   "tier_a_history": [],
   "tier_a_summary": {
