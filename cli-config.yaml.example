@@ -989,6 +989,11 @@ advisor:
 #
 #   # Automatic session title generation after the first exchange
 #   title_generation:
+#     # Workload switch + explicit route override (ADR-21 D4/D13): enabled,
+#     # model_upgrade_enabled, generator and card_icons decide whether/how a
+#     # session is named; provider/model/base_url only head the candidate plan,
+#     # and only when pinned. The derived title and the tiny -> commit_message ->
+#     # smol -> current-model plan name sessions without this slot.
 #     enabled: true          # set false to disable auto-title generation
 #     model_upgrade_enabled: true  # set false to keep the instant derived title and skip the model call
 #     generator: fork        # fork | plan; fork replays the reply's prefix and falls back to the plan

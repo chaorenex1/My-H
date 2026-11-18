@@ -319,3 +319,67 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T15:33:42Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-4.md
 [2026-11-18T15:34:15Z] decision: sprint-4 PR opened https://github.com/chaorenex1/My-H/pull/12
 [2026-11-18T16:01:54Z] decision: operator paused after sprint-4 (PR #12); cursor advanced to sprint-5 negotiation, no worker dispatched
+[2026-11-18T16:06:06Z] backend pinned: omp (source: contract.md frontmatter; state cache was null)
+[2026-11-18T16:06:06Z] branch: harness/agent-title-system/sprint-5-tool-card-titles-and-docs (created) from harness/agent-title-system/sprint-4-session-card-and-fork
+- 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1.md
+- 2026-11-18T16:10:53Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-1-report.json
+[2026-11-18T16:11:05Z] decision: sprint-5 negotiation round-1 generator dispatched (backend=omp), awaiting result
+[2026-11-18T16:11:45Z] agent=generator | phase=negotiation | omp-done | files=2 status=done progress=round-1
+[2026-11-18T16:16:53Z] decision: sprint-5 negotiation round-1 evaluator dispatched, awaiting result
+- 2026-11-18T16:19:11Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-neg-1.md
+[2026-11-18T16:20:16Z] negotiation: round=1 generator=counter evaluator=counter (thresholds agreed, contract-text corrections requested)
+[2026-11-18T16:21:03Z] decision: sprint-5 negotiation round-2 generator dispatched, awaiting result
+- 2026-11-18T16:24:44Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-2.md
+- 2026-11-18T16:24:44Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-neg-2-report.json
+- 2026-11-18T16:26:13Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:26:33Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:26:50Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:19Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:45Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:27:58Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:28:47Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:05Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:19Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:31Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:29:48Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:03Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:20Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+- 2026-11-18T16:30:36Z | agent=omp | phase=negotiation | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/contract.md
+[2026-11-18T16:31:22Z] decision: sprint-5 contract frozen @ 8c8f2c0b61 (rubric F1.0/C0.85/Cons0.9/Doc0.9, max_iterations=8; negotiation resolved round 2 by generator accept)
+[2026-11-18T16:31:22Z] negotiation: round=2 generator=accept evaluator=skipped (contract frozen)
+[2026-11-18T16:32:28Z] decision: sprint-5 impl iter-1 generator dispatched, awaiting result
+- 2026-11-18T16:39:12Z | agent=omp | phase=impl | write | tests/tools/test_eval_card_metadata_contract.py
+- 2026-11-18T16:39:41Z | agent=omp | phase=impl | write | tests/tools/test_eval_card_metadata_contract.py
+- 2026-11-18T16:40:40Z | agent=omp | phase=impl | write | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:43:14Z | agent=omp | phase=impl | edit | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:44:03Z | agent=omp | phase=impl | edit | tests/gateway/test_tool_card_title_contract.py
+- 2026-11-18T16:44:30Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:44:40Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:44:48Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T16:45:09Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T16:45:13Z | agent=omp | phase=impl | edit | hermes_cli/aux_slots.py
+- 2026-11-18T16:45:23Z | agent=omp | phase=impl | edit | hermes_cli/config_defaults_auxiliary.py
+- 2026-11-18T16:45:56Z | agent=omp | phase=impl | write | tests/ci/test_title_docs_contract.py
+- 2026-11-18T16:55:57Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:56:17Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:57:38Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T16:58:14Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:58:23Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T16:59:51Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:01:46Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:03:38Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:05:00Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/debug-resolve.sh
+- 2026-11-18T17:05:58Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/eval-tool-card-titles-and-docs.sh
+- 2026-11-18T17:07:26Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T17:09:41Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1.md
+- 2026-11-18T17:09:46Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/generator-1-report.json
+[2026-11-18T17:11:41Z] agent=generator | phase=impl | omp-done | files=8 status=done iter=1 (validator: 0 violations)
+- 2026-11-18T17:23:33Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/phase3_independent_probe.py
+- 2026-11-18T17:23:48Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/eval-tool-card-titles-and-docs-evaluator.sh
+- 2026-11-18T17:26:22Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/evidence/iter-1/eval-tool-card-titles-and-docs-evaluator.sh
+- 2026-11-18T17:40:36Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-1.md
+- 2026-11-18T17:41:14Z | agent=omp | phase=evaluation | write | C:/Users/zarag/AppData/Local/hermes/hermes-agent/.harness/agent-title-system/sprints/sprint-5-tool-card-titles-and-docs/feedback/evaluator-1-report.json
+[2026-11-18T17:43:15Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.9 documentation=0.9"
+[2026-11-18T17:43:15Z] decision: sprint-5 iter-1 checkpoint (contract status done, phase pr)
+[2026-11-18T17:50:00Z] decision: sprint-5 PR opened https://github.com/chaorenex1/My-H/pull/13
+[2026-11-18T17:50:15Z] decision: epic=agent-title-system completed sprints=5 cost=$1.27 iters=5

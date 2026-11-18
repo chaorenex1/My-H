@@ -90,6 +90,12 @@ def auxiliary_defaults() -> dict:
         "mcp": _aux(30),
         # prefer_fast_model opts in to the provider fast tier; auto otherwise = main model.
         "title_generation": {
+            # ADR-21 D4/D13: this block is the naming workload switch plus an explicit route
+            # override, not the only source of a title. enabled/model_upgrade_enabled/generator/
+            # card_icons/language/refresh_after_prompts decide whether and how a session is
+            # named; the provider/model/base_url route fields below only head the candidate plan
+            # when pinned. The derived title and the tiny -> commit_message -> smol ->
+            # current-model plan name sessions without this route.
             "enabled": True,
             "model_upgrade_enabled": True,  # False = keep the instant derived title, never call a model
             # plan | fork (ADR-21 D6). fork runs the titling as a side turn over the main reply's
