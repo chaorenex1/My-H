@@ -676,7 +676,9 @@ def _workdir_reraise_disk_full(exc: BaseException, log_msg: str) -> None:
 # dropping the tag re-plants them as bare user turns after a restart and corrupts the truncate ordinal address space.
 _WORKDIR_SEED_FIELDS = (
     "content", "reasoning", "reasoning_content", "reasoning_details", "codex_reasoning_items",
-    "codex_message_items", "display_kind", "display_metadata", "timestamp")
+    "codex_message_items", "display_kind", "display_metadata", "timestamp",
+    # ADR-9 D6: the durable custom envelope is rebuilt from these top-level fields.
+    "custom_type", "display", "display_only", "details", "attribution", "legacy_role")
 
 
 def _persist_branch_seed(session: dict) -> None:

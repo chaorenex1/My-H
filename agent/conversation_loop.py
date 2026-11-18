@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field, fields
@@ -21,6 +22,7 @@ from agent.fast_mode import begin_turn as begin_fast_mode_turn
 from agent.message_metadata import append_message, without_persistence_fields
 from agent.message_sanitization import _repair_tool_call_arguments, _sanitize_surrogates
 from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, _estimate_tools_tokens_rough
+from agent.pause_gate import park as park_frozen
 from agent.process_bootstrap import _install_safe_stdio
 from agent.prompt_builder import RUNTIME_ENVIRONMENT_END, RUNTIME_ENVIRONMENT_HEADING
 from agent.prompt_refresh import rebuild_for_refresh, requested_epoch, stamp_prompt_epoch, stored_prompt_refresh_epoch
@@ -35,7 +37,7 @@ from agent.runtime_cwd import resolve_agent_cwd
 from agent.surface_switch import (
     identity_line_value, note_inert_pinned_tools, runtime_host_value, stage_surface_switch_note,
 )
-from agent.turn_context import PRE_LLM_BLOCK_EXIT_REASON, PreflightCompressionTimedOut, build_turn_context
+from agent.turn_context import PreflightCompressionTimedOut, build_turn_context
 from hermes_cli.observability.shared_metrics_efficiency import record_cache_break, record_prompt_rebuild
 from hermes_cli.plugins_dispatch import held_stream_transforms
 from agent.turn_retry_state import TurnRetryState
@@ -47,6 +49,7 @@ from agent.turn_api_error import handle_api_error
 from agent.turn_api_request import build_api_request
 from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, OPEN_TURN_TAIL_ROLES, failed_turn_notice, site_copy
 from agent.turn_final_response import finish_text_response
+from agent.turn_early import reset_turn_yield, turn_without_loop
 from agent.turn_finalizer import finalize_turn
 from agent.turn_iteration_prep import (
     announce_api_call,
@@ -954,30 +957,47 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     stamp_prompt_epoch(agent, refresh_epoch)
 
 
+def _root_key(path: str) -> str:
+    """Comparison form of a workspace root (Windows case-folded, trailing separators dropped)."""
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     """Return False when the persisted runtime-identity lines are stale."""
-    # Model/provider identity, then cwd drift.  A cwd change is a real content change (context
-    # files, the workspace snapshot and the coding posture are all resolved from it), so it
-    # still rebuilds; the runtime surface does not (agent/surface_switch.py).
-    # The builder omits an empty trailer line, so stored-but-now-empty is a route change too;
-    # the rebuilt prompt then carries no line and matches from the next turn on.  Stored-empty
-    # (pre-trailer prompts) keeps reusing.
+    # Model/provider identity, then cwd drift, all anchored in the persisted <workstation>
+    # block (agent/surface_switch.py). A cwd change is a real content change (context files
+    # and the coding posture are resolved from it), so it still rebuilds; the runtime surface
+    # does not (agent/surface_switch.py::stage_surface_switch_note).
+    # The builder omits an empty line, so stored-but-now-empty is a route change too; the
+    # rebuilt prompt then carries no line and matches from the next turn on. Stored-empty
+    # (legacy prompts) keeps reusing.
     for label, attr in (("Model", "model"), ("Provider", "provider")):
         stored = identity_line_value(prompt, label)
         current = str(getattr(agent, attr, "") or "").strip()
         if stored and stored != current:
             return False
-    # A prompt stamped for another session (a /branch child copies its parent's bytes) must not
-    # tell the model a foreign Session ID.  Checked only when the trailer is on: with it off, a
-    # "Session ID:" line in project text would read as a mismatch and rebuild every turn.
-    stored_sid = identity_line_value(prompt, "Session ID")
-    if stored_sid and getattr(agent, "pass_session_id", False) and stored_sid != agent.session_id:
-        return False
     # Compare against resolve_agent_cwd() — the SAME resolver used to build the
     # prompt — so TERMINAL_CWD sessions are not falsely rejected.
     stored_cwd = runtime_host_value(prompt, "Current working directory")
     if stored_cwd and stored_cwd != str(resolve_agent_cwd()):
         return False
+    # Additional workspace roots (`/add-dir`) are prompt content too: restoring a prompt whose
+    # block omits a root the session now holds would hide that root from the model. Only a
+    # session with a store can answer; an agent without one (subagent, test double) keeps its
+    # bytes, and an absent block plus no roots agree, so the feature's absence never rebuilds.
+    db, session_id = getattr(agent, "_session_db", None), getattr(agent, "session_id", "")
+    if db is not None and isinstance(session_id, str) and session_id:
+        try:
+            from agent.system_prompt import persisted_workspace_roots
+            from agent.workspace_dirs import prompt_roots
+            stored_roots = [_root_key(root) for root in persisted_workspace_roots(prompt)]
+            current_roots = [_root_key(root) for root in
+                             prompt_roots(session_id, db=db, cwd=resolve_agent_cwd())]
+        except Exception:  # health: allow BLE001 -- a failed probe must not force a rebuild per turn
+            logger.debug("workspace-root drift probe failed (session=%s)", session_id, exc_info=True)
+            return True
+        if stored_roots != current_roots:
+            return False
     # Platform is deliberately NOT an identity field: a surface switch does not invalidate the
     # stored bytes, it only makes their interface section out of date, and that is corrected by
     # agent.surface_switch.stage_surface_switch_note without touching the cached prefix (#104414).
@@ -1586,6 +1606,10 @@ def _run_api_retry_loop(agent, s: _LoopState) -> Optional[dict[str, Any]]:
         if _ng.action == "break":
             return None
         try:
+            if park_frozen(agent, boundary="api request"):
+                # Same seam as a Stop during the call: the outer handler records the interrupt and
+                # leaves the retry loop without announcing a request that will not be sent.
+                raise InterruptedError("paused turn stopped")
             _run_phase(build_api_request, agent, s)
             if _run_phase(perform_api_call, agent, s).action == "break":
                 return None
@@ -1612,35 +1636,6 @@ def _finalize_from_state(agent: Any, s: _LoopState) -> dict[str, Any]:
         name: getattr(s, name)
         for name in inspect.signature(finalize_turn).parameters if name != "agent"
     })
-
-
-def _turn_without_loop(agent: Any, s: _LoopState, block_message: str) -> Optional[dict[str, Any]]:
-    """The turn's result when it never enters the generic loop, else None. A ``pre_llm_call``
-    veto finalizes with no inference request (the block message closes the transcript pair);
-    the opt-in codex app-server runtime runs the whole turn in its subprocess
-    (agent/transports/codex_app_server_session.py)."""
-    if block_message:
-        s.final_response, s._turn_exit_reason = block_message, PRE_LLM_BLOCK_EXIT_REASON
-        return _finalize_from_state(agent, s)
-    return _codex_app_server_turn(agent, s) if agent.api_mode == "codex_app_server" else None
-
-
-def _codex_app_server_turn(agent: Any, s: Any) -> Optional[dict[str, Any]]:
-    """The codex app-server's result for this turn, or None when its failure activated a fallback and the
-    generic loop retries the same user turn."""
-    codex_result = agent._run_codex_app_server_turn(
-        user_message=s.user_message, original_user_message=s.original_user_message,
-        messages=s.messages, effective_task_id=s.effective_task_id,
-        should_review_memory=s._should_review_memory, turn_id=s.turn_id,
-    )
-    from agent.turn_recovery import activate_codex_app_server_fallback
-    if not activate_codex_app_server_fallback(agent, codex_result):
-        return codex_result
-    # Fallback activation rewrote provider/model/api_mode: retry this same user turn on the generic
-    # loop below, keeping codex's projected rows and its failed API call in the turn's accounting.
-    s.api_call_count = int(codex_result.get("api_calls") or 0)
-    s.active_system_prompt = _sync_failover_system_message(agent, None, s.active_system_prompt)
-    return None
 
 
 def _run_conversation_turn(
@@ -1679,6 +1674,11 @@ def _run_conversation_turn(
     # in-place boundary would make a later uncompressed result look compacted.
     agent._last_compaction_in_place = agent._last_compression_attempt_recorded = False
     agent._last_compression_attempt_in_place = None
+    reset_turn_yield(agent)
+    # ADR-17 P5: auto reasoning is fixed per user turn; never inherit the previous
+    # turn's overlay (the gateway caches agents across turns).
+    agent._auto_reasoning_config = None
+    agent._auto_reasoning_route = None
     begin_fast_mode_turn(agent, conversation_history)
 
     # Adopt ~/.hermes/.env credential/base-url edits made since the last turn — a
@@ -1717,6 +1717,14 @@ def _run_conversation_turn(
         )
     except PreflightCompressionTimedOut as _preflight_timeout_exc:
         return _preflight_timeout_result(agent, _preflight_timeout_exc, conversation_history)
+
+    # ADR-17 P5: one classification per user turn, resolved before the loop so every
+    # iteration sends the same effort and the prompt prefix stays cached. Also arms a
+    # prewalk handoff for this task (ADR-12 D5); both fail soft.
+    from agent.turn_consumers import prepare_turn_consumers
+
+    prepare_turn_consumers(agent, _ctx.user_message, _ctx.conversation_history)
+
     # Voice turns may run on auxiliary.voice_chat: bound after the prompt/row/compaction were settled
     # against the main model, undone in finalize_turn (and run_conversation's finally on early exits).
     from agent.voice_turn_route import begin_voice_turn_route
@@ -1730,6 +1738,7 @@ def _run_conversation_turn(
     # pool refresh tallies cap same-entry refreshes on a persistent 401 (#26080); usage
     # for on_turn_complete() stays None on turns that never reach a response.
     agent._delivered_interim_texts = set()
+    agent._ttsr_restart_count = 0
     agent._incremental_persistence_failed = False
     agent._last_persistence_error_cause = None
     agent._compression_adoption_failed = False
@@ -1742,7 +1751,7 @@ def _run_conversation_turn(
         max_compression_attempts=getattr(agent, "max_compression_attempts", 3),
         **{f.name: getattr(_ctx, f.name.lstrip("_")) for f in fields(_LoopState) if f.name in _CTX_FIELDS},
     )
-    if (early_result := _turn_without_loop(agent, s, _ctx.plugin_block_message)) is not None:
+    if (early_result := turn_without_loop(agent, s, _ctx.plugin_block_message)) is not None:
         return early_result
 
     _prelude_action, _prelude_result = play_prelude(agent, s, prelude)
@@ -1841,9 +1850,9 @@ def run_conversation(
     agent._turn_user_intervened = False
     # Images attached natively to this user turn stay visible to vision_analyze for the turn, so
     # it does not embed the same pixels a second time into the same request (#76411).
-    from agent.adviser_bridge import ensure_adviser
+    from agent.advisor_bridge import ensure_advisor
 
-    _adviser = ensure_adviser(agent)
+    _advisor = ensure_advisor(agent)
     with native_turn_images(user_message):
         try:
             # A plugin with a background reviewer needs a handle to this live turn:
@@ -1851,11 +1860,11 @@ def run_conversation(
             # released here. Bind inside the try so a failing binder cannot skip the
             # voice-route teardown below.
             plugin_runtime.bind_turn(agent)
-            if _adviser is not None:
+            if _advisor is not None:
                 try:
-                    _adviser.bind_turn()
+                    _advisor.bind_turn()
                 except Exception:
-                    logger.debug("adviser bind failed", exc_info=True)
+                    logger.debug("advisor bind failed", exc_info=True)
             result = _run_conversation_turn(
                 agent,
                 user_message,
@@ -1877,17 +1886,25 @@ def run_conversation(
             # more turn through the existing pending_steer contract.
             plugin_runtime.attach_post_turn(agent, result)
         finally:
-            if _adviser is not None:
+            if _advisor is not None:
                 try:
-                    _adviser.unbind_turn()
+                    _advisor.unbind_turn()
                 except Exception:
-                    logger.debug("adviser unbind failed", exc_info=True)
+                    logger.debug("advisor unbind failed", exc_info=True)
             plugin_runtime.unbind_turn(agent)
             end_voice_turn_route(agent)
     settle_held_final(agent, result)
     result = export_current_turn_boundary(agent, result, user_message)
     if isinstance(result, dict):
         result["user_intervened"] = bool(getattr(agent, "_turn_user_intervened", False))
+    try:
+        from hermes_codegraph.auto_update import schedule_codegraph_post_turn
+
+        schedule_codegraph_post_turn(
+            agent, result, turn_id=str(result.get("turn_id") or "")
+        )
+    except Exception:  # never let the reconciler change a turn result
+        logger.debug("post-turn code refresh scheduling failed", exc_info=True)
     from scheduler.agent_hooks import on_turn_committed
     on_turn_committed(agent, result)
     _close_durable_failed_turn(agent, result)

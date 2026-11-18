@@ -50,7 +50,8 @@ MODELS = {
 }
 # (surface, platform, model family, cwd is a code workspace). Model names gate guidance blocks
 # and the patch dialect, so the matrix runs on cli; one row per other surface catches its hint
-# and toolset; ``cli-code`` adds the coding posture every repo session gets.
+# and toolset; ``cli-code`` adds the coding posture every repo session gets; ``subagent``
+# renders the shared base plus one fixed ``§ Subagent Role`` block (ADR-19 D9).
 SURFACES = (
     ("cli.claude", "cli", "claude", False),
     ("cli.gpt", "cli", "gpt", False),
@@ -61,6 +62,7 @@ SURFACES = (
     ("telegram.claude", "telegram", "claude", False),
     ("discord.claude", "discord", "claude", False),
     ("cron.claude", "cron", "claude", False),
+    ("subagent.claude", "subagent", "claude", False),
 )
 # Desktop resolves toolsets in tui_gateway (client-surface toolsets folded in); the gateway, cron
 # and classic CLI read the platform toolsets directly.
@@ -68,6 +70,9 @@ TUI_GATEWAY_PLATFORMS = ("desktop",)
 FIXED_NOW = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 # ``Conversation started:`` reads the stamp embedded in the session id.
 SESSION_ID = FIXED_NOW.strftime("%Y%m%d_%H%M%S") + "_prompt_surface"
+# Fixed role body for ``subagent.claude``: exercises the base + role block wiring, not a
+# particular bundled definition.
+SUBAGENT_ROLE_BODY = "Review one diff and report findings. Do not edit files."
 
 
 # ── render (runs inside the child process) ───────────────────────────────────
@@ -79,6 +84,13 @@ def _pin_environment() -> None:
     socket.socket.connect = refuse  # type: ignore[method-assign]
     socket.create_connection = refuse  # type: ignore[assignment]
     socket.getaddrinfo = refuse  # type: ignore[assignment]
+    # Import psutil under the real platform first: it selects its OS backend at import time, and
+    # the ``linux`` pin below would make it look for ``resource`` on a Windows host.
+    __import__("psutil")
+    # Ripgrep backs project-language detection, and the ``linux`` pin hides the host's binary
+    # from ``_rg_binary``. Resolve it first so the code surface stays a coding repo.
+    from agent.prompts import rules as prompt_rules
+    rg_binary = prompt_rules._rg_binary()
     sys.platform = "linux"  # skills index ``platforms:`` gate
 
     import hermes_time
@@ -92,6 +104,23 @@ def _pin_environment() -> None:
     # The toolchain probe line reports the host's python/node/pip; it is environment, not code.
     from tools import env_probe
     env_probe.get_environment_probe_line = lambda **_k: ""  # type: ignore[assignment]
+    # The code surface renders ``<project-context>``: pin every host input it reads, so the
+    # committed bytes do not depend on the machine, its home layout or a running Bot Screen.
+    from agent import prompt_builder as prompt_builder_module
+    from hermes_platform.host import facts as host_facts
+    host_facts.os_family = lambda: "linux"  # type: ignore[assignment]
+    host_facts.os_release = lambda: "test"  # type: ignore[assignment]
+    host_facts.native_arch = lambda: "amd64"  # type: ignore[assignment]
+    prompt_builder_module._local_host_hints = lambda: [  # type: ignore[assignment]
+        "Host: linux (test)\n"
+        "User home directory: /home/surface\n"
+        "Current working directory: /home/surface/code\n"
+        "Scratch directory: /home/surface/.hermes/cache/scratch (TMPDIR points here)"
+    ]
+    prompt_builder_module.is_wsl = lambda: False  # type: ignore[assignment]
+    prompt_builder_module._bot_screen_hint = lambda: ""  # type: ignore[assignment]
+    prompt_builder_module._embedder_environment_hint = lambda: ""  # type: ignore[assignment]
+    prompt_rules._rg_binary = lambda: rg_binary  # type: ignore[assignment]
 
 
 class _ImportFailures(logging.Handler):
@@ -113,6 +142,10 @@ def _scrub(text: str, home: Path) -> str:
         f"{_platform.system()} ({_platform.release()})": "<HOST_OS>",
     }.items(), key=lambda kv: -len(kv[0])):
         text = text.replace(raw, token)
+        # Tool schemas embed absolute paths inside JSON, where each separator is doubled.
+        escaped = raw.replace("\\", "\\\\")
+        if escaped != raw:
+            text = text.replace(escaped, token)
     return text
 
 
@@ -137,19 +170,35 @@ def _render_surface(home: Path, platform: str, model: str, code: bool) -> tuple[
     os.chdir(cwd)
     agent = AIAgent(
         model=model, api_key="inspect-only", base_url="https://openrouter.ai/api/v1",
-        quiet_mode=True, save_trajectories=False, platform=platform, skip_context_files=True,
+        quiet_mode=True, save_trajectories=False, platform=platform, skip_context_files=not code,
         session_id=SESSION_ID, enabled_toolsets=_enabled_toolsets(platform),
     )
+    if platform == "subagent":
+        from agent.prompts.assembler import SubagentRole
+
+        agent._subagent_role = SubagentRole(body=SUBAGENT_ROLE_BODY)
     tiers = {tier: _scrub(text, home) for tier, text in build_system_prompt_parts(agent).items()}
-    tools = json.loads(_scrub(json.dumps(agent.tools), home))
+    # The subagent row exists for the base+role block bytes; its toolset is a per-run surface
+    # (``enable_tools``), so snapshotting it as a stock catalog would overstate one run's tools.
+    tools = {} if platform == "subagent" else json.loads(_scrub(json.dumps(agent.tools), home))
     return tiers, {t["function"]["name"]: t["function"] for t in tools}
 
 
 def _render_child(out: Path) -> int:
     home = Path(os.environ["HOME"]).resolve()
     (home / "plain").mkdir(parents=True, exist_ok=True)
-    (home / "code").mkdir(parents=True, exist_ok=True)
-    (home / "code" / "pyproject.toml").write_text('[project]\nname = "demo"\n', encoding="utf-8")
+    code_dir = home / "code"
+    code_dir.mkdir(parents=True, exist_ok=True)
+    # Two source files make the code surface a coding repo; fixed mtimes keep the workspace
+    # tree's newest-first order stable across runs and machines.
+    for name, stamp, body in (
+        ("pyproject.toml", 1_700_000_000, '[project]\nname = "demo"\n'),
+        ("main.py", 1_700_000_100, "print('demo')\n"),
+        ("util.py", 1_700_000_200, "VALUE = 1\n"),
+    ):
+        path = code_dir / name
+        path.write_text(body, encoding="utf-8")
+        os.utime(path, (stamp, stamp))
     sys.path.insert(0, str(ROOT))
     failures = _ImportFailures()
     logging.getLogger().addHandler(failures)
@@ -176,7 +225,7 @@ def _write_snapshot(out: Path, prompts: dict[str, dict[str, str]], tools_by_surf
     manifest: dict[str, dict] = {}
     for surface, tiers in prompts.items():
         text = "\n\n".join(f"===== {tier} =====\n{tiers[tier]}" for tier in ("stable", "context", "volatile"))
-        (out / "prompts" / f"{surface}.txt").write_text(text + "\n", encoding="utf-8")
+        (out / "prompts" / f"{surface}.txt").write_text(text + "\n", encoding="utf-8", newline="\n")
         tools = tools_by_surface[surface]
         manifest[surface] = {
             "prompt_tokens": {tier: len(tiers[tier]) // CHARS_PER_TOKEN for tier in tiers},
@@ -187,11 +236,11 @@ def _write_snapshot(out: Path, prompts: dict[str, dict[str, str]], tools_by_surf
         variants = {s: json.dumps(t[name], indent=2, sort_keys=True, ensure_ascii=False) + "\n"
                     for s, t in tools_by_surface.items() if name in t}
         common = Counter(variants.values()).most_common(1)[0][0]
-        (out / "tools" / f"{name}.json").write_text(common, encoding="utf-8")
+        (out / "tools" / f"{name}.json").write_text(common, encoding="utf-8", newline="\n")
         for surface, text in variants.items():
             if text != common:
-                (out / "tools" / f"{name}.{surface}.json").write_text(text, encoding="utf-8")
-    (out / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                (out / "tools" / f"{name}.{surface}.json").write_text(text, encoding="utf-8", newline="\n")
+    (out / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 
 
 def render(out: Path) -> int:
@@ -206,9 +255,13 @@ def render(out: Path) -> int:
             "TZ": "UTC", "LANG": "C.UTF-8", "PYTHONHASHSEED": "0", "PYTHONPATH": str(ROOT),
             "TMPDIR": tmp, "PYTHONDONTWRITEBYTECODE": "1",
         }
-        for key in ("HERMES_RUNTIME_DIR", "SYSTEMROOT"):
+        for key in ("HERMES_RUNTIME_DIR", "SYSTEMROOT", "LOCALAPPDATA"):
             if os.environ.get(key):
                 env[key] = os.environ[key]
+        if os.name == "nt":
+            # ``Path.home()`` reads USERPROFILE on Windows; point it at the throwaway home so
+            # ``~/.hermes`` display paths match the POSIX runners this snapshot is compared on.
+            env.update(USERPROFILE=str(home), HOMEDRIVE=home.drive, HOMEPATH=str(home)[len(home.drive):])
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "_child", str(staging)],
             env=env, cwd=tmp, capture_output=True, text=True, encoding="utf-8", timeout=600, check=False,

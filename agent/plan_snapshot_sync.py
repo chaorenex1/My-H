@@ -103,7 +103,7 @@ def sync_plan_snapshot(state: Any) -> bool:
             _inflight.add(key)
             _last_attempt[key] = (seen, now)
         # Under this profile's contextvars (its Hermes home and auth store), as the credits seed thread does.
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         spawn_context_thread(_refresh, args=(plan_changed, key), name="nous-plan-sync").start()
         return True
     except Exception:

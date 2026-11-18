@@ -166,6 +166,8 @@ class TestStructuredRead:
             "goal": None,
             "loop": None,
             "heartbeat": None,
+            "freeze": None,
+            "estop": None,
             "revision": "",
             "updated_at": 0,
         }

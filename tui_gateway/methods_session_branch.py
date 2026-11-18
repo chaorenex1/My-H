@@ -19,10 +19,22 @@ def _branch_title(db, parent_key: str) -> str:
 
 
 def _visible_branch_history(messages) -> list:
-    """user/assistant rows with visible text, as FULL copies (reasoning + timeline-marker tags survive)."""
-    return [dict(message) for message in messages or []
-            if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
+    """user/assistant rows with visible text, as FULL copies (reasoning + timeline-marker tags survive).
+
+    ADR-9 D6: a ``role:"custom"`` row is durable transcript history and rides the branch with its
+    ``custom_type``/``details``; dropping it here would make the six ``_BRANCH_COPY_FIELDS`` inert.
+    Display-projection rows keep those fields in the ``_custom_message`` envelope, so they are lifted
+    onto the copy before ``_persist_branch`` copies the whitelist.
+    """
+    from agent.custom_messages import lift_stored_fields
+
+    rows = [dict(message) for message in messages or []
+            if isinstance(message, dict)
+            and (message.get("role") in {"user", "assistant"} or message.get("role") == "custom")
             and _coerce_message_text(message.get("content")).strip()]
+    for row in rows:
+        lift_stored_fields(row)
+    return rows
 
 
 def _build_branch_agent(session: dict, new_sid: str, new_key: str, history: list, source: str):
@@ -60,6 +72,9 @@ _BRANCH_COPY_FIELDS = (
     # Timeline markers ride as role=user; untagged they become bare user turns after a restart, corrupting
     # the truncate ordinal address space.
     "display_kind", "display_metadata",
+    # ADR-9 D6: a custom row's six fields live at the top level (the storage envelope is rebuilt on
+    # write); copying only display_metadata would degrade a branched late-diagnostics row to text.
+    "custom_type", "display", "display_only", "details", "attribution", "legacy_role",
     # Branch copies are history, not new activity: keep the parent's timestamps.
     "timestamp")
 

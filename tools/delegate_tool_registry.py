@@ -168,7 +168,9 @@ def _capture_gateway_steer_authority(owner_session_id: Optional[str]) -> tuple[A
         return None, None
 
 # Registry record fields never exposed to the TUI/RPC snapshot.
-_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer"})
+_PRIVATE_RECORD_KEYS = frozenset({"agent", "owner_session_id", "owner_transport", "owner_session_record", "accepting_steer",
+                                  # Roster identity only the subagent.* wire projections read from the raw records.
+                                  "task_index", "agent_role", "last_update", "parent_tool_call_id"})
 
 def list_active_subagents() -> list[dict[str, Any]]:
     """Copy of the running subagent tree ({subagent_id, parent_id, depth, goal, model,
@@ -252,7 +254,9 @@ def _list_payload(parent_agent: Any) -> dict[str, Any]:
             "accepting_steer": bool(r.get("accepting_steer", False)),
             "live_transcript": getattr(r.get("agent"), "_live_transcript_path", None),
         })
-    payload: dict[str, Any] = {"action": "list", "count": len(entries), "subagents": entries}
+    counts = _named_session_counts(parent_agent, entries)
+    payload: dict[str, Any] = {"action": "list", "count": len(entries), "subagents": entries,
+                               **counts}
     if not entries:
         payload["note"] = (
             "No live subagents right now. Children that already finished "
@@ -260,6 +264,69 @@ def _list_payload(parent_agent: Any) -> dict[str, Any]:
             "completion messages — there is nothing to steer or stop."
         )
     return payload
+
+
+def _named_session_counts(parent_agent: Any, entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Resident/parked named sessions this conversation owns, merged into ``action=list``.
+
+    A settled resident session is no longer a live subagent record, but it is still steerable
+    (that starts a wake turn) and stoppable — so the listing carries it, plus the live/parked/
+    pending counters the observation contract (ADR-15 D7) asks for.
+    """
+    from tools.agent_inbox import count_inbox, live_named_sessions, owns_agent_session, \
+        parked_named_sessions
+
+    known = {str(entry.get("subagent_id") or "") for entry in entries}
+    live = [row for row in live_named_sessions() if owns_agent_session(row, parent_agent)]
+    parked = [row for row in parked_named_sessions() if owns_agent_session(row, parent_agent)]
+    for row in live:
+        session_id = str(row.get("agent_session_id") or "")
+        if not session_id or session_id in known:
+            continue
+        entries.append({"subagent_id": session_id, "parent_id": None,
+                        "goal": row.get("subject"), "model": row.get("model"),
+                        "status": row.get("state"), "running_seconds": None,
+                        "accepting_steer": row.get("state") == "running",
+                        "last_activity_at": row.get("last_activity_at")})
+        known.add(session_id)
+    for row in parked:
+        session_id = str(row.get("agent_session_id") or "")
+        if not session_id or session_id in known:
+            continue
+        entries.append({"subagent_id": session_id, "parent_id": None,
+                        "goal": row.get("subject"), "model": row.get("model_role") or None,
+                        "status": "parked", "running_seconds": None,
+                        "accepting_steer": False,
+                        "parked_at": row.get("parked_at")})
+        known.add(session_id)
+    pending = sum(count_inbox(str(row.get("agent_session_id") or ""), status="pending")
+                  for row in live + parked)
+    return {"live": len(live), "parked": len(parked), "pending": pending}
+
+
+_NO_LIVE_TARGET = (
+    "No live subagent '{sid}' in this conversation's spawn tree. It may have already finished "
+    "(its result arrives as a normal completion message). Use action='list' to see live children."
+)
+
+
+def _deliver_named_steer(subagent_id: str, message: Optional[str], parent_agent: Any) -> Optional[str]:
+    """Steer a named agent session: live → the next boundary, no live run → its inbox.
+
+    Only the owning conversation may deliver (same durable rule as live control). ``None`` means
+    the id is not an owned named session, so the caller reports its usual unknown-target error.
+    """
+    from tools.agent_inbox import deliver_owner_message
+
+    try:
+        queued = deliver_owner_message(subagent_id, message or "", parent_agent=parent_agent)
+    except Exception as exc:  # health: allow BLE001 -- the control plane reports, never raises
+        logger.debug("named-session steer(%s) failed: %s", subagent_id, exc)
+        return None
+    if not queued:
+        return None
+    return json.dumps({"action": "steer", **queued}, ensure_ascii=False)
+
 
 def _handle_control_action(action: str, subagent_id: Optional[str], message: Optional[str], parent_agent: Any) -> str:
     """Synchronous control plane for delegate_task: list/steer/stop. Runs in-turn (never backgrounded) over the same
@@ -273,14 +340,23 @@ def _handle_control_action(action: str, subagent_id: Optional[str], message: Opt
         return tool_error(f"action='{action}' requires subagent_id (from the spawn dispatch response or action='list').")
     with _active_subagents_lock:
         record = _active_subagents.get(sid)
-    if record is None or not _owns_subagent_record(record, parent_agent):
-        return tool_error(
-            f"No live subagent '{sid}' in this conversation's spawn tree. It "
-            "may have already finished (its result arrives as a normal "
-            "completion message). Use action='list' to see live children."
-        )
+    if record is not None and not _owns_subagent_record(record, parent_agent):
+        # A foreign live record must never fall through to a fresh ``steer_subagent`` call.
+        return tool_error(_NO_LIVE_TARGET.format(sid=sid))
     if action == "steer" and not (message or "").strip():
         return tool_error("action='steer' requires a non-empty 'message' describing the course correction.")
+    if action == "steer" and (record is None or record.get("origin") == "agent_session"):
+        queued = _deliver_named_steer(sid, message, parent_agent)
+        if queued is not None:
+            return queued
+    if action == "stop" and record is None:
+        from tools.agent_inbox import stop_named_session
+
+        stopped = stop_named_session(sid, parent_agent=parent_agent)
+        if stopped is not None:
+            return json.dumps({"action": "stop", **stopped}, ensure_ascii=False)
+    if record is None:
+        return tool_error(_NO_LIVE_TARGET.format(sid=sid))
     outcome = _CONTROL_OUTCOMES.get(action)
     if outcome is None:
         return tool_error(f"Unknown action '{action}'. Use spawn, list, steer, or stop.")

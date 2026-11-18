@@ -197,8 +197,12 @@ def _cli_config_defaults():
         "agent": {
             "max_turns": 500, "verbose": False, "system_prompt": "", "prefill_messages_file": "",  # max_turns shared with subagents
             "reasoning_effort": "", "service_tier": "",
+            "reasoning_auto": "off", "reasoning_auto_max_effort": "xhigh",
+            "reasoning_auto_timeout_ms": 4000, "unexpected_stop_detection": "mechanical",
             "personalities": {},  # user overrides merged by name over hermes_cli.personality builtins
         },
+        "prewalk": {"enabled": False, "from": "@default", "into": "@smol",
+                    "auto": "off", "auto_target": "@smol"},
         "display": {
             "compact": False,
             # /resume recap tuning and show_reasoning: keep in sync with hermes_cli/config.py DEFAULT_CONFIG
@@ -212,7 +216,7 @@ def _cli_config_defaults():
             "persist_prompts": True,  # one-line summary of resolved modal prompts into scrollback
             "skin": "default",
         },
-        "code_execution": {"timeout": 300, "max_tool_calls": 50},
+        "code_execution": {"timeout": 300, "max_tool_calls": 50, "max_cells": 16},
         "auxiliary": {"vision": {"provider": "auto", "model": "", "base_url": "", "api_key": ""}},
         # delegation: empty model/provider = inherit parent; api_key falls back to OPENAI_API_KEY
         "delegation": {"max_iterations": 45, "model": "", "provider": "", "base_url": "", "api_key": ""},

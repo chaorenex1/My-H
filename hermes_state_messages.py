@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from agent.context_compressor import (
     _DB_PERSISTED_MARKER as _DB_PERSISTED_MARKER_KEY, MODEL_ONLY_DISPLAY_METADATA_KEY, _is_checkpoint_item,
     _newest_checkpoint_carrier, split_user_originated_turn)
+from agent.custom_messages import lift_stored_fields, storage_metadata
 from agent.memory_context import sanitize_context
 from agent.message_metadata import (
     CANONICAL_ROW, DATA_USE, DB_ROW_SNAPSHOT, lift_data_use, MESSAGE_UID, TOOL_CALL_UID, TOOL_CALL_UIDS,
@@ -282,7 +283,8 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         if msg.get(DATA_USE) and isinstance(display_metadata, (dict, type(None))):
             # Writers that copy a fixed field list (/branch) carry the key, not display_metadata.
             display_metadata = {**(display_metadata or {}), DATA_USE: list(msg[DATA_USE])}
-        display_metadata = self._encode_display_metadata(display_metadata)
+        display_metadata = self._encode_display_metadata(  # ADR-10: custom fields ride this durable envelope
+            storage_metadata({**msg, "display_metadata": display_metadata}))
         identity_row = {
             "role": role, "content": encoded_content, "timestamp": message_timestamp,
             "tool_call_id": msg.get("tool_call_id"), "tool_calls": encoded_tool_calls,
@@ -1617,6 +1619,7 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
             if row["display_metadata"] and (decoded := self._decode_display_metadata(row["display_metadata"])) is not None:
                 msg["display_metadata"] = decoded
                 lift_data_use(msg)
+                lift_stored_fields(msg)
             if include_summary_markers and row["_compressed_summary"]:
                 msg["_compressed_summary"] = True
             msg.update(
@@ -1885,6 +1888,23 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin, 
         """Count messages, optionally for a specific session."""
         sql = "SELECT COUNT(*) FROM messages" + (" WHERE session_id = ?" if session_id else "")
         return self._read_one(sql, (session_id,) if session_id else ())[0]
+
+    def message_role_counts(self, session_id: str) -> dict[str, int]:
+        """Per-role counts of this segment's ACTIVE display rows (``user`` / ``assistant`` / ``tool``):
+        the set a display read paints, so a viewer's role counters match its transcript."""
+        counts = {"user": 0, "assistant": 0, "tool": 0}
+        rows = self._read_all(
+            "SELECT role, COUNT(*) FROM messages WHERE session_id = ?" + _DISPLAY_ACTIVE_CLAUSE
+            + DISPLAY_VISIBLE_SQL + " AND role IN ('user', 'assistant', 'tool') GROUP BY role",
+            (session_id,))
+        counts.update({str(role): int(count) for role, count in rows})
+        return counts
+
+    def session_model_call_counts(self, session_id: str) -> dict[str, int]:
+        """API calls per routed model (``session_model_usage``: main loop and auxiliary tasks alike)."""
+        return {str(model): int(calls or 0) for model, calls in self._read_all(
+            "SELECT model, SUM(api_call_count) FROM session_model_usage WHERE session_id = ? GROUP BY model",
+            (session_id,))}
 
     def has_gateway_input_owner(self, session_id: str, owner: str) -> bool:
         """Probe the accepted-input marker without allocating message bodies or archives."""

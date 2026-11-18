@@ -245,7 +245,7 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, sessionId, isActiveEvent, occurredAt } = ctx
 
   const {
-    appendAdviserMessage,
+    appendAdvisorMessage,
     appendAssistantDelta,
     appendReasoningDelta,
     compactedTurnRef,
@@ -270,11 +270,11 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
     return true
   }
 
-  if (event.type === 'message.adviser') {
-    // A plugin injected an adviser row into the live turn. The durable row also arrives on
-    // the next hydrate; appendAdviserMessage dedupes by pluginMessageId.
+  if (event.type === 'message.advisor') {
+    // A plugin injected an advisor row into the live turn. The durable row also arrives on
+    // the next hydrate; appendAdvisorMessage dedupes by pluginMessageId.
     if (sessionId) {
-      appendAdviserMessage?.(
+      appendAdvisorMessage?.(
         sessionId,
         payload as { id?: string; text?: string; severity?: string; label?: string } | undefined,
         occurredAt

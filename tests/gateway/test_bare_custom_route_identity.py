@@ -62,7 +62,7 @@ async def test_the_model_picker_marks_the_entry_a_session_runs_on_current(home, 
     monkeypatch.setattr('hermes_cli.inventory.build_model_options_payload',
                         lambda ctx, **kwargs: {'provider': ctx.current_provider})
     result = await session_config.model_options(connection, SimpleNamespace(session_id='s'), {})
-    assert result == {'provider': 'custom:deepseek'}
+    assert result == {'provider': 'custom:deepseek', 'models': []}
 
 
 @pytest.mark.asyncio

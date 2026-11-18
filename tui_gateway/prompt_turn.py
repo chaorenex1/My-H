@@ -448,13 +448,13 @@ def _run_post_turn_followups(
     steer_kind = result.get("pending_steer_kind") if isinstance(result, dict) else None
     if isinstance(steer, str) and steer.strip():
         with session["history_lock"]:
-            envelope = _enqueue_prompt(session, steer, session.get("transport"))
+            envelope = _enqueue_prompt(session, steer, session.get("transport"), sid=sid)
             if envelope is not None:
-                # An adviser trigger is still a real turn, but its row must render as an adviser
+                # An advisor trigger is still a real turn, but its row must render as an advisor
                 # card, not as words the user typed. The label rides the queued row into the
                 # drained turn, where ``_run_prompt_submit`` adopts it.
                 _persist_queued_user_row(
-                    session, envelope, "adviser" if steer_kind == "adviser" else None)
+                    session, envelope, "advisor" if steer_kind == "advisor" else None)
     if _drain_queued_prompt(rid, sid, session):
         return
     if goal_followup:
@@ -514,6 +514,8 @@ class _TurnRun:
     prompt_text: str = ""
     marker_key: str = ""
     receipt_attempted: bool = False
+    #: Whether this turn reached ``_invoke_agent`` (prompt.result's ``agent_invoked``).
+    agent_invoked: bool = False
 
 
 def _adopt_out_of_band_turns(session: dict) -> None:
@@ -757,6 +759,17 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     return prompt, _prepend_note(run_message, _hud_surface_note(session)), cols, streamer
 
 
+def _close_text_block(sid: str, session: dict) -> None:
+    """Close the turn's open assistant text block (if any) and publish its full content."""
+    from tui_gateway.stream_segments import SESSION_KEY
+    segments = session.get(SESSION_KEY)
+    closed = segments.close_text_block() if segments is not None else None
+    if closed is not None:
+        content_index, content = closed
+        _emit("message.block_end", sid, {
+            "kind": "text", "content_index": content_index, "content": content})
+
+
 def _invoke_agent(
     sid: str, session: dict, st: _TurnRun, prompt: Any, run_message: Any, streamer,
     images: list[str], display_kind: str | None, display_metadata: dict | None,
@@ -784,6 +797,16 @@ def _invoke_agent(
     def _emit_delta(delta):
         with session["history_lock"]:
             _append_inflight_delta(session, delta)
+        from tui_gateway.stream_segments import SESSION_KEY
+        segments = session.get(SESSION_KEY)
+        if isinstance(delta, str) and delta:
+            if segments is not None and segments.open_text_block() is not None:
+                _emit("message.block_start", sid, {"kind": "text"})
+            if segments is not None:
+                segments.note_text(delta)
+        elif segments is not None:
+            # A null chunk is the segment boundary the agent draws before tool lines.
+            _close_text_block(sid, session)
         payload = {"text": delta}
         if streamer and (r := streamer.feed(delta)) is not None:
             payload["rendered"] = r
@@ -796,6 +819,7 @@ def _invoke_agent(
     def _interim_assistant_cb(text: str, *, already_streamed: bool = False) -> None:
         if getattr(agent, "_mute_notification_reply", False):
             return
+        _close_text_block(sid, session)
         _emit("message.interim", sid, {"text": text, "already_streamed": already_streamed})
     agent.interim_assistant_callback = (
         _interim_assistant_cb if _load_interim_assistant_messages() else None)
@@ -831,6 +855,7 @@ def _invoke_agent(
     _usage_stop, _usage_thread = _start_usage_ticker(sid, agent)
     try:
         from agent.notification_presentation import notification_turn, event_presentation_muted
+        st.agent_invoked = True
         with notification_turn(agent, muted=event_presentation_muted("message.delta", sid), session_id=sid):
             st.result = agent.run_conversation(run_message, **st.run_kwargs)
             # A held last line that never became a marker is part of the reply: deliver it.
@@ -957,6 +982,13 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
     if _is_bot_mode_session(session):
         raw = _bot_mode_delivery_text(raw, successful=status == "complete")
     payload = {"text": raw, "usage": _get_usage(agent), "status": status}
+    # ADR-2 D1/D2: the last provider response's own usage plus requested/served model ids.
+    # `usage` above stays session-cumulative; absent step data is null, never the cumulative value.
+    from agent.turn_usage import step_usage
+
+    payload["step_usage"] = step_usage(agent)
+    payload["served_model"] = result.get("served_model")
+    payload["requested_model"] = result.get("requested_model")
     if receipt:
         payload["persisted_turn"] = receipt
     if last_reasoning:
@@ -1175,6 +1207,7 @@ def _run_prompt_submit(
     # frames are the same here and in a compute-host child; dropped in run_body's finally.
     from tui_gateway.stream_segments import SESSION_KEY, TurnSegments  # bound functions run in server's globals
     session[SESSION_KEY] = segments = TurnSegments()
+    _emit("turn.start", sid, {"message_id": segments.turn_id})
     if not muted:
         _emit("message.start", sid)
 
@@ -1205,6 +1238,9 @@ def _run_prompt_submit(
             status_note = _absorb_turn_result(
                 sid, session, st, text, display_kind, display_metadata)
             payload, raw, status = _complete_turn_payload(session, st, status_note, cols)
+            _close_text_block(sid, session)
+            payload["message_id"] = segments.turn_id
+            payload["stop_reason"] = {"complete": "stop", "interrupted": "aborted"}.get(status, "error")
             if status == "complete":
                 # Before message.complete: the desktop re-reads the sign-in offer on that event.
                 from tui_gateway.free_tier_task_done import note_task_done
@@ -1240,7 +1276,7 @@ def _run_prompt_submit(
                 if isinstance(st.result, dict):
                     status = _result_status(st.result)
                 else:
-                    status = "error" if st.error_retained else "complete"
+                    status = "error" if (st.error_retained or not st.agent_invoked) else "complete"
                 logger.info(
                     "tui turn finished: ui_session=%s session_key=%s agent_session_id=%s status=%s "
                     "error_retained=%s duration=%.1fs%s",
@@ -1256,6 +1292,15 @@ def _run_prompt_submit(
                         session.pop("_hosted_room_task", None)
                 session.pop("_auto_continue_scheduled", None)
                 _emit_settled_session_info(sid, session, st.agent)
+                # Closing half of turn.start, on every exit path (completion, error, interrupt).
+                _emit("turn.end", sid, {"status": status, "message_id": segments.turn_id})
+                _emit("prompt.result", sid, {
+                    "admission_id": str(rid),
+                    "agent_invoked": st.agent_invoked,
+                    "status": {"complete": "completed", "interrupted": "aborted"}.get(status, "error"),
+                    **({"error": {"message": st.error_detail or "turn failed", "retryable": False}}
+                       if status == "error" else {}),
+                })
             finally:
                 _post_turn_housekeeping(sid, session, st)
         return st.result, goal_followup
@@ -1268,6 +1313,9 @@ def _run_prompt_submit(
             followup = run_body()
         if followup is not None:
             _run_post_turn_followups(rid, sid, session, *followup)
+        # Post-turn follow-ups can start the next turn synchronously; only an idle session settles.
+        if not session.get("running"):
+            _emit("session.settled", sid, {"idle_since": session.get("last_active")})
     # The handle is resolved BEFORE _sessions_lock: a profile session opens its own SessionDB through the
     # state registry, and _sessions_lock gates every create/close/prompt on this backend.
     with _routing_provenance_db(session) as routing_db, _sessions_lock:
@@ -1284,6 +1332,12 @@ def _run_prompt_submit(
             session["running"] = False
             if session.get(SESSION_KEY) is segments:
                 session.pop(SESSION_KEY)
+        # turn.start already went out; close the pair and report the refused admission.
+        _emit("turn.end", sid, {"status": "error", "message_id": segments.turn_id})
+        _emit("prompt.result", sid, {
+            "admission_id": str(rid), "agent_invoked": False, "status": "error",
+            "error": {"message": "prompt refused: session is closing or unavailable", "retryable": False},
+        })
     return can_start
 
 

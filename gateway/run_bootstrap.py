@@ -17,7 +17,7 @@ def _start_deferred_state_db_integrity_check(evidence: dict) -> None:
     ``quick_check`` (minutes on a multi-GB ``state.db``), so local clients hung instead of being
     refused. A daemon thread nothing waits on; it only appends the forensic exit-diag record.
     """
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from gateway.lifecycle_ledger import STATE_DB_INTEGRITY_DEADLINE_S, run_deferred_integrity_check
     # Under the caller's profile scope: the scan resolves this gateway's state.db through it.
     spawn_context_thread(

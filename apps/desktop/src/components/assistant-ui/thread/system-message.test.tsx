@@ -21,18 +21,18 @@ stubThreadEnvironment()
 function Harness({
   text,
   asyncResult,
-  adviser
+  advisor
 }: {
   text: string
   asyncResult?: string
-  adviser?: { severity: string; label: string; body: string; items: { label: string; severity: string; text: string }[] }
+  advisor?: { severity: string; label: string; body: string; items: { label: string; severity: string; text: string }[] }
 }) {
   const message = {
     id: 'system-1',
     role: 'system',
     content: [{ type: 'text', text }],
     createdAt: timestamp,
-    metadata: { custom: { timelineTimestamp: timestamp.getTime() / 1000, asyncResult, adviser } }
+    metadata: { custom: { timelineTimestamp: timestamp.getTime() / 1000, asyncResult, advisor } }
   } as unknown as ThreadMessage
 
   const runtime = useExternalStoreRuntime<ThreadMessage>({
@@ -103,24 +103,24 @@ describe('background report disclosure', () => {
   })
 })
 
-describe('adviser card', () => {
+describe('advisor card', () => {
   it('renders the label and advice as a card, not a user prompt', () => {
     const { container } = render(
       <Harness
-        adviser={{
+        advisor={{
           severity: 'blocker',
           label: 'blocker · tool_choice · Architecture',
           body: 'stop **now** and re-read the diff',
           items: []
         }}
-        text="[adviser — advisory only] stop now [end adviser]"
+        text="[advisor — advisory only] stop now [end advisor]"
       />
     )
 
-    const card = container.querySelector('[data-slot="aui_adviser-message-root"]')
+    const card = container.querySelector('[data-slot="aui_advisor-message-root"]')
     expect(card).toBeTruthy()
     expect(card?.getAttribute('data-severity')).toBe('blocker')
-    expect(card?.textContent).toContain('Adviser')
+    expect(card?.textContent).toContain('Advisor')
     expect(card?.textContent).toContain('blocker · tool_choice · Architecture')
     expect(card?.textContent).toContain('stop now and re-read the diff')
     expect(card?.textContent).not.toContain('advisory only')
@@ -129,7 +129,7 @@ describe('adviser card', () => {
   it('paints each advice row with its own severity in a mixed block', () => {
     const { container } = render(
       <Harness
-        adviser={{
+        advisor={{
           severity: 'blocker',
           label: 'blocker · ai_self_representation_check · default',
           body: '',
@@ -138,11 +138,11 @@ describe('adviser card', () => {
             { label: 'blocker · ai_self_representation_check · default', severity: 'blocker', text: 'the test never ran' }
           ]
         }}
-        text="[adviser — advisory only] x [end adviser]"
+        text="[advisor — advisory only] x [end advisor]"
       />
     )
 
-    const rows = container.querySelectorAll('[data-slot="aui_adviser-message-root"] div[data-severity]')
+    const rows = container.querySelectorAll('[data-slot="aui_advisor-message-root"] div[data-severity]')
     expect(rows).toHaveLength(2)
     expect(rows[0]?.getAttribute('data-severity')).toBe('concern')
     expect(rows[1]?.getAttribute('data-severity')).toBe('blocker')

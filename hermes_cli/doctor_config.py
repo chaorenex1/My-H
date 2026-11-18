@@ -335,6 +335,48 @@ def _validate_auxiliary_config(config_path, issues: list) -> None:
         check_ok("auxiliary task routing resolves: " + ", ".join(ok))
 
 
+def _validate_agent_sessions_config(config_path, issues: list) -> None:
+    """Report a malformed ``agent_sessions`` block (ADR-15 D7; unknown keys, negatives, types)."""
+    from hermes_cli.config import read_user_config_raw
+    from hermes_cli.config_defaults_agent_sessions import _agent_sessions
+
+    block = read_user_config_raw(config_path).get("agent_sessions")
+    if block is None:
+        return
+    known = set(_agent_sessions())
+    if not isinstance(block, dict):
+        _fail_and_issue("agent_sessions is not a mapping",
+                        "(resident named-agent sessions fall back to defaults)",
+                        "agent_sessions must be a mapping of the documented keys; the block is "
+                        "ignored.", issues)
+        return
+    unknown = sorted(str(key) for key in block if key not in known)
+    if unknown:
+        _fail_and_issue("agent_sessions has unknown keys: " + ", ".join(unknown),
+                        f"(known: {', '.join(sorted(known))})",
+                        "agent_sessions: unknown keys are ignored; remove them or fix the "
+                        "spelling. " + ", ".join(unknown), issues)
+    bad: list[str] = []
+    for key, value in sorted(block.items()):
+        if key not in known:
+            continue
+        if key in ("keep_alive", "yield_tool"):
+            if not isinstance(value, bool):
+                bad.append(f"{key}={value!r} (expected true/false)")
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            bad.append(f"{key}={value!r} (expected a number)")
+        elif value < 0:
+            bad.append(f"{key}={value!r} (must be >= 0)")
+    if bad:
+        _fail_and_issue("agent_sessions has invalid values: " + ", ".join(bad),
+                        "(runtime clamps them; fix the config)",
+                        "agent_sessions: invalid values are clamped at runtime; fix " +
+                        ", ".join(bad), issues)
+    if not unknown and not bad:
+        check_ok("agent_sessions limits are valid")
+
+
 @doctor_check()
 def _check_config_file(should_fix: bool, f: Finding) -> None:
     """config.yaml presence; model/provider validation."""
@@ -351,6 +393,8 @@ def _check_config_file(should_fix: bool, f: Finding) -> None:
             _validate_model_config(config_path, f.issues)
         with warn_on_error("Could not validate auxiliary task routing"):
             _validate_auxiliary_config(config_path, f.issues)
+        with warn_on_error("Could not validate agent session limits"):
+            _validate_agent_sessions_config(config_path, f.issues)
     elif should_fix:
         from hermes_cli.config import seed_config_file
         from_template = seed_config_file(config_path, PROJECT_ROOT / 'cli-config.yaml.example')

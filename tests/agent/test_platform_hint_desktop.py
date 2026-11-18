@@ -17,17 +17,17 @@ from unittest.mock import patch
 
 import pytest
 
-from agent.prompt_builder import PLATFORM_HINTS
-from agent.system_prompt import (
-    _tui_embedded_pane_clarifier,
-    build_system_prompt_parts,
-)
+from agent.prompts.platforms import load_platform_hints
+from agent.prompts.platforms import tui_embedded_pane_clarifier as _tui_embedded_pane_clarifier
+from agent.system_prompt import build_system_prompt_parts
+
+PLATFORM_HINTS = load_platform_hints()
 
 def _stable_prompt(agent):
     with (
         patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
     ):
         return build_system_prompt_parts(agent)["stable"]
 
@@ -43,6 +43,16 @@ def _make_agent(platform="", **overrides):
         _memory_store=None,
         _memory_manager=None,
         _platform_hint_overrides={},
+        _context_cwd_is_launch_artifact=False,
+        _session_db=None,
+        _bot_mode_protocol=False,
+        _session_title_hint="",
+        _user_profile_enabled=True,
+        _auto_load_skills_resolved=True,
+        _auto_load_skills_result=("", [], []),
+        _agent_definition_metadata=None,
+        enabled_toolsets=(),
+        is_subagent=False,
         model="",
         provider="",
         pass_session_id=False,

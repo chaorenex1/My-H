@@ -21,7 +21,10 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agent.lsp import eventlog
-from agent.lsp.client import DIAGNOSTICS_DOCUMENT_WAIT, LSPClient, _diagnostic_key as _diag_key
+from agent.lsp.client import (
+    DIAGNOSTICS_DOCUMENT_WAIT, LSPClient, _diagnostic_key as _diag_key,
+    file_uri, uri_to_path,
+)
 from agent.lsp.edit_check import EditChecks
 from agent.lsp.servers import (
     SERVERS, UNTRUSTED_SAFE_SERVERS, ServerContext, ServerDef, custom_servers, find_server_for_file, language_id_for,
@@ -516,6 +519,123 @@ class LSPService:
             "trusted_workspaces": list(self._trusted_workspaces), "untrusted_skipped": untrusted,
         }
 
+    # ---- symbol queries (read-only; ADR-8 D6) ----
+    def query_definition(
+        self, file_path: str, line: int, column: int, *, timeout: float = 3.0
+    ) -> list[dict[str, Any]]:
+        return self._query_position("textDocument/definition", file_path, line, column, timeout)
+
+    def query_references(
+        self, file_path: str, line: int, column: int, *, timeout: float = 3.0,
+        include_declaration: bool = True,
+    ) -> list[dict[str, Any]]:
+        return self._query_position(
+            "textDocument/references", file_path, line, column, timeout,
+            extra={"context": {"includeDeclaration": bool(include_declaration)}},
+        )
+
+    def query_implementation(
+        self, file_path: str, line: int, column: int, *, timeout: float = 3.0
+    ) -> list[dict[str, Any]]:
+        return self._query_position("textDocument/implementation", file_path, line, column, timeout)
+
+    def document_symbols(
+        self, file_path: str, *, timeout: float = 3.0
+    ) -> list[dict[str, Any]]:
+        if not self.enabled_for(file_path):
+            return []
+        try:
+            result = self._loop.run(
+                self._document_symbols_async(file_path, timeout), timeout=timeout + 2.0
+            )
+        except Exception as exc:  # health: allow BLE001 -- optional document-symbol query; failure degrades to empty
+            self._mark_broken_for_file(file_path, exc)
+            logger.debug("LSP document symbols failed for %s: %s", file_path, exc)
+            return []
+        return result or []
+
+    def workspace_symbols(
+        self, query: str, *, limit: int = 50, timeout: float = 5.0
+    ) -> list[dict[str, Any]]:
+        with self._state_lock:
+            client = next(
+                (item for item in self._clients.values() if item.is_running), None
+            )
+        if client is None:
+            return []
+        try:
+            result = self._loop.run(
+                client.request(
+                    "workspace/symbol", {"query": query}, timeout=timeout
+                ),
+                timeout=timeout + 1.0,
+            )
+        except Exception as exc:  # health: allow BLE001 -- optional workspace-symbol query; failure degrades to empty
+            logger.debug("LSP workspace symbols failed: %s", exc)
+            return []
+        symbols = _normalise_symbols(result)
+        symbols.sort(key=lambda item: (item.get("path") or "", item.get("start_line") or 0))
+        return symbols[: max(1, int(limit))]
+
+    def _query_position(
+        self,
+        method: str,
+        file_path: str,
+        line: int,
+        column: int,
+        timeout: float,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self.enabled_for(file_path):
+            return []
+        try:
+            result = self._loop.run(
+                self._query_position_async(method, file_path, line, column, timeout, extra),
+                timeout=timeout + 2.0,
+            )
+        except Exception as exc:  # health: allow BLE001 -- optional position query; failure degrades to empty
+            self._mark_broken_for_file(file_path, exc)
+            logger.debug("LSP %s failed for %s: %s", method, file_path, exc)
+            return []
+        return result or []
+
+    async def _query_position_async(
+        self,
+        method: str,
+        file_path: str,
+        line: int,
+        column: int,
+        timeout: float,
+        extra: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        client = await self._get_or_spawn(file_path)
+        if client is None:
+            return []
+        srv = self._server_for(file_path)
+        await client.open_file(file_path, language_id=language_id_for(file_path, srv))
+        result = await client.request_at_position(
+            method, file_path, line, column, timeout=timeout, extra=extra
+        )
+        self._touch(client)
+        return _normalise_locations(result)
+
+    async def _document_symbols_async(
+        self, file_path: str, timeout: float
+    ) -> list[dict[str, Any]]:
+        client = await self._get_or_spawn(file_path)
+        if client is None:
+            return []
+        srv = self._server_for(file_path)
+        await client.open_file(file_path, language_id=language_id_for(file_path, srv))
+        result = await client.request(
+            "textDocument/documentSymbol",
+            {"textDocument": {"uri": file_uri(file_path)}},
+            timeout=timeout,
+        )
+        self._touch(client)
+        return _normalise_symbols(result)
+
     # ---- async internals ----
 
     async def _snapshot_async(self, file_path: str, budget: Optional[float] = None) -> _Diags:
@@ -767,6 +887,75 @@ class LSPService:
             self._broken.clear()
             self._last_used.clear()
         await asyncio.gather(*(c.shutdown() for c in clients), return_exceptions=True)
+
+
+def _normalise_locations(result: Any) -> list[dict[str, Any]]:
+    """Location / LocationLink / bare URI → plain dicts with 1-based coordinates."""
+    if not result:
+        return []
+    items = result if isinstance(result, list) else [result]
+    locations: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uri = item.get("uri") or item.get("targetUri")
+        if not isinstance(uri, str):
+            continue
+        rng = item.get("range") or item.get("targetSelectionRange") or item.get("targetRange")
+        if not isinstance(rng, dict):
+            continue
+        start = rng.get("start") or {}
+        end = rng.get("end") or {}
+        path = uri_to_path(uri)
+        locations.append(
+            {
+                "path": path,
+                "start_line": int(start.get("line") or 0) + 1,
+                "start_column": int(start.get("character") or 0) + 1,
+                "end_line": int(end.get("line") or 0) + 1,
+                "end_column": int(end.get("character") or 0) + 1,
+            }
+        )
+    return locations
+
+
+def _normalise_symbols(result: Any) -> list[dict[str, Any]]:
+    """DocumentSymbol / SymbolInformation (possibly nested) → flat dicts."""
+    if not result:
+        return []
+    items = result if isinstance(result, list) else [result]
+    symbols: list[dict[str, Any]] = []
+
+    def visit(item: Any, container: str = "") -> None:
+        if not isinstance(item, dict):
+            return
+        name = item.get("name")
+        location = item.get("location")
+        rng = item.get("selectionRange") or item.get("range")
+        path = ""
+        if isinstance(location, dict):
+            path = uri_to_path(str(location.get("uri") or ""))
+            rng = location.get("range") or rng
+        start = (rng or {}).get("start") or {}
+        end = (rng or {}).get("end") or {}
+        symbols.append(
+            {
+                "name": name,
+                "kind": item.get("kind"),
+                "path": path,
+                "container_name": container or item.get("containerName") or "",
+                "start_line": int(start.get("line") or 0) + 1,
+                "start_column": int(start.get("character") or 0) + 1,
+                "end_line": int(end.get("line") or 0) + 1,
+                "end_column": int(end.get("character") or 0) + 1,
+            }
+        )
+        for child in item.get("children") or []:
+            visit(child, str(name or container))
+
+    for item in items:
+        visit(item)
+    return symbols
 
 
 __all__ = ["LSPService"]

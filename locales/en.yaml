@@ -1551,6 +1551,20 @@ platform:
     confirm_cancel: "Cancel"
     prompt_other: "✏️ Other (type answer)"
     prompt_expired: "⌛ That prompt is no longer waiting for an answer. Send your reply as a normal message."
+workspace_dirs:
+  usage_add: "Usage: /add-dir <path>"
+  usage_remove: "Usage: /remove-dir <path>"
+  not_found: "Directory does not exist: {path}"
+  already_cwd: "The working directory is already this session's primary workspace root."
+  already: "Already in the workspace: {path}"
+  added: "Added {path}."
+  missing: "Not a workspace directory: {path}"
+  removed: "Removed {path}."
+  cwd_removal: "Cannot remove the working directory; use /worktree or a new session to change it."
+  local_only: "This command manages a local session's workspace and is not available on this platform."
+  listing_header: "Workspace directories:"
+  listing_cwd: "  {path} (working directory)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Rewind to an earlier prompt to edit & resend it, or fork from there (Esc Esc)"
@@ -1614,6 +1628,12 @@ slash:
     description: "Branch the current session (new thread on Discord/Telegram/Slack/Matrix; --here stays here)"
   worktree:
     description: "Show, list, create, or prune isolated git worktrees"
+  add-dir:
+    description: "Add a workspace directory to this session (multi-root)"
+  remove-dir:
+    description: "Remove a workspace directory from this session"
+  dirs:
+    description: "Show this session's workspace directories (cwd and additional roots)"
   compress:
     description: "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen)"
   rollback:

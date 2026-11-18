@@ -17,11 +17,15 @@ def _stable(platform, valid_tool_names):
     agent = SimpleNamespace(
         platform=platform, load_soul_identity=False, skip_context_files=False, valid_tool_names=valid_tool_names,
         _task_completion_guidance=False, _tool_use_enforcement=False, _environment_probe=False,
-        _kanban_worker_guidance="", _memory_store=None, _memory_manager=None, _platform_hint_overrides={},
+        _memory_store=None, _memory_manager=None, _platform_hint_overrides={},
+        _context_cwd_is_launch_artifact=False, _session_db=None, _bot_mode_protocol=False,
+        _session_title_hint="", _user_profile_enabled=True, _auto_load_skills_resolved=True,
+        _auto_load_skills_result=("", [], []), _agent_definition_metadata=None,
+        enabled_toolsets=(), is_subagent=False,
         model="", provider="", pass_session_id=False, session_id="")
     with (patch("agent.prompt_builder.load_soul_md", return_value=""),
           patch("agent.prompt_builder.build_environment_hints", return_value=""),
-          patch("agent.prompt_builder.build_context_files_prompt", return_value="")):
+          patch("agent.prompts.renderer.render_project_context", return_value="")):
         return build_system_prompt_parts(agent)["stable"]
 
 

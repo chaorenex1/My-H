@@ -1,0 +1,27 @@
+{
+  "intent": {
+    "instructions": "Classify the search in `query` — a user question, an agent task, or a code-analysis goal — into exactly one intent. `criteria` names the intent and the tool that answers it. Choose the narrowest intent that still answers the request; when a behavior is described but no identifier is known, choose `unknown_implementation` instead of inventing a literal.",
+    "criteria": {
+      "literal": "An exact string the caller already knows — a message, error text, identifier fragment, or config value. rg matches the bytes; no AST.",
+      "symbol": "A function, method, class, variable, or module name the caller knows. rg finds every occurrence; when the query is also a code shape, ast-grep adds the declaration/usage structure.",
+      "call": "Call or invocation sites of a known function or method (who calls X). ast-grep matches call expressions; rg alone confuses declarations, imports, and strings.",
+      "type": "A class, struct, interface, enum, or type declaration. ast-grep matches the declaration structure.",
+      "config": "A configuration key, value, environment variable, setting, or flag. rg matches the text in config and source files; no AST.",
+      "todo": "TODO/FIXME/XXX/HACK notes or other comment text. rg matches the comment bytes; no AST.",
+      "pattern": "A structural code shape rather than a name — a call with an argument, a control-flow form, a nested literal. ast-grep matches the syntax tree.",
+      "unknown_implementation": "A behavior or capability with no known identifier (\"where is retry handled\"). rg locates candidate files and lines first; ast-grep refines them when the query also carries a code shape.",
+      "cross_language": "The same concept across several languages (an HTTP client in Python and Go). rg finds candidates everywhere first; ast-grep refines per language when a code shape is available."
+    }
+  },
+  "plans": {
+    "literal": { "tool": "rg", "mode": "content" },
+    "symbol": { "tool": "rg + ast-grep", "mode": "hybrid" },
+    "call": { "tool": "ast-grep", "mode": "ast" },
+    "type": { "tool": "ast-grep", "mode": "ast" },
+    "config": { "tool": "rg", "mode": "content" },
+    "todo": { "tool": "rg", "mode": "content" },
+    "pattern": { "tool": "ast-grep", "mode": "ast" },
+    "unknown_implementation": { "tool": "rg -> ast-grep", "mode": "hybrid" },
+    "cross_language": { "tool": "rg -> ast-grep", "mode": "hybrid" }
+  }
+}

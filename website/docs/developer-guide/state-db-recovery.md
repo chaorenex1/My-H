@@ -57,7 +57,9 @@ switch is unavailable and SQLite may still checkpoint once on close, so copy
 anything.
 
 The gateway and the agent flush path treat the quarantine like a replaced
-file: pending transcripts go to `sessions/<id>.jsonl` and the gateway
+file: pending transcripts go to the session's bundle transcript
+(`sessions/<project>/<timestamp>_<id>.jsonl`, ADR-16) — or the legacy
+`sessions/<id>.jsonl` when no row can be located — and the gateway
 `pending_messages/` spool instead of the retry queue, and the FTS one-shot
 rebuild never runs on the damaged file. The quarantine is per process — the
 shared handle stays poisoned for every holder until the process restarts on a

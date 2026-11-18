@@ -557,6 +557,31 @@ def test_browser_exec_points_at_vision_analyze_only_when_the_session_has_it(monk
             not native and "vision_analyze" in names)
 
 
+def test_execute_code_js_enum_refreshes_when_bun_state_changes(monkeypatch):
+    """ADR-4 D8/acceptance 7: `hermes pm install bun` rewrites PM facts, not config.yaml, so
+    the tool-definitions memo must key on the JS capability too — a long-lived gateway's next
+    session must advertise `js` without a cache flush."""
+    from model_tools import _clear_tool_defs_cache, get_tool_definitions
+    from tools import code_execution_tool as cet
+
+    def enum(defs):
+        schema = next(t for t in defs if t["function"]["name"] == "execute_code")
+        return schema["function"]["parameters"]["properties"]["language"]["enum"]
+
+    monkeypatch.setattr(cet, "js_backend_available", lambda: False)
+    monkeypatch.setattr(cet, "js_capability_fingerprint", lambda: ("bun", "absent"))
+    _clear_tool_defs_cache()
+    try:
+        assert enum(get_tool_definitions(enabled_toolsets=["code_execution"], quiet_mode=True)) == ["py"]
+
+        monkeypatch.setattr(cet, "js_backend_available", lambda: True)
+        monkeypatch.setattr(cet, "js_capability_fingerprint", lambda: ("bun", "present"))
+        # Same arguments, NO cache flush: the memo key itself must have changed.
+        assert enum(get_tool_definitions(enabled_toolsets=["code_execution"], quiet_mode=True)) == ["py", "js"]
+    finally:
+        _clear_tool_defs_cache()
+
+
 def test_tool_defs_cache_key_sees_config_replacement_with_pinned_mtime(tmp_path):
     """#111105: a same-size config.yaml swapped in with the old mtime must change the memo key."""
     import os

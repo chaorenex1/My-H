@@ -61,17 +61,46 @@ def resolve_repo_root(path: Optional[str]) -> Optional[str]:
     return (result.stdout.strip() or None) if result.returncode == 0 else None
 
 
-def _ensure_gitignore_entry(repo_root: str) -> None:
-    """Best-effort: keep ``.worktrees/`` out of git status."""
-    gitignore = Path(repo_root) / ".gitignore"
+def _ensure_worktrees_excluded(repo_root: str) -> None:
+    """Best-effort: keep ``.worktrees/`` out of git status without touching tracked files.
+
+    ``.git/info/exclude`` is local to the checkout and shared by its linked worktrees. Writing
+    the entry into a tracked ``.gitignore`` would leave the parent `` M .gitignore`` forever,
+    which makes every later auto-apply see a dirty parent.
+    """
+    probe = _run_git(["rev-parse", "--git-path", "info/exclude"], cwd=repo_root)
+    if probe.returncode != 0 or not probe.stdout.strip():
+        return
+    exclude = Path(probe.stdout.strip())
+    if not exclude.is_absolute():
+        exclude = Path(repo_root) / exclude
     try:
-        existing = gitignore.read_text(encoding="utf-8-sig", errors="replace") if gitignore.exists() else ""
+        existing = exclude.read_text(encoding="utf-8-sig", errors="replace") if exclude.exists() else ""
         if ".worktrees/" not in existing.splitlines():
-            with open(gitignore, "a", encoding="utf-8") as f:
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            with open(exclude, "a", encoding="utf-8") as f:
                 sep = "\n" if existing and not existing.endswith("\n") else ""
                 f.write(f"{sep}.worktrees/\n")
-    except Exception as exc:
-        logger.debug("subagent worktree: could not update .gitignore: %s", exc)
+    except OSError as exc:
+        logger.debug("subagent worktree: could not update info/exclude: %s", exc)
+
+
+def _parent_clean_state(repo_root: str, env: dict[str, str]) -> str:
+    """``"true"``/``"false"``/``"unknown"``: the parent's status at dispatch.
+
+    Two probes, with and without ``core.autocrlf``: the isolated env blanks global config, so on
+    Windows a CRLF working tree committed under ``autocrlf=true`` reads as modified under the
+    blanked config. A genuine edit is dirty under both settings; an EOL-only difference is clean
+    under the setting that matches the checkout, and merge is safe either way.
+    """
+    verdicts: list[bool] = []
+    for value in ("false", "true"):
+        probe = _run_git(["-c", f"core.autocrlf={value}", "status", "--porcelain",
+                          "--untracked-files=normal"], cwd=repo_root, env=env)
+        if probe.returncode != 0:
+            return "unknown"
+        verdicts.append(not probe.stdout.strip())
+    return "true" if any(verdicts) else "false"
 
 
 def create_subagent_worktree(parent_cwd: Optional[str], subagent_id: Optional[str] = None) -> Optional[dict[str, str]]:
@@ -83,16 +112,19 @@ def create_subagent_worktree(parent_cwd: Optional[str], subagent_id: Optional[st
     branch = f"hermes-subagent/{wt_name}"
     wt_path = Path(repo_root) / ".worktrees" / wt_name
     try:
-        wt_path.parent.mkdir(parents=True, exist_ok=True)
-        _ensure_gitignore_entry(repo_root)
-        base = _run_git(["rev-parse", "HEAD"], cwd=repo_root)
-        base_commit = base.stdout.strip() if base.returncode == 0 else ""
         # The checkout runs the repo-named smudge filter; skip isolation when it cannot be neutralized.
         from hermes_cli._subprocess_compat import noninteractive_repo_git_env
         add_env = noninteractive_repo_git_env(repo_root)
         if add_env is None:
             logger.warning("subagent worktree: filter discovery failed; not creating a worktree")
             return None
+        # Captured before anything this helper writes: "dirty parent" for auto-apply means
+        # the user's workspace was dirty at dispatch.
+        parent_clean = _parent_clean_state(repo_root, add_env)
+        wt_path.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_worktrees_excluded(repo_root)
+        base = _run_git(["rev-parse", "HEAD"], cwd=repo_root)
+        base_commit = base.stdout.strip() if base.returncode == 0 else ""
         result = _run_git(["worktree", "add", str(wt_path), "-b", branch, "HEAD"], cwd=repo_root, env=add_env)
     except Exception as exc:
         logger.warning("subagent worktree: creation failed: %s", exc)
@@ -104,13 +136,14 @@ def create_subagent_worktree(parent_cwd: Optional[str], subagent_id: Optional[st
     logger.info("subagent worktree created: %s (branch %s)", wt_path, branch)
     from hermes_cli.worktree_registry import record_worktree_repo
     record_worktree_repo(repo_root)
-    return {"path": str(wt_path), "branch": branch, "repo_root": repo_root, "base_commit": base_commit}
+    return {"path": str(wt_path), "branch": branch, "repo_root": repo_root,
+            "base_commit": base_commit, "parent_clean": parent_clean}
 
 
 def _base_payload(info: dict[str, str]) -> dict[str, Any]:
     """Result-entry schema the parent expects (no creation-side internals)."""
     return {"path": info.get("path", ""), "branch": info.get("branch", ""),
-            "commits": 0, "dirty": False, "pruned": False}
+            "commits": 0, "dirty": False, "pruned": False, "applied": False}
 
 
 def mark_worktree_payload_unproven(payload: dict[str, Any], reason: str, *,
@@ -138,12 +171,107 @@ def unproven_worktree_payload(info: dict[str, str], reason: str) -> dict[str, An
     return mark_worktree_payload_unproven(_base_payload(info), reason)
 
 
-def finalize_subagent_worktree(info: dict[str, str], *, prune: bool = True) -> dict[str, Any]:
-    """Inspect (and possibly prune) a child worktree after the child finishes.
+def _apply_env(repo_root: str) -> Optional[dict[str, str]]:
+    """Isolated git env for commit/merge; identity is explicit because global config is blanked."""
+    from hermes_cli._subprocess_compat import noninteractive_repo_git_env
 
-    Prunes only when *prune*, commits==0, clean tree AND both git probes succeeded; otherwise
-    keeps it with ``inspection_failed`` + ``note`` (``commits``/``dirty`` then are defaults).
+    env = noninteractive_repo_git_env(repo_root)
+    if env is None:
+        return None
+    env = dict(env)
+    for key, value in (("GIT_AUTHOR_NAME", "Hermes"),
+                       ("GIT_AUTHOR_EMAIL", "hermes@localhost"),
+                       ("GIT_COMMITTER_NAME", "Hermes"),
+                       ("GIT_COMMITTER_EMAIL", "hermes@localhost")):
+        env.setdefault(key, value)
+    return env
+
+
+def _apply_worktree(info: dict[str, str], payload: dict[str, Any]) -> dict[str, Any]:
+    """Commit the child's edits and merge its branch into the parent; never raises.
+
+    A dirty parent, an unknown parent state, a failed commit or a merge conflict all leave the
+    branch in place with ``applied=false`` and an ``apply_error`` — the parent can inspect and
+    merge by hand. Success records the merge commit and lets the caller prune the tree.
     """
+    repo_root = info.get("repo_root", "") or info.get("path", "")
+    path, branch = info.get("path", ""), info.get("branch", "")
+    if info.get("parent_clean") != "true":
+        payload["apply_error"] = (
+            "parent workspace had uncommitted changes when the agent was dispatched; "
+            f"branch {branch} kept for manual merge" if info.get("parent_clean") == "false"
+            else f"parent workspace state unproven; branch {branch} kept for manual merge")
+        return payload
+    env = _apply_env(repo_root)
+    if env is None:
+        payload["apply_error"] = "filter discovery failed; branch kept for manual merge"
+        return payload
+    if payload.get("dirty"):
+        added = _run_git(["add", "-A"], cwd=path, env=env)
+        if added.returncode != 0:
+            payload["apply_error"] = f"git add failed: {added.stderr.strip()[:300]}"
+            return payload
+        committed = _run_git(
+            ["-c", "commit.gpgsign=false", "commit", "--no-verify",
+             "-m", "hermes subagent: uncommitted work"], cwd=path, env=env)
+        if committed.returncode != 0:
+            payload["apply_error"] = f"git commit failed: {committed.stderr.strip()[:300]}"
+            return payload
+        payload["dirty"] = False
+        payload["commits"] = int(payload.get("commits") or 0) + 1
+    merged = _run_git(["-c", "commit.gpgsign=false", "merge", "--no-ff", "--no-edit", branch],
+                      cwd=repo_root, env=env)
+    if merged.returncode != 0:
+        _run_git(["merge", "--abort"], cwd=repo_root, env=env)
+        payload["apply_error"] = (
+            f"merge into the parent failed: {(merged.stderr or merged.stdout).strip()[:400]}; "
+            f"branch {branch} kept")
+        return payload
+    head = _run_git(["rev-parse", "HEAD"], cwd=repo_root, env=env)
+    payload["applied"] = True
+    payload["merge_commit"] = head.stdout.strip() if head.returncode == 0 else ""
+    return payload
+
+
+def _prune_merged_worktree(info: dict[str, str], payload: dict[str, Any]) -> None:
+    """Remove the tree and its now-merged branch; a failure leaves both with a note."""
+    from hermes_cli.worktree_archive import ArchiveError
+    from hermes_cli.worktree_ops import release_lsp_clients, removal_blocked
+
+    path, branch = info.get("path", ""), info.get("branch", "")
+    repo_root = info.get("repo_root", "") or path
+    try:
+        blocked = removal_blocked(path)
+        if blocked:
+            payload["note"] = f"Worktree kept at {path}: {blocked[1]}."
+            return
+        release_lsp_clients(path)
+        removed = _run_git(["worktree", "remove", "--force", path], cwd=repo_root)
+        if removed.returncode != 0:
+            payload["note"] = f"Merged, but the worktree could not be removed: {removed.stderr.strip()[:200]}"
+            return
+        deleted = _run_git(["branch", "-d", branch], cwd=repo_root)
+        payload["pruned"] = True
+        if deleted.returncode != 0:
+            payload["note"] = f"Merged and removed; branch {branch} kept: {deleted.stderr.strip()[:200]}"
+        logger.info("subagent worktree merged and pruned: %s", path)
+    except (ArchiveError, OSError, subprocess.SubprocessError) as exc:
+        logger.warning("subagent worktree: prune after merge failed: %s", exc, exc_info=True)
+        payload["note"] = f"Merged, but cleanup failed: {exc}"
+
+
+def finalize_subagent_worktree(info: dict[str, str], *, prune: bool = True,
+                               apply: str = "off") -> dict[str, Any]:
+    """Inspect (and possibly apply/prune) a child worktree after the child finishes.
+
+    ``apply="auto"`` commits the child's edits and merges its branch into the parent (see
+    :func:`_apply_worktree`); a dirty/unknown parent or a conflict keeps the branch and reports
+    ``applied=false``. ``apply="off"`` is the legacy review-by-hand behavior. Prunes only when
+    *prune*, commits==0, clean tree AND both git probes succeeded; otherwise keeps it with
+    ``inspection_failed`` + ``note`` (``commits``/``dirty`` then are defaults).
+    """
+    if apply not in {"off", "auto"}:
+        raise ValueError("apply must be 'off' or 'auto'")
     path, branch = info.get("path", ""), info.get("branch", "")
     base_commit = info.get("base_commit", "")
     payload = _base_payload(info)
@@ -188,6 +316,13 @@ def finalize_subagent_worktree(info: dict[str, str], *, prune: bool = True) -> d
             payload["dirty"] = bool(hidden_index_edits(path))
         except (ArchiveError, OSError, subprocess.SubprocessError) as exc:
             return mark_worktree_payload_unproven(payload, f"index flag probe failed: {exc}", unmeasured="dirty")
+    if apply == "auto" and (payload["commits"] or payload["dirty"]):
+        payload = _apply_worktree(info, payload)
+        if payload.get("applied"):
+            if prune:
+                _prune_merged_worktree(info, payload)
+            return payload
+        # The merge was refused or conflicted: fall through to the keep/archive path.
     if prune and (payload["commits"] or payload["dirty"]):
         return _archive_finished_worktree(info, payload)
     if prune and payload["commits"] == 0 and not payload["dirty"]:

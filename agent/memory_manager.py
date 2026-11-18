@@ -25,9 +25,10 @@ from agent.memory_caller_scope import bound_scope, caller_scope, claim_instance,
 from agent.memory_context import StreamingContextScrubber, build_memory_context_block, sanitize_context
 from agent.memory_manager_tools import (inject_memory_provider_tools, memory_provider_tools_enabled,
                                         memory_provider_tools_exposed, normalize_tool_schema)
-from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION, ctx_bound, spawn_context_thread
+from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION
 from agent.skill_commands import extract_user_instruction_from_skill_message
 from hermes_constants import hermes_home_key
+from hermes_threading import ctx_bound, spawn_context_thread
 from tools.hook_output_spill import get_spill_config, spill_if_oversized
 from tools.registry import tool_error
 

@@ -1,15 +1,18 @@
 """Per-file context manifest (``agent/context_file_sources.py``) behind the ``/context`` Rules figure.
 
-The manifest and ``build_context_files_prompt`` share one discovery walk, so the invariant under test is
-parity: a file is reported ``loaded`` iff its content appears in the built prompt.
+The manifest and the live ``<project-context>`` block share one discovery walk and one selection, so the
+invariant under test is parity: a project file is reported ``loaded`` iff its content appears in the block
+(SOUL.md is identity-owned and never part of it).
 """
 
+import os
 from pathlib import Path
 
 import pytest
 
 from agent.context_file_sources import list_context_file_sources, render_context_file_lines
 from agent.prompt_builder import build_context_files_prompt
+from agent.prompts.project_context import render_project_context
 
 
 @pytest.fixture()
@@ -39,14 +42,16 @@ def test_manifest_matches_what_the_prompt_actually_loads(project, tmp_path_facto
     (home / "SOUL.md").write_text("identity text")
 
     sources = list_context_file_sources(cwd=str(sub), home_override=home)
-    prompt = build_context_files_prompt(cwd=str(sub), home_override=home)
+    prompt = render_project_context(provider="p", model="m", cwd=str(sub))
 
     statuses = {s["label"]: s["status"] for s in sources}
     assert statuses == {
-        ".hermes.md": "loaded", "../AGENTS.md": "shadowed", "AGENTS.override.md": "empty", "AGENTS.md": "shadowed",
+        ".hermes.md": "loaded", os.path.join("..", "AGENTS.md"): "shadowed", "AGENTS.override.md": "empty", "AGENTS.md": "shadowed",
         "CLAUDE.md": "shadowed", ".cursorrules": "shadowed", ".cursor/rules/a.mdc": "shadowed", "SOUL.md": "loaded",
     }
     for src in sources:
+        if src["label"] == "SOUL.md":  # identity slot, by design outside the project block
+            continue
         body = Path(src["path"]).read_text().strip() if src["chars"] else ""
         assert src["loaded"] == (bool(body) and body in prompt), src
     assert all(s["est_tokens"] > 0 for s in sources if s["chars"])
@@ -54,9 +59,26 @@ def test_manifest_matches_what_the_prompt_actually_loads(project, tmp_path_facto
     # Same walk, other winner: drop .hermes.md and the whole AGENTS chain loads while the rest stays shadowed.
     (project / ".hermes.md").unlink()
     statuses = {s["label"]: s["status"] for s in list_context_file_sources(cwd=str(sub), home_override=home)}
-    prompt = build_context_files_prompt(cwd=str(sub), home_override=home)
-    assert statuses["../AGENTS.md"] == statuses["AGENTS.md"] == "loaded" and "root agents rules" in prompt
+    prompt = render_project_context(provider="p", model="m", cwd=str(sub))
+    assert statuses[os.path.join("..", "AGENTS.md")] == statuses["AGENTS.md"] == "loaded" and "root agents rules" in prompt
     assert statuses["CLAUDE.md"] == "shadowed" and "claude rules" not in prompt
+
+
+def test_containment_repeat_is_reported_and_not_injected(project, tmp_path_factory):
+    """/context says ``repeated`` exactly for a file the prompt's containment dedupe dropped."""
+    (project / "AGENTS.md").write_text("Shared rule.")
+    sub = project / "pkg"
+    sub.mkdir()
+    (sub / "AGENTS.md").write_text("Shared rule.\n\nLocal rule.")
+    home = tmp_path_factory.mktemp("home")
+
+    sources = _by_label(list_context_file_sources(cwd=str(sub), home_override=home))
+    assert sources[os.path.join("..", "AGENTS.md")]["status"] == "repeated"
+    assert sources[os.path.join("..", "AGENTS.md")]["loaded"] is False
+    assert sources["AGENTS.md"]["status"] == "loaded"
+    block = render_project_context(provider="p", model="m", cwd=str(sub))
+    assert "Shared rule." not in block or block.count("Shared rule.") == 1
+    assert "Local rule." in block
 
 
 def test_truncated_and_suppressed_statuses_follow_the_builder(project, monkeypatch, tmp_path_factory):

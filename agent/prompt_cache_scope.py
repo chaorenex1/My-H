@@ -170,7 +170,7 @@ def resolve_prompt_cache_scope(agent: Any) -> str:
     inherited = getattr(agent, "_inherited_cache_scope", None)
     if isinstance(inherited, str) and inherited:
         return _apply_fork_tag(agent, inherited)
-    # A caller-pinned scope (the adviser's ``<session>--<name>``) wins over the physical id: the
+    # A caller-pinned scope (the advisor's ``<session>--<name>``) wins over the physical id: the
     # runs of one reviewer are one logical conversation, and two reviewers must not share a shard.
     declared = getattr(agent, "_declared_cache_scope", "")
     if isinstance(declared, str) and declared:

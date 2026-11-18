@@ -80,11 +80,11 @@ class TestSteerDrain:
         assert agent._drain_pending_steer() == "hello"
         assert agent._pending_steer is None
 
-    def test_adviser_steer_is_not_a_user_intervention(self):
+    def test_advisor_steer_is_not_a_user_intervention(self):
         agent = _bare_agent()
         agent._turn_user_intervened = False
-        assert agent.steer("review note", kind="adviser") is True
-        assert agent._pending_steer_kind == "adviser"
+        assert agent.steer("review note", kind="advisor") is True
+        assert agent._pending_steer_kind == "advisor"
         assert agent._turn_user_intervened is False
         # A human steer still clears the unattended flag.
         assert agent.steer("typed note") is True
@@ -547,8 +547,8 @@ class TestSteerInjection:
         assert [m["role"] for m in merged] == ["user", "user"]
         assert merged[-1]["content"] == "next question"
 
-    def test_persisted_adviser_row_is_never_merged_with_the_next_prompt(self):
-        """An adviser row is user-shaped for the provider, but the user did not write it.
+    def test_persisted_advisor_row_is_never_merged_with_the_next_prompt(self):
+        """An advisor row is user-shaped for the provider, but the user did not write it.
 
         Round-tripping it through the alternation repair would rewrite a persisted row with the
         user's next prompt and leave the transcript claiming the user said it.
@@ -556,15 +556,15 @@ class TestSteerInjection:
         from agent.agent_runtime_helpers import _merge_consecutive_users
         from agent.prompt_builder import advisory_user_row
 
-        adviser = advisory_user_row("[adviser — advisory only]\n- [concern] re-read the diff\n[end adviser]")
-        before = dict(adviser)
-        merged, repairs = _merge_consecutive_users([adviser, {"role": "user", "content": "next question"}])
-        assert adviser == before
+        advisor = advisory_user_row("[advisor — advisory only]\n- [concern] re-read the diff\n[end advisor]")
+        before = dict(advisor)
+        merged, repairs = _merge_consecutive_users([advisor, {"role": "user", "content": "next question"}])
+        assert advisor == before
         assert repairs == 0
         assert [m["role"] for m in merged] == ["user", "user"]
         assert merged[-1]["content"] == "next question"
 
-    def test_trailing_adviser_row_does_not_hide_the_pending_tool_round(self):
+    def test_trailing_advisor_row_does_not_hide_the_pending_tool_round(self):
         """The advice lands right after the newest tool result; a round with no answer must still
         be found or compaction pairs the tool row with the advice instead of the model's reply."""
         from agent.context_compressor import _pending_tool_round
@@ -572,8 +572,8 @@ class TestSteerInjection:
         messages = [
             {"role": "assistant", "content": "", "tool_calls": []},
             {"role": "tool", "content": "ok", "tool_call_id": "a"},
-            {"role": "user", "content": "[adviser — advisory only]\n- [concern] x\n[end adviser]",
-             "display_kind": "adviser"},
+            {"role": "user", "content": "[advisor — advisory only]\n- [concern] x\n[end advisor]",
+             "display_kind": "advisor"},
         ]
         assert list(_pending_tool_round(messages)) == [1]
 
@@ -799,15 +799,11 @@ class TestPreApiCallSteerDrain:
 
 
 class TestSteerMarkerContract:
-    def test_system_prompt_note_describes_the_real_marker(self):
-        """The system-prompt note tells the model which marker to trust; it
-        must reference the exact open/close the injector emits, or the model
-        trusts a marker that never appears (and vice-versa)."""
-        from agent.prompt_builder import STEER_CHANNEL_NOTE, STEER_MARKER_CLOSE
+    def test_steer_marker_is_self_describing(self):
+        from agent.prompt_builder import STEER_MARKER_CLOSE, STEER_MARKER_OPEN
 
         emitted = format_steer_marker("hi")
         assert STEER_MARKER_OPEN in emitted and STEER_MARKER_CLOSE in emitted
-        assert STEER_MARKER_OPEN in STEER_CHANNEL_NOTE and STEER_MARKER_CLOSE in STEER_CHANNEL_NOTE
 
 
 

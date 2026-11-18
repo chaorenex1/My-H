@@ -407,6 +407,8 @@ its response (`tier1` field) alongside the built-in scanner's verdict.
 
 If you maintain skills outside of Hermes — for example, a shared `~/.agents/skills/` directory used by multiple AI tools — you can tell Hermes to scan those directories too.
 
+Hermes scans the per-profile `<HERMES_HOME>/.agents/skills/` automatically, one tier below the native `<HERMES_HOME>/skills/` directory. That is the profile-scoped counterpart of the cross-tool `~/.agents/skills/` convention; the HOME-level `~/.agents/skills/` still needs `external_dirs` below.
+
 Add `external_dirs` under the `skills` section in `~/.hermes/config.yaml`:
 
 ```yaml
@@ -423,7 +425,7 @@ Paths support `~` expansion and `${VAR}` environment variable substitution.
 
 - **Create locally, update in place**: New agent-created skills are written to `~/.hermes/skills/` (or `skills.create_dir` when configured — see below). Existing skills are modified where they are found, including skills under `external_dirs`, when the agent uses `skill_manage` actions such as `patch` (targeted or full rewrite), `write_file`, `remove_file`, or `delete`.
 - **External dirs are not a write-protection boundary**: If an external skill directory is writable by the Hermes process, agent-managed skill updates can change files in that directory. Use filesystem permissions or a separate profile/toolset setup if shared external skills must stay read-only.
-- **Precedence**: If the same skill name exists in more than one directory, the higher-precedence directory wins everywhere — skill index, `skills_list`, `hermes skills list`, `skill_view`, slash commands, `-s` preload and cron: `project → local (~/.hermes/skills/) → skills.create_dir → external_dirs`. The hidden copy is logged as shadowed. See [Duplicate skill names](#duplicate-skill-names).
+- **Precedence**: If the same skill name exists in more than one directory, the higher-precedence directory wins everywhere — skill index, `skills_list`, `hermes skills list`, `skill_view`, slash commands, `-s` preload and cron: `project → local (~/.hermes/skills/) → agents (<HERMES_HOME>/.agents/skills) → skills.create_dir → external_dirs`. The hidden copy is logged as shadowed. See [Duplicate skill names](#duplicate-skill-names).
 - **Full integration**: External skills appear in the system prompt index, `skills_list`, `skill_view`, and as `/skill-name` slash commands — no different from local skills.
 - **Non-existent paths are silently skipped**: If a configured directory doesn't exist, Hermes ignores it without errors. Useful for optional shared directories that may not be present on every machine.
 
@@ -495,7 +497,7 @@ Trusted roots are stored in `skills.trusted_project_dirs` in `~/.hermes/config.y
 
 ### Precedence
 
-Project skills are the **highest-precedence tier**: `project → local (~/.hermes/skills/) → skills.create_dir → external_dirs`. A project skill named `deploy` overrides a same-named profile or bundled skill for sessions inside that repo — that's the point: vendored repo skills win on their home turf, without touching your global profile. Project skills are tagged `[project]` in the agent's skill index so provenance stays visible.
+Project skills are the **highest-precedence tier**: `project → local (~/.hermes/skills/) → agents (<HERMES_HOME>/.agents/skills) → skills.create_dir → external_dirs`. A project skill named `deploy` overrides a same-named profile or bundled skill for sessions inside that repo — that's the point: vendored repo skills win on their home turf, without touching your global profile. Project skills are tagged `[project]` in the agent's skill index so provenance stays visible.
 
 Like external dirs, project skill directories are treated as repo-owned: autonomous skill maintenance (the curator) never modifies them, and new agent-created skills always go to `~/.hermes/skills/`.
 
@@ -503,7 +505,7 @@ Like external dirs, project skill directories are treated as repo-owned: autonom
 
 Every surface resolves a skill name the same way:
 
-- **Across directories**, the higher-precedence directory wins (`project → local → skills.create_dir → external_dirs`), including for the same relative path (`productivity/xdup` local and external loads the local copy). The shadowed copy is hidden and a warning is logged.
+- **Across directories**, the higher-precedence directory wins (`project → local → agents → skills.create_dir → external_dirs`), including for the same relative path (`productivity/xdup` local and external loads the local copy). The shadowed copy is hidden and a warning is logged.
 - **Inside one directory**, two *different* skills that share a name are never guessed between. Both are listed under their exact relative path (for example `a/one` and `b/two`), and loading the bare name fails with `Ambiguous skill name dup-demo: use one of a/one, b/two`. That message is also what `hermes -s dup-demo` and cron jobs report. Identical copies of one skill (a symlink view or byte-identical copy) resolve to the shallowest path.
 
 Plugin skills use their own `plugin:skill` names and never collide with these.

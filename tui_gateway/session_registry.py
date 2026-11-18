@@ -385,7 +385,7 @@ def _maybe_notify_auto_prune(sid: str, profile_home: str | None) -> None:
         else:
             _AUTO_PRUNE_NOTIFIED.pop(str(home), None)
 
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     spawn_context_thread(_work, name="auto-prune-advice").start()
 
 
@@ -804,7 +804,8 @@ def _live_session_payload(
     # message_count follows _resume_response: the stored size when messages are omitted, else the wire count
     # (a hidden seed row is in ``history`` but never on the wire).
     messages = ([] if omit_messages else
-                _history_to_messages(history, profile_home=session.get("profile_home"), image_urls=inline_images))
+                _history_to_messages(history, profile_home=session.get("profile_home"),
+                                     image_urls=inline_images, running=running))
     payload = {
         "info": _fallback_session_info(session), "message_count": len(history) if omit_messages else len(messages),
         "messages": messages,

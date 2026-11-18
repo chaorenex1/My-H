@@ -502,6 +502,20 @@ class TestSessionLifecycle:
         assert session["cwd"] == "/work/repo"
         assert session["git_branch"] == "pets-feature"
 
+    def test_workspace_roots_round_trip_in_stored_order(self, db):
+        db.create_session(session_id="s1", source="cli")
+        assert db.get_session_workspace_roots("s1") == []
+
+        assert db.update_session_workspace_roots("s1", ["/work/shared", "/work/docs"])
+        assert db.get_session_workspace_roots("s1") == ["/work/shared", "/work/docs"]
+        assert db.get_session("s1")["workspace_roots"] == '["/work/shared", "/work/docs"]'
+
+        assert db.update_session_workspace_roots("s1", [])
+        assert db.get_session_workspace_roots("s1") == []
+
+    def test_update_session_workspace_roots_rejects_an_unknown_session(self, db):
+        assert db.update_session_workspace_roots("missing", ["/work/shared"]) is False
+
 
 
 

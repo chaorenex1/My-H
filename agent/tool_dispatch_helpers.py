@@ -66,6 +66,18 @@ _DESTRUCTIVE_PATTERNS = re.compile(
 # Output redirects that overwrite files (> but not >>)
 _REDIRECT_OVERWRITE = re.compile(r'[^>]>[^>]|^>[^>]')
 
+def _persisted_model_result(tool_name: str, result: Any) -> Any:
+    """Drop display-only fields from the model-facing copy of a tool result (ADR-4 D11.1).
+
+    ``execute_code`` carries views/images for the live card and the durable row; the model
+    copy must not spend context on base64. Every other tool result is returned unchanged.
+    """
+    if tool_name == "execute_code" and isinstance(result, str):
+        from tools.code_execution_tool import strip_execute_code_display
+        return strip_execute_code_display(result)
+    return result
+
+
 def _context_pruned_argument_paths(tool_name: str, args: Any) -> list[str]:
     """Paths whose values contain model-visible context-compression artifacts.
 
@@ -598,6 +610,88 @@ def _maybe_wrap_untrusted(name: str, content: Any) -> Any:
     return content
 
 
+# ── Display-safe resume projection (ADR-10 D4 / ADR-2 D6) ─────────────────────────────────────
+# One anchored wrapper: the stored row is model-facing, so a resume must strip the security
+# delimiters and the elision notice the model was shown — the live card never had them.
+_UNTRUSTED_WRAP_RE = re.compile(
+    r'^<untrusted_tool_result source="[^"]*">\n.*?\n\n(.*)\n</untrusted_tool_result>\Z', re.DOTALL)
+_DATA_URL_RE = re.compile(r"^data:([^;,]+)?;base64,(.*)\Z", re.DOTALL)
+# Matches ``VisionMessagePrepMixin._MAX_DATA_URL_BASE64_BYTES`` (20 MB base64 ≈ 15 MB decoded).
+_DISPLAY_IMAGE_BASE64_MAX = 20 * 1024 * 1024
+_DISPLAY_IMAGE_URL_MAX = 512
+_IMAGE_PART_TYPES = frozenset({"image", "image_url", "input_image"})
+
+
+def _display_tool_text(name: str, text: str) -> str:
+    """One stored text block as the live card showed it: wrapper and elision notice removed."""
+    if not _is_untrusted_tool(name):
+        return text
+    wrapped = _UNTRUSTED_WRAP_RE.match(text)
+    if wrapped:
+        text = wrapped.group(1)
+    return text.removesuffix(_UPSTREAM_ELISION_NOTICE)
+
+
+def _display_image_block(part: dict) -> Optional[dict]:
+    """A stored image part as an inline ``{type:"image", data, mimeType}`` block, else a text
+    placeholder. Oversized data URLs never travel on a resume (the client renders ``[image]``)."""
+    data = part.get("data")
+    mime = part.get("mimeType") or part.get("mime_type")
+    url = None
+    if isinstance(data, str) and isinstance(mime, str):
+        if len(data) > _DISPLAY_IMAGE_BASE64_MAX:
+            return {"type": "text", "text": "[image]"}
+        return {"type": "image", "data": data, "mimeType": mime}
+    source = part.get("source")
+    if isinstance(source, dict) and source.get("type") == "base64":
+        data, mime = source.get("data"), source.get("media_type")
+        if isinstance(data, str) and isinstance(mime, str):
+            if len(data) > _DISPLAY_IMAGE_BASE64_MAX:
+                return {"type": "text", "text": "[image]"}
+            return {"type": "image", "data": data, "mimeType": mime}
+        return {"type": "text", "text": "[image]"}
+    if isinstance(source, dict):
+        url = source.get("url")
+    if url is None:
+        raw = part.get("image_url", part.get("url"))
+        url = raw.get("url") if isinstance(raw, dict) else raw
+    if not isinstance(url, str) or not url:
+        return {"type": "text", "text": "[image]"}
+    inline = _DATA_URL_RE.match(url)
+    if inline:
+        if len(inline.group(2)) > _DISPLAY_IMAGE_BASE64_MAX:
+            return {"type": "text", "text": "[image]"}
+        return {"type": "image", "data": inline.group(2), "mimeType": inline.group(1) or "image/jpeg"}
+    placeholder = url if len(url) <= _DISPLAY_IMAGE_URL_MAX else "[image]"
+    return {"type": "text", "text": f"[image: {placeholder}]" if placeholder != "[image]" else placeholder}
+
+
+def display_tool_result_content(name: str, content: Any, *, images: bool) -> Any:
+    """Display-safe projection of a stored tool result (ADR-10 D4).
+
+    ``images=False`` (``include_tool_content="text"``) keeps text parts only; ``True`` ("full")
+    keeps image parts too. High-risk tools lose the untrusted-data wrapper and the upstream
+    elision notice the model was shown, so a resumed card matches the live one. Non-str/list
+    content is returned unchanged.
+    """
+    if isinstance(content, str):
+        return _display_tool_text(name, content)
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type")
+            if kind == "text" and isinstance(part.get("text"), str):
+                parts.append({"type": "text", "text": _display_tool_text(name, part["text"])})
+            elif kind in _IMAGE_PART_TYPES and images:
+                block = _display_image_block(part)
+                if block:
+                    parts.append(block)
+        return parts
+    return content
+
+
 __all__ = [
     "_DESTRUCTIVE_PATTERNS",
     "_NEVER_PARALLEL_TOOLS",
@@ -623,5 +717,6 @@ __all__ = [
     "_plan_tool_batch_segments",
     "_should_parallelize_tool_batch",
     "_trajectory_normalize_msg",
+    "display_tool_result_content",
     "make_tool_result_message",
 ]

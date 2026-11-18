@@ -26,6 +26,16 @@ USER_INTERRUPT_REASONS = frozenset({_REASON_HARD_STOP, _REASON_NEW_MESSAGE, _REA
 _REASON_GATEWAY_SHUTDOWN = "gateway shutdown"
 
 
+def stream_abort_requested(agent) -> bool:
+    """True when the in-flight request must stop: a user stop or a TTSR stream rewind.
+
+    TTSR aborts are passive (ADR-6 D11): they never set ``_interrupt_requested``, so provider
+    loops can use this one predicate without turning the turn into a user stop.
+    """
+    return bool(getattr(agent, "_interrupt_requested", False)
+                or getattr(agent, "_ttsr_rewind_requested", False))
+
+
 def interrupt_issuer(agent) -> Optional[str]:
     """Slug of the system producer behind the pending interrupt, or ``None`` for a human stop."""
     reason = getattr(agent, "_tool_interrupt_reason", None)
@@ -102,10 +112,10 @@ def _set_steer_parts(agent, parts: list) -> None:
     agent._pending_steer_parts = parts
     agent._pending_steer = "\n".join(text for _, text, _ in parts) or None
     # Advice from a plugin reviewer must not borrow the user's authority: the drained row carries
-    # ``display_kind="adviser"`` only when every buffered part is advice. A mixed buffer is an
+    # ``display_kind="advisor"`` only when every buffered part is advice. A mixed buffer is an
     # ordinary user row, so user text never ends up dressed as machine advice.
     agent._pending_steer_kind = (
-        "adviser" if parts and all(kind == "adviser" for _, _, kind in parts) else "user"
+        "advisor" if parts and all(kind == "advisor" for _, _, kind in parts) else "user"
     )
 
 
@@ -166,6 +176,9 @@ def _ic_signal_tool_workers(agent, active: bool, **kw) -> None:
 
 class InterruptControlMixin:
     """interrupt()/hard_interrupt()/clear_interrupt()/steer()/redirect() (see module docstring)."""
+
+    def _stream_abort_requested(self) -> bool:
+        return stream_abort_requested(self)
 
     def interrupt(
         self, message: Optional[str] = None, *, hard_cancel: bool = False,
@@ -296,6 +309,7 @@ class InterruptControlMixin:
                 return False
             self._interrupt_requested = False
             self._interrupt_message = self._tool_interrupt_reason = None
+            self._ttsr_rewind_requested = False
             getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
             if not preserve_redirect:
                 self._pending_redirect = None
@@ -319,21 +333,21 @@ class InterruptControlMixin:
         interrupt); multiple calls concatenate with newlines. Returns False for empty text. ``ticket``
         names the submission, so ``withdraw_steer`` can settle exactly it, whatever text others carry.
 
-        ``kind="adviser"`` marks the row so the model is not told the text is a direct user
+        ``kind="advisor"`` marks the row so the model is not told the text is a direct user
         message: a plugin reviewer's advice must not borrow the user's authority.
         """
         if not text or not text.strip():
             return False
         cleaned = text.strip()
-        is_adviser = str(kind or "").lower() == "adviser"
+        is_advisor = str(kind or "").lower() == "advisor"
         with _ic_lock(self, "_pending_steer_lock"):
             _set_steer_parts(
                 self,
-                _steer_parts(self) + [(ticket, cleaned, "adviser" if is_adviser else "user")],
+                _steer_parts(self) + [(ticket, cleaned, "advisor" if is_advisor else "user")],
             )
         # A reviewer's advice is not a user intervention: first-task-done detection must keep
         # reading the turn as unattended. Only a human steer clears that flag.
-        if not is_adviser:
+        if not is_advisor:
             self._turn_user_intervened = True
         return True
 

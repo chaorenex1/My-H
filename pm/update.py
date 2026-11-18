@@ -324,13 +324,16 @@ def llama_app_bucket_versions() -> list[str]:
     return [str(v) for v in versions]
 
 
-def github_release_tags(repo: str, *, strip_prefix: str = "") -> list[str]:
+def github_release_tags(repo: str, *, strip_prefix: str = "",
+                        require_asset: str | None = None) -> list[str]:
     """Newest-first release tag names for a GitHub repo (releases, not all
     tags — no drafts/prereleases, and a rolling 'latest' pseudo-release is
     skipped). ``strip_prefix`` removes a tag prefix (e.g. 'v', 'b'). Only
     version-shaped tags survive the strip — cua-driver's repo also tags
     sandbox/experimental builds (cua-driver-rs-vsandbox-v0.4.3) that must
-    never appear as update candidates."""
+    never appear as update candidates. ``require_asset`` keeps only releases
+    that actually published that asset: a partial release (ast-grep 0.51.1
+    carried one platform) must not become an update candidate for the rest."""
     tags = []
     for page in range(1, 4):  # up to 90 releases — far beyond any cadence
         data = _get_json(f"https://api.github.com/repos/{repo}/releases?per_page=30&page={page}")
@@ -342,6 +345,9 @@ def github_release_tags(repo: str, *, strip_prefix: str = "") -> list[str]:
             tag = release.get("tag_name", "")
             if tag == "latest":
                 continue
+            if require_asset is not None and require_asset not in {
+                    asset.get("name") for asset in release.get("assets", [])}:
+                continue
             if strip_prefix and tag.startswith(strip_prefix):
                 tag = tag[len(strip_prefix):]
             if not tag or not tag[0].isdigit():
@@ -350,6 +356,28 @@ def github_release_tags(repo: str, *, strip_prefix: str = "") -> list[str]:
         if len(data) < 30:
             break
     return tags
+
+
+def pypi_versions(package: str) -> list[str]:
+    """Newest-first stable versions PyPI still serves for ``package``.
+
+    A release whose every file is yanked is not a candidate. Prereleases are
+    skipped: this feeds `pm update`, which pins what a user installs by name.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    data = _get_json(f"https://pypi.org/pypi/{package}/json")
+    candidates = []
+    for version, files in (data.get("releases") or {}).items():
+        if files and all(file.get("yanked") for file in files):
+            continue
+        try:
+            parsed = Version(version)
+        except InvalidVersion:
+            continue
+        if not parsed.is_prerelease:
+            candidates.append((parsed, version))
+    return [version for _, version in sorted(candidates, reverse=True)]
 
 
 def npm_dist_tags(name: str) -> dict:

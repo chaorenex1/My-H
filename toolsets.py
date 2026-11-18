@@ -14,6 +14,7 @@ _HERMES_CORE_TOOLS = [
     "read_file", "write_file", "patch", "search_files",
     "vision_analyze", "image_generate",
     "skills_list", "skill_view", "skill_manage",
+    "rules_list", "rule_view", "rule_manage",
     "browser_exec",  # THE browser: Python over CDP (browser-harness)
     "browser_cdp", "browser_dialog",
     "browser_vault",  # rides with the browser; deferred by default (tools.tool_search.defer)
@@ -22,7 +23,7 @@ _HERMES_CORE_TOOLS = [
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
-    "agent",
+    "agent", "agent_out", "agent_message",
     "cronjob_manage",
     "kanban_show", "kanban_list",
     "kanban_complete", "kanban_block", "kanban_request_review",
@@ -32,6 +33,11 @@ _HERMES_CORE_TOOLS = [
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
     "computer_use",
+    # Code graph: read-only queries + evidence-constrained updates (ADR-8).
+    "code_intel", "code_graph_update",
+    # Judgment-routed search over the workspace (ADR-11 D14) and judge-driven
+    # selective staging (ADR-17 D7); both hide without a usable judge route.
+    "judgrg", "git_stage",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -96,11 +102,30 @@ TOOLSETS = {
         "or keyboard focus. Works with any tool-capable model.",
         ["computer_use"],
     ),
+    "codegraph": _ts(
+        "Code graph queries and evidence-backed updates (symbols, calls, types, "
+        "dependencies, tests, changes, context)",
+        ["code_intel", "code_graph_update"],
+    ),
+    "judgment": _ts(
+        "Judgment-routed, read-only search over the workspace: a restricted choice "
+        "question classifies the request's intent (literal/symbol/call/type/config/"
+        "todo/pattern/unknown implementation/cross-language) and runs ripgrep, "
+        "ast-grep, or rg-then-ast-grep. Also judge-driven selective git staging "
+        "(index only, never commits). Requires a native judgment route unless "
+        "judgment.tools.enabled is 'on'.",
+        ["judgrg", "git_stage"],
+    ),
     "terminal": _ts("Terminal/command execution and process management tools", ["terminal", "process_manage"]),
     "skills": _ts(
         "Access, create, edit, and manage skill documents with specialized "
         "instructions and knowledge",
         ["skills_list", "skill_view", "skill_manage"],
+    ),
+    "rules": _ts(
+        "Discover, inspect, and manage rule documents (Markdown + YAML frontmatter) "
+        "from project, profile, and installation scopes",
+        ["rules_list", "rule_view", "rule_manage"],
     ),
     # web_search belongs to `web`/`search` only. Listing it here too let
     # `disabled_toolsets: [browser]` (headless/Docker deployments) strip
@@ -150,12 +175,16 @@ TOOLSETS = {
     ),
     "clarify": _ts("Ask the user clarifying questions (multiple-choice or open-ended)", ["clarify"]),
     "code_execution": _ts("Run Python scripts that call tools programmatically (reduces LLM round trips)", ["execute_code"]),
-    "delegation": _ts("Spawn subagents with isolated context for complex subtasks", ["delegate_task"]),
+    "delegation": _ts(
+        "Legacy batch delegation and live control. New delegation work uses `agents`: the "
+        "`agent` tool renders one named agent or a `tasks[]` batch with its own prompt/tools/"
+        "model and `agent_out` artifacts. `delegate_task` keeps `action=list/steer/stop` and "
+        "legacy batch callers.",
+        ["delegate_task"]),
     "agents": _ts(
         "Run named in-process agents with their own system prompt, tool surface and JSONL "
-        "conversation under HERMES_HOME/sessions/<agent>/",
-        ["agent"],
-    ),
+        "conversation under HERMES_HOME/sessions/<agent>/, read them back, and message peers",
+        ["agent", "agent_out", "agent_message"]),
     "kanban": _ts(
         "Kanban multi-agent coordination — only active when the agent is spawned by "
         "the kanban dispatcher (HERMES_KANBAN_TASK env set). The dispatcher runs "

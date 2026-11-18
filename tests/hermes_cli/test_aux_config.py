@@ -96,6 +96,13 @@ def test_reset_aux_clears_delegation_routing_preserves_settings(tmp_path, monkey
     cfg["delegation"].update(
         {"provider": "openrouter", "model": "x", "max_concurrent_children": 7}
     )
+    # A reset route must not keep the chain it was assigned with: that chain points at the
+    # provider the reset just left, so "auto" would silently fall back to it.
+    cfg["auxiliary"]["compression"].update({
+        "provider": "openrouter", "model": "x",
+        "fallback_chain": [{"provider": "deepseek", "model": "deepseek-flash"}],
+    })
+    cfg["delegation"]["fallback_chain"] = [{"provider": "deepseek", "model": "deepseek-pro"}]
     save_config(cfg)
 
     n = _reset_aux_to_auto()
@@ -106,6 +113,8 @@ def test_reset_aux_clears_delegation_routing_preserves_settings(tmp_path, monkey
     assert d["provider"] == ""
     assert d["model"] == ""
     assert d["max_concurrent_children"] == 7
+    assert not d["fallback_chain"]
+    assert not cfg["auxiliary"]["compression"]["fallback_chain"]
 
 def test_delegation_cfg_as_task_projection():
     """Projection renders empty provider as auto via _format_aux_current."""

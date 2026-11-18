@@ -22,8 +22,8 @@ def test_desktop_subagent_steer_and_stop_reach_only_this_sessions_children(tmp_p
     assert result.returncode == 0, result.stdout + result.stderr
     receipt = json.loads((home / 'receipt.json').read_text())
     assert receipt['owned'] == {'steer': {'status': 'queued', 'subagent_id': 'owned', 'text': 'check owned'},
-                                'stop': {'found': True, 'subagent_id': 'owned'}}, receipt
+                                'stop': {'found': True, 'subagent_id': 'owned', 'cancelled': True}}, receipt
     assert receipt['sibling'] == {'steer': {'status': 'rejected', 'subagent_id': 'sibling', 'text': 'check sibling'},
-                                  'stop': {'found': False, 'subagent_id': 'sibling'}}, receipt
+                                  'stop': {'found': False, 'subagent_id': 'sibling', 'cancelled': False}}, receipt
     assert receipt['delivered'] == {'owned': [['check owned'], 1], 'sibling': [[], 0]}, receipt
     assert receipt['late']['status'] == 'rejected', receipt

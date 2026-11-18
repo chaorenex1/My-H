@@ -1,0 +1,47 @@
+{
+  "description": "Create, update, or delete a profile-owned rule under the active profile's .agents/rules directory. Frontmatter is written in oh-my-pi rule shape.",
+  "name": "rule_manage",
+  "parameters": {
+    "properties": {
+      "action": {
+        "enum": [
+          "create",
+          "update",
+          "delete"
+        ],
+        "type": "string"
+      },
+      "body": {
+        "description": "Markdown body without frontmatter.",
+        "type": "string"
+      },
+      "confirm": {
+        "description": "Required true for delete.",
+        "type": "boolean"
+      },
+      "content": {
+        "description": "Full Markdown file (frontmatter + body). Mutually exclusive with metadata/body.",
+        "type": "string"
+      },
+      "metadata": {
+        "description": "Frontmatter fields to merge: description, condition, astCondition, question, scope, globs, interruptMode, alwaysApply, agents, enabled.",
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "overwrite": {
+        "description": "Allow create to replace an existing profile-owned rule (default false).",
+        "type": "boolean"
+      },
+      "rule_id": {
+        "description": "Relative rule id without suffix, for example 'python/coding-style'.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "action",
+      "rule_id"
+    ],
+    "type": "object"
+  }
+}

@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from tui_gateway import server
 from agent.message_sanitization import _sanitize_surrogates
+from tui_gateway.contracts.protocol import ready_payload
 from tui_gateway.event_replay import replay_epoch
 from tui_gateway.transport import serialize_frame
 from tui_gateway.ws_legacy_fallback import dispatch_legacy, legacy_fallback_allowed
@@ -655,10 +656,9 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
         # their per-session seq watermarks (event_replay).
         ready_ok = await transport.write_async({
             "jsonrpc": "2.0", "method": "event",
-            "params": {"type": "gateway.ready", "payload": {
-                "skin": skin_payload, "change_events": True, "heartbeat": True, "replay_epoch": replay_epoch(),
-                **({"session_authority": True} if authority_connection is not None else {}),
-            }},
+            "params": {"type": "gateway.ready", "payload": ready_payload(
+                skin=skin_payload, replay_epoch=replay_epoch(), heartbeat=True,
+                session_authority=True if authority_connection is not None else None)},
         })
         if ready_ok:
             # Live-apply skins Hermes activates mid-conversation, and track this peer for session-less

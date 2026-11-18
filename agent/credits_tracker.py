@@ -803,7 +803,7 @@ def apply_keep_going_change(agent, enabled: bool) -> None:
             return
         agent._credits_state = replace(state, keep_going_on_credits=enabled)
         _rerun_notice_policy(agent)
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         from hermes_cli.nous_account import get_nous_portal_account_info
         spawn_context_thread(lambda: get_nous_portal_account_info(force_fresh=True), name="keep-going-refresh").start()
     except Exception:
@@ -891,7 +891,7 @@ def rewarm_pricing_before_depleted_notice(agent) -> bool:
         _warm_nous_pricing_cache()
         _rerun_notice_policy(agent)
 
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
 
     agent._credits_pricing_warm = spawn_context_thread(_warm_then_rerun, name="credits-pricing-warm")
     agent._credits_pricing_warm.start()
@@ -931,7 +931,7 @@ def seed_credits_at_session_start(agent) -> bool:
                     _hydrate_seed_state(agent, state)
             except Exception:
                 logger.debug("credits ▸ session-start seed (background) failed", exc_info=True)
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         spawn_context_thread(_bg_seed, name="credits-seed").start()  # the warm reads the profile's auth store
         return True

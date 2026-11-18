@@ -1,0 +1,63 @@
+{
+  "description": "Read a named agent run back by agent_session_id, name or subject. mode=history (default) returns the session's JSONL transcript; artifact returns the settle-time files — kind=report (the verbatim final report), kind=tool (step + tool_name, the archived output and its pre-truncation original when it existed) or kind=all (the file list); ast_summary returns the structural summary written at settle; inbox returns the messages queued for the session plus the most recent deliveries; context_files returns the files supplied at spawn (path, size, sha256), adding their content only with include_content=true. Use the identity the agent tool returned. artifact kind=tool also reads a main conversation's archived tool output with session_id plus tool_call_id (or step + tool_name); the archived path or the result's stdout_spill_path, never a guessed path. Other artifact kinds and all other modes serve named agent sessions only.",
+  "name": "agent_out",
+  "parameters": {
+    "properties": {
+      "agent_session_id": {
+        "description": "The agent session id the agent tool returned.",
+        "type": "string"
+      },
+      "include_content": {
+        "description": "mode=context_files: read each recorded file's current content (default false returns path, size and sha256 only).",
+        "type": "boolean"
+      },
+      "kind": {
+        "description": "mode=artifact: report (default), tool, or all.",
+        "enum": [
+          "report",
+          "tool",
+          "all"
+        ],
+        "type": "string"
+      },
+      "mode": {
+        "description": "What to read; defaults to history.",
+        "enum": [
+          "history",
+          "artifact",
+          "ast_summary",
+          "inbox",
+          "context_files"
+        ],
+        "type": "string"
+      },
+      "name": {
+        "description": "The session's profile-unique short name; alternative to the id and subject.",
+        "type": "string"
+      },
+      "session_id": {
+        "description": "mode=artifact kind=tool: the main conversation's session id; omit to use the current conversation. Mutually exclusive with agent_session_id/subject.",
+        "type": "string"
+      },
+      "step": {
+        "description": "mode=artifact kind=tool: the tool call's per-session step.",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "subject": {
+        "description": "The agent session's unique subject; alternative to the id.",
+        "type": "string"
+      },
+      "tool_call_id": {
+        "description": "mode=artifact kind=tool: a conversation tool call's id. Mutually exclusive with agent identity.",
+        "type": "string"
+      },
+      "tool_name": {
+        "description": "mode=artifact kind=tool: the tool whose output to read.",
+        "type": "string"
+      }
+    },
+    "required": [],
+    "type": "object"
+  }
+}

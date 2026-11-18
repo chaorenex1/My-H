@@ -63,4 +63,4 @@ def test_fresh_model_options_builds_payload_unchanged(tmp_path, monkeypatch):
 
     resp = _call("model.options")
     assert "result" in resp, resp
-    assert resp["result"] == expected
+    assert resp["result"] == {**expected, "models": []}

@@ -30,6 +30,9 @@ act/
 .uv-cache/
 compose.hermes.local.yml
 export*
+# The omp shell keeps a source directory named `export/` (upstream snapshot).
+!omp-ui/src/export/
+!omp-ui/src/export/**
 __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
 logs/
@@ -339,3 +342,12 @@ infografico/
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# harness skill — backup / mcp-warned / feedback / evidence / runtime artifacts
+.harness/*.backup-*
+.harness/.mcp-wildcard-warned
+.harness/*/sprints/*/feedback/
+.harness/*/sprints/*/evidence/
+.harness/ralph.log
+.harness/ralph.pid
+.harness/NEXT_SESSION_PROMPT.md

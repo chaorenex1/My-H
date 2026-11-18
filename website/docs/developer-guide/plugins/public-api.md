@@ -77,6 +77,7 @@ with a name allows that one name only.
 | `agent.runtime_cwd` | `resolve_agent_cwd` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
 | `agent.usage_pricing` | `CostResult` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
 | `hermes_cli.auth_constants` | `AuthError` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
+| `hermes_threading` | `spawn_context_thread` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
 | `tools.environments.base` | `BaseEnvironment` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
 | `tools.environments` | `BaseEnvironment` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |
 | `utils` | `atomic_json_write` | prose in memory-provider / model-provider / terminal-environment plugin pages (tools.environments:BaseEnvironment is the package's `__all__` re-export) |

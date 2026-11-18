@@ -380,24 +380,24 @@ class CLIStreamMixin:
         for line in held:
             _cprint(line)
 
-    def _on_adviser_row(self, row) -> None:
-        """Render one plugin-injected adviser row (minir host series) above the prompt.
+    def _on_advisor_row(self, row) -> None:
+        """Render one plugin-injected advisor row (minir host series) above the prompt.
 
         The row is a real user-role message the model saw, but the human never typed it, so
         it must not surface as an unlabelled prompt. Lines go through ``_agent_status_print``
         so a streaming reply box holds them to its footer instead of splitting the answer.
         """
         try:
-            from hermes_cli.cli_agent_setup_mixin import _adviser_items, _adviser_rows
-            if not isinstance(row, dict) or row.get("display_kind") != "adviser":
+            from hermes_cli.cli_agent_setup_mixin import _advisor_items, _advisor_rows
+            if not isinstance(row, dict) or row.get("display_kind") != "advisor":
                 return
             if getattr(getattr(self, "agent", None), "_mute_notification_reply", False):
                 return
             content = row.get("content")
-            items = _adviser_items(content)
+            items = _advisor_items(content)
             if not items:
                 # Rows written before per-note labels existed still carry a body.
-                label, body = _adviser_rows(content)
+                label, body = _advisor_rows(content)
                 if not body:
                     return
                 items = [(label, " ".join(body))]
@@ -410,12 +410,13 @@ class CLIStreamMixin:
             rank = {"blocker": 3, "concern": 2, "nit": 1}
             top_label = max(items, key=lambda item: rank.get(item[0].split(" · ")[0].strip().lower(), 0))[0]
             color, reset = tone(top_label)
-            self._agent_status_print(f"  {color}◆ adviser · {top_label}{reset}")
+            self._agent_status_print(f"  {color}◆ advisor · {top_label}{reset}")
             for label, text in items:
                 row_color, row_reset = tone(label)
                 self._agent_status_print(f"    {row_color}· {label} — {text}{row_reset}")
-        except Exception:
-            pass
+        except Exception:  # health: allow BLE001 -- display-only advisor card; never fails the turn
+            from cli import logger
+            logger.debug("Advisor row render failed", exc_info=True)
 
     def _close_reasoning_box(self) -> None:
         """Close the live reasoning box if it's open (renders the buffered reasoning tail)."""

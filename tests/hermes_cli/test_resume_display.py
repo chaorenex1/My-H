@@ -151,27 +151,27 @@ class TestDisplayResumedHistory:
         assert "opaque" not in output
 
 
-    def test_adviser_rows_render_as_guidance_not_user_input(self):
+    def test_advisor_rows_render_as_guidance_not_user_input(self):
         cli = _make_cli()
         cli.conversation_history = [
             {"role": "user", "content": "run the migration"},
             {
                 "role": "user",
-                "display_kind": "adviser",
+                "display_kind": "advisor",
                 "content": (
-                    "[adviser — advisory only]\n"
+                    "[advisor — advisory only]\n"
                     "- [blocker · reviewer] Stop: the migration drops the index.\n"
-                    "[end adviser]"
+                    "[end advisor]"
                 ),
             },
         ]
 
         output = self._capture_display(cli)
 
-        assert "◆ adviser" in output
+        assert "◆ advisor" in output
         assert "blocker · reviewer: Stop: the migration drops the index." in output
-        assert "[adviser — advisory only]" not in output
-        assert "[end adviser]" not in output
+        assert "[advisor — advisory only]" not in output
+        assert "[end advisor]" not in output
         assert output.count("You:") == 1
 
 

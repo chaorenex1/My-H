@@ -42,6 +42,15 @@ def reset_accounting_context(token) -> None:
         _accounting.set(None)
 
 
+def current_context() -> Optional[tuple]:
+    """The active ``(session_db, session_id)``, or ``None`` outside an agent turn.
+
+    Public read seam for out-of-band callers (native judgment usage) so they do not
+    reach into the private ``_accounting`` ContextVar.
+    """
+    return _accounting.get()
+
+
 def record_aux_usage(
     response: Any, task: Optional[str], *, provider: Optional[str] = None,
     base_url: Optional[str] = None,

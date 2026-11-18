@@ -26,10 +26,11 @@ narrower routes (`hermes_cli/gateway_chat_commands.py`).
 setting to this local session (its next turn and `config.get`), saving config.yaml only where the
 handler does; `client-local (cli_only)` commands are terminal/UI features of a client.
 
-105 registry commands: 29 control, 19 read, 57 refused.
+109 registry commands: 31 control, 20 read, 58 refused.
 
 | Command | Gateway (`slash.exec`) | Classic CLI | Ink | Desktop | ACP | Notes |
 |---|---|---|---|---|---|---|
+| `/add-dir` | control | HermesCLI._handle_add_dir_command | slash.exec | slash.exec | slash.exec | client-local (cli_only) |
 | `/agents` (/tasks) | refused | HermesCLI._handle_agents_command | delegation.pause | action: agents | slash.exec: refused | gateway-wide: lists every chat's running agents and the process's async jobs |
 | `/approvals` | control | HermesCLI._handle_approvals_command | slash.exec | slash.exec | slash.exec | per-session setting (gateway handler) |
 | `/approve` | control | messaging-only: unknown command | slash.exec | slash.exec | slash.exec | messaging-only |
@@ -54,6 +55,7 @@ handler does; `client-local (cli_only)` commands are terminal/UI features of a c
 | `/debug` | control | HermesCLI._handle_debug_command | slash.exec | slash.exec | slash.exec | uploads logs to a public paste |
 | `/deny` | control | messaging-only: unknown command | slash.exec | slash.exec | slash.exec | messaging-only |
 | `/diff` | read | HermesCLI._handle_diff_command | slash.exec | slash.exec | slash.exec |  |
+| `/dirs` | read | HermesCLI._handle_dirs_command | slash.exec | slash.exec | slash.exec | client-local (cli_only) |
 | `/discard` | refused | HermesCLI._handle_discard_command | slash.exec: refused | slash.exec: refused | prompt.resolve_unknown |  |
 | `/egress` | control | HermesCLI._cmd_egress | slash.exec | slash.exec | slash.exec |  |
 | `/export` | refused | HermesCLI._handle_export_command | slash.exec: refused | action: export | slash.exec: refused | client-local (cli_only) |
@@ -89,6 +91,7 @@ handler does; `client-local (cli_only)` commands are terminal/UI features of a c
 | `/platform` | refused | messaging-only: unknown command | slash.exec: refused | slash.exec: refused | slash.exec: refused | messaging adapters; `pause`/`resume` mutate them |
 | `/platforms` (/gateway) | read | HermesCLI._show_gateway_status | slash.exec | unavailable: terminal | slash.exec | client-local (cli_only) |
 | `/plugins` | refused | HermesCLI._cmd_plugins | slash.exec | unavailable: terminal | slash.exec: refused | client-local (cli_only) |
+| `/prewalk` | refused | HermesCLI._handle_prewalk_command | slash.exec: refused | slash.exec: refused | slash.exec: refused |  |
 | `/profile` | read | HermesCLI._handle_profile_command | slash.exec | action: profile | slash.exec |  |
 | `/prompt` (/compose) | refused | HermesCLI._handle_prompt_compose_command | local | slash.exec: refused | slash.exec: refused | client-local (cli_only) |
 | `/queue` (/q) | refused | HermesCLI._cmd_queue | local | action: queue | prompt.submit |  |
@@ -99,6 +102,7 @@ handler does; `client-local (cli_only)` commands are terminal/UI features of a c
 | `/reload` | refused | HermesCLI._cmd_reload | canonical route | unavailable: terminal | slash.exec: refused | client-local (cli_only) |
 | `/reload-mcp` (/reload_mcp) | refused | HermesCLI._confirm_and_reload_mcp | canonical route | unavailable: advanced | slash.exec: refused |  |
 | `/reload-skills` (/reload_skills) | refused | HermesCLI._cmd_reload_skills | commands.catalog, skills.reload | unavailable: advanced | slash.exec: refused |  |
+| `/remove-dir` | control | HermesCLI._handle_remove_dir_command | slash.exec | slash.exec | slash.exec | client-local (cli_only) |
 | `/restart` | refused | messaging-only: unknown command | slash.exec: refused | unavailable: terminal | slash.exec: refused | messaging-only |
 | `/resume` | refused | HermesCLI._handle_resume_command | local | picker: session | slash.exec: refused | switches the messaging chat's session; local clients resume by id |
 | `/retry` | refused | HermesCLI._cmd_retry | canonical route | action: retry | session.mutate rewind + resubmit |  |

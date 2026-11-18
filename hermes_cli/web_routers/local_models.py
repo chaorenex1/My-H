@@ -35,7 +35,7 @@ from hermes_cli.local_runtime import (
     binaries, bootstrap, catalog, context_policy, estimator, growth, hardware, hf_browse,
     load_progress, presets, supervisor,
 )
-from agent.memory_provider import spawn_context_thread
+from hermes_threading import spawn_context_thread
 from pm.downloader import Download, DownloadPaused, Source
 
 from hermes_cli.local_runtime.endpoint import _state_endpoint, child_query

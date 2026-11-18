@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
+from hermes_cli.aux_slots import AUX_TASK_META
 from hermes_cli.web_deps import LateState, late
 from hermes_cli.web_server_config import (
     _AUX_TASK_SLOTS, _UNSET, _apply_model_assignment_sync, _dashboard_code_skew_guard,
@@ -218,17 +219,19 @@ def get_recommended_default_model(provider: str = "", profile: Optional[str] = N
 
 @router.get("/api/model/auxiliary")
 def get_auxiliary_models(profile: Optional[str] = None):
-    """Current auxiliary task assignments: ``{"tasks": [{task, provider, model,
-    base_url}, ...], "main": {provider, model}}``. ``profile`` scopes the read —
-    without it the Models page would show the dashboard profile's pins while
+    """Current auxiliary task assignments: ``{"tasks": [{task, label, hint, group, provider,
+    model, base_url, fallback_chain, ...}, ...], "main": {provider, model}}``. ``profile`` scopes
+    the read — without it the Models page would show the dashboard profile's pins while
     /api/model/set wrote the selected profile's.
 
-    Built-in slots come first; plugin-registered tasks follow, each carrying the
-    ``label``/``hint``/``plugin`` the plugin declared (built-ins are labelled client-side) and
-    ``inherit_from`` (base slot key or null). An inheriting row also carries ``effective``: the
-    route it resolves to right now, which is the base's while the row itself is unpinned.
-    ``provider``/``model``/``base_url`` stay the slot's own stored values on every row."""
+    Every row carries its ``label``/``hint`` and ``group`` (``builtin``) plus the slot's
+    ``fallback_chain`` (a sanitized copy; ``[]`` when unset). Built-in slots come first; plugin
+    tasks follow with ``group="plugin"``, the ``plugin`` that declared them and ``inherit_from``
+    (base slot key or null). An inheriting row also carries ``effective``: the route it resolves
+    to right now, which is the base's while the row itself is unpinned. ``provider``/``model``/
+    ``base_url`` stay the slot's own stored values on every row."""
     from agent.auxiliary_client import _get_auxiliary_task_config
+    from hermes_cli.aux_fallback import public_fallback_chain
 
     with http_failure("GET /api/model/auxiliary failed", 500, detail="Failed to read auxiliary config"):
         with _profile_scope(profile):
@@ -251,13 +254,18 @@ def get_auxiliary_models(profile: Optional[str] = None):
                 "reasoning_effort": str(slot_cfg.get("reasoning_effort") or "") or None,
                 # Lets the UI tell a free local/LAN pin from a forgotten paid-provider pin.
                 "local_endpoint": is_local_endpoint(base_url),
+                "fallback_chain": public_fallback_chain(slot_cfg.get("fallback_chain")),
             }
 
-        tasks = [_row(slot) for slot in _AUX_TASK_SLOTS]
+        tasks = [{
+            **_row(slot),
+            "label": AUX_TASK_META[slot][0], "hint": AUX_TASK_META[slot][1], "group": "builtin",
+        } for slot in _AUX_TASK_SLOTS]
         tasks.extend({
             **_row(entry["key"]),
             "label": str(entry.get("display_name") or entry["key"]),
             "hint": str(entry.get("description") or ""),
+            "group": "plugin",
             "plugin": str(entry.get("plugin") or ""),
             "inherit_from": entry.get("inherit_from") or None,
             **({"effective": {field: str(effective[entry["key"]].get(field) or "")
@@ -410,6 +418,7 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
                         "confirm_required": True, "confirm_message": warning.message}
 
         reasoning_effort = body.reasoning_effort if "reasoning_effort" in body.model_fields_set else _UNSET
+        fallback_chain = body.fallback_chain if "fallback_chain" in body.model_fields_set else _UNSET
 
         def _apply_assignment():
             # Same RMW span as PUT /api/config: applyMainModel fires this while the
@@ -422,6 +431,7 @@ async def set_model_assignment(body: ModelAssignment, profile: Optional[str] = N
                 with _CONFIG_MUTATION_LOCK:
                     return _apply_model_assignment_sync(
                         scope, provider, model, task, base_url, api_key,
-                        reasoning_effort=reasoning_effort, prepared=prepared)
+                        reasoning_effort=reasoning_effort, prepared=prepared,
+                        fallback_chain=fallback_chain)
 
         return await asyncio.to_thread(_apply_assignment)

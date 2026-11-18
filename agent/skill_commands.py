@@ -503,7 +503,7 @@ def _scan_skill_md(skill_md: Path, disabled: set, seen_names: set, commands: dic
                        "skipping auto-registration. Use '/skill %s' instead.", name, cmd_name, name)
         return
     # Dedup on the slug too: "git_helper" and "git-helper" normalize the same.
-    # First-wins preserves project > local > external precedence.
+    # First-wins preserves project > local > agents > external precedence.
     cmd_key = f"/{cmd_name}"
     if cmd_key in commands:
         logger.warning("Skill %r maps to slash command %s already claimed by %r; keeping the first and skipping this one.",
@@ -536,7 +536,7 @@ def scan_skill_commands() -> dict[str, dict[str, Any]]:
         disabled = _get_disabled_skill_names()
         seen_names: set = set()
         # Only names skill_view resolves to exactly this file get a /command: the shared catalog applies
-        # project > local > create_dir > external precedence (live profile dir, #67277) and leaves
+        # project > local > agents > create_dir > external precedence (live profile dir, #67277) and leaves
         # same-tier duplicates to their exact paths (`/skill a/one`), so a bare slug never guesses.
         for entry in _skill_catalog():
             if entry["status"] == "unique":
@@ -976,6 +976,29 @@ def build_preloaded_skills_prompt(
                       "session unless the user overrides them.]"),
         task_id, missing_label=_missing_skill_label, disabled_names=_disabled_skill_names(),
         disabled_as_missing=True, already_loaded=excluded_loaded_names,
+    )
+    return "\n\n".join(prompt_parts), loaded_names, missing
+
+
+def build_agent_autoload_skills_prompt(
+    names: list[str], task_id: str | None = None,
+) -> tuple[str, list[str], list[str]]:
+    """Load ``autoloadSkills`` from a named agent definition; returns
+    ``(prompt_text, loaded_names, missing_names)``.
+
+    omp injects these as hidden messages before the child's first prompt and ignores unknown
+    names. Disabled skills count as missing here for the same reason as CLI preloads: a
+    definition must not force-load an operator-disabled skill.
+    """
+    if not names:
+        return "", [], []
+    loaded_names, missing, _disabled, prompt_parts = _load_skill_blocks(
+        [str(name).strip() for name in names if str(name).strip()],
+        lambda identifier: _load_skill_payload(identifier, task_id=task_id),
+        lambda name: (f'[IMPORTANT: The "{name}" skill was declared by this agent definition '
+                      "(autoloadSkills). Treat its instructions as active guidance for this run "
+                      "unless the user overrides them.]"),
+        task_id, disabled_names=_disabled_skill_names(), disabled_as_missing=True,
     )
     return "\n\n".join(prompt_parts), loaded_names, missing
 

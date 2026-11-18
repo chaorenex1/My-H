@@ -9,19 +9,28 @@ from . import (
     connectors_operation,
     display,
     events,
+    git_tui,
     groups_bot_relay,
+    hooks_skins_settings,
     i18n,
+    judgment,
+    lease_auth,
     liveness,
     machine,
+    model_roles,
+    plans_btw,
+    prewalk,
     profiles_vault_complete_foreign_subagents,
     projects_pets,
     prompt_voice,
     server_requests,
     sessions,
+    table_chart,
     tools_commands,
     tools_mcp_plugins,
 )
 from . import canonical
+from . import canonical_promoted  # P1 promotions: same wire as the legacy declarations
 from .base import JsonValue, Params, Payload, Result, WireEnum
 from .registry import CANONICAL_METHODS, CANONICAL_NAMESPACES, EVENTS, METHODS, SERVER_REQUESTS
 

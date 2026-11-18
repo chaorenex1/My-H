@@ -289,11 +289,13 @@ def _tool_defs_cache_key(
         cfg_fp = config_version(get_config_path())
     except (FileNotFoundError, OSError, ImportError):
         cfg_fp = None
+    from tools.code_execution_tool import js_capability_fingerprint
     return (
         registry.current_scope_key(), frozenset(enabled_toolsets) if enabled_toolsets is not None else None,
         frozenset(disabled_toolsets) if disabled_toolsets else None, registry._generation, cfg_fp,
         bool(os.environ.get("HERMES_KANBAN_TASK")), bool(skip_tool_search_assembly),
         _is_delegated_child_context(), _is_dispatcher_owned_worker(), profile_scope, check_fn_cache_epoch(),
+        js_capability_fingerprint(),
     )
 
 
@@ -368,8 +370,12 @@ def _rewrite_execute_code(td: dict[str, Any], available: set) -> Optional[dict[s
     """List only sandbox tools that are actually available."""
     # Without this, the model sees "web_search is available in execute_code" even when the API key isn't
     # configured or the toolset is disabled (#560-discord).
-    from tools.code_execution_tool import SANDBOX_ALLOWED_TOOLS, build_execute_code_schema, _get_execution_mode
-    return _fn_def(build_execute_code_schema(SANDBOX_ALLOWED_TOOLS & available, mode=_get_execution_mode()))
+    from tools.code_execution_tool import (
+        SANDBOX_ALLOWED_TOOLS, build_execute_code_schema, js_backend_available, _get_execution_mode,
+    )
+    return _fn_def(build_execute_code_schema(SANDBOX_ALLOWED_TOOLS & available,
+                                             mode=_get_execution_mode(),
+                                             js_available=js_backend_available()))
 
 
 def _discord_rewriter(schema_fn_name: str):
@@ -848,7 +854,8 @@ def _execute_tool(function_name: str, function_args: dict[str, Any], original_ar
     """Run the registry handler (through tool-execution middleware unless skipped)
     with the approval observability context bound for the duration."""
     dispatch_kwargs: dict[str, Any] = {
-        "task_id": ids.task_id, "session_id": ids.session_id, "conversation_id": ids.conversation_id}
+        "task_id": ids.task_id, "session_id": ids.session_id, "conversation_id": ids.conversation_id,
+        "tool_call_id": ids.tool_call_id}
     if function_name == "execute_code":
         # Prefer the caller's list so subagents can't overwrite the parent's
         # tool set via the process-global.
@@ -860,6 +867,14 @@ def _execute_tool(function_name: str, function_args: dict[str, Any], original_ar
         from tools.connectors import dispatch_connector_call, is_connector_name
         if is_connector_name(function_name):
             return dispatch_connector_call(function_name, next_args, ids.tool_call_id, ids.turn_id, ids.task_id)
+        if function_name == "read_file":
+            # ADR-4 D11.3: a valid prefetched read (fingerprint unchanged) stands in for the
+            # handler only after pre-tool guards and execution middleware have run, so a hook
+            # that blocks/rewrites the call never sees a claim.
+            from tools.eval_speculation import take_claim
+            claimed = take_claim(ids.task_id, function_name, next_args)
+            if claimed is not None:
+                return claimed
         return registry.dispatch(function_name, next_args, **dispatch_kwargs)
 
     with _approval_observability(ids):

@@ -1690,22 +1690,11 @@ def _normalize_root_model_keys(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def _normalize_max_turns_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Move legacy root-level ``max_turns`` under ``agent``; the schema default is injected only
-    when the user set max_turns somewhere (so save_config can otherwise omit it)."""
-    config = dict(config)
-    agent_config = dict(config.get("agent") or {})
-    if "max_turns" in config and "max_turns" not in agent_config:
-        agent_config["max_turns"] = config["max_turns"]
-    if agent_config or "agent" in config:  # a sparse save must not grow an `agent: {}` section
-        config["agent"] = agent_config
-    config.pop("max_turns", None)
-    return config
-
-
 def _canonicalize_config(config: dict[str, Any]) -> dict[str, Any]:
     """The load/save normalization pipeline: max_turns relocation, then model-section canon."""
-    return _normalize_root_model_keys(_normalize_max_turns_config(config))
+    from hermes_cli.config_canon import normalize_max_turns_config
+
+    return _normalize_root_model_keys(normalize_max_turns_config(config))
 
 
 # Sentinel for an unlimited turn budget. ``sys.maxsize`` survives the str->int round-trip through
@@ -3159,10 +3148,10 @@ _KNOWN_CONTAINER_TYPES = {
     # so without these rows `config set plugins.enabled foo` stored a string every reader ignored.
     "plugins.enabled": "list",
     "plugins.disabled": "list",
-    "model_catalog.excluded_providers": "list",
+    "model_catalog.excluded_providers": "list", "ttsr.disabledRules": "list",
 }
 # List slots whose readers go through ``parse_config_string_list``: a bare name is one entry.
-_SCALAR_AS_ONE_ITEM_LIST_KEYS = frozenset({"agent.disabled_toolsets", "skills.disabled"})
+_SCALAR_AS_ONE_ITEM_LIST_KEYS = frozenset({"agent.disabled_toolsets", "skills.disabled", "ttsr.disabled_rules", "ttsr.disabledRules"})
 
 
 def _expected_container_type(key: str, user_config: dict[str, Any]) -> Optional[str]:

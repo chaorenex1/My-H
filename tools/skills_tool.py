@@ -5,9 +5,11 @@ scripts/. `skills_list` returns name/description only; `skill_view` returns full
 linked files. Sibling modules (skills_tool_setup / _plugin / _dedup) re-export here."""
 
 import contextvars
+import hashlib
 import json
 import logging
 import os
+import subprocess
 import time
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -37,6 +39,25 @@ logger = logging.getLogger(__name__)
 # edits, which no directory signature can see.
 _SKILLS_CACHE: dict = {}
 _SKILLS_CACHE_TTL_SECONDS = 30.0
+
+# ADR-18 D8: recent skill-search answers (query + filtered catalog fingerprint), 60 s TTL,
+# stored in the shared cache subsystem; get_cache() resolves the active profile per call. The
+# namespace keeps the 10 most recently used answers.
+_SKILL_SEARCH_TTL_S = 60
+_SKILL_SEARCH_MAX_ENTRIES = 10
+
+
+def _skill_search_cache():
+    from hermes_cache import EvictionPolicy, get_cache
+
+    return get_cache().namespace(
+        "skill_choice",
+        default_ttl=_SKILL_SEARCH_TTL_S,
+        max_entries=_SKILL_SEARCH_MAX_ENTRIES,
+        eviction=EvictionPolicy.LRU,
+    )
+
+
 # Deepest directory the signature descends to below a root (a skill sits at <cat>/<sub>/<skill>/).
 _SIGNATURE_MAX_DEPTH = 6
 
@@ -287,8 +308,105 @@ def sort_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(skills, key=lambda s: (s.get("category") or "", s["name"]))
 
 
-def skills_list(category: str | None = None, task_id: str | None = None) -> str:
-    """Tier 1 listing: name + description (+ category) only; ``task_id`` is handler parity."""
+def _skills_search_setting() -> str:
+    """``skills.search.enabled`` normalized to auto/on/off; a broken config means auto."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        raw = cfg_get(load_config_readonly(), "skills", "search", "enabled", default="auto")
+    except Exception:  # health: allow BLE001 -- search config must never break listing
+        return "auto"
+    text = str(raw).strip().lower()
+    return text if text in ("auto", "on", "off") else "auto"
+
+
+def _rg_skill_paths(terms: list[str]) -> set[str]:
+    """Absolute SKILL.md paths whose text matches any term; empty when rg is unavailable."""
+    try:
+        from agent.judgment.find import resolve_rg
+
+        executable = resolve_rg()
+    except Exception:  # health: allow BLE001 -- lexical text matching is the fallback
+        return set()
+    roots, _active = skill_search_dirs()
+    root_dirs = [str(d) for _tier, d in roots if d.exists()]
+    if not executable or not root_dirs:
+        return set()
+    argv = [executable, "--files-with-matches", "--no-messages", "-i"]
+    for term in terms:
+        argv += ["-e", term]
+    argv += ["--", *root_dirs]
+    try:
+        completed = subprocess.run(
+            argv, capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace", check=False)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if completed.returncode not in (0, 1):
+        return set()
+    return {os.path.normcase(os.path.abspath(line.strip()))
+            for line in completed.stdout.splitlines() if line.strip()}
+
+
+def _skill_lexical_order(query: str, skills: list[dict[str, Any]],
+                         path_by_name: dict[str, Path]) -> list[str]:
+    """Query-matching skill names, best first: exact name, name, rg path, description."""
+    from agent.judgment.find import search_terms
+
+    terms = [term.lower() for term in search_terms(query)]
+    needle = query.strip().lower()
+    if not terms:
+        return []
+    rg_paths = _rg_skill_paths(terms)
+    scored: list[tuple[int, int, str]] = []
+    for index, skill in enumerate(skills):
+        name = str(skill.get("name") or "")
+        lower_name = name.lower()
+        description = str(skill.get("description") or "").lower()
+        category = str(skill.get("category") or "").lower()
+        path = path_by_name.get(name)
+        in_rg = path is not None and os.path.normcase(os.path.abspath(path)) in rg_paths
+        if lower_name == needle:
+            score = 0
+        elif needle in lower_name:
+            score = 1
+        elif any(term in lower_name for term in terms):
+            score = 2
+        elif in_rg:
+            score = 3
+        elif any(term in description or term in category for term in terms):
+            score = 4
+        else:
+            continue
+        scored.append((score, index, name))
+    scored.sort()
+    return [name for _score, _index, name in scored]
+
+
+def _judge_skill_order(query: str, skills: list[dict[str, Any]],
+                       lexical: list[str]) -> list[str]:
+    """Judgment rerank over the lexical candidates plus the catalog (ADR-18 D9)."""
+    try:
+        from agent.judgment.choice import ask_choices, judgment_route_available
+
+        if not judgment_route_available():
+            return []
+        by_name = {str(s.get("name")): s for s in skills}
+        ordered = list(dict.fromkeys([*lexical, *(str(s.get("name") or "") for s in skills)]))
+        pool = [by_name[name] for name in ordered if name in by_name][:24]
+        picks = ask_choices(
+            [query], [(str(s.get("name")), str(s.get("description") or "")) for s in pool],
+            question_file="skill-choice", purpose="skill_choice")
+        return picks.get(0, [])
+    except Exception as exc:  # health: allow BLE001 -- lexical order is the fallback
+        logger.debug("skill-search judgment failed (%s); using lexical order", exc)
+        return []
+
+
+def skills_list(category: str | None = None, query: str | None = None,
+                task_id: str | None = None) -> str:
+    """Tier 1 listing: name + description (+ category) only. ``query`` ranks matching skills
+    (rg/lexical, plus a judgment rerank when available); ``task_id`` is handler parity."""
     try:
         _skills_dir().mkdir(parents=True, exist_ok=True)
         all_skills = find_all_skills()
@@ -307,12 +425,46 @@ def skills_list(category: str | None = None, task_id: str | None = None) -> str:
                           "message": "No skills found in skills/ directory."})
         if category:
             all_skills = [s for s in all_skills if s.get("category") == category]
-        all_skills = sort_skills(all_skills)
+        needle = str(query or "").strip()
+        if needle:
+            catalog_digest = hashlib.sha1(
+                "\n".join(
+                    f"{s.get('name')}:{s.get('description')}:{s.get('path')}"
+                    for s in all_skills
+                ).encode("utf-8")
+            ).hexdigest()
+            cache_key = json.dumps(
+                [needle, category or "", catalog_digest, _skills_search_setting()],
+                ensure_ascii=False, sort_keys=True,
+            )
+            try:
+                cached = _skill_search_cache().get(cache_key)
+            except Exception as exc:  # health: allow BLE001 -- cache must never break search
+                logger.debug("skill-search cache read failed: %s", exc)
+                cached = None
+            if isinstance(cached, str) and cached:
+                return cached
+            path_by_name = {s["load_name"]: s["path"]
+                            for s in _skill_catalog() if s.get("load_name")}
+            lexical = _skill_lexical_order(needle, all_skills, path_by_name)
+            picked = ([] if _skills_search_setting() == "off"
+                      else _judge_skill_order(needle, all_skills, lexical))
+            ordered = list(dict.fromkeys([*picked, *lexical]))
+            by_name = {str(s.get("name")): s for s in all_skills}
+            all_skills = [by_name[name] for name in ordered if name in by_name]
+        else:
+            all_skills = sort_skills(all_skills)
         categories = sorted({s.get("category") for s in all_skills if s.get("category")})
-        return _json({
+        payload = _json({
             "success": True, "skills": all_skills, "categories": categories,
             "count": len(all_skills),
             "hint": "Use skill_view(name) to see full content, tags, and linked files"})
+        if needle:
+            try:
+                _skill_search_cache().set(cache_key, payload)
+            except Exception as exc:  # health: allow BLE001 -- cache must never break search
+                logger.debug("skill-search cache write failed: %s", exc)
+        return payload
     except Exception as e:
         return tool_error(str(e), success=False)
 
@@ -533,7 +685,7 @@ def _owning_search_dir(skill_md: Path, all_dirs) -> Optional[Path]:
 
 def locate_skill(name: str, local_category_name: Optional[str], roots):
     """Unique on-disk skill for *name* over ``(tier, dir)`` *roots*: cross-tier precedence
-    (project > local > create_dir > external, shadowed copies logged), same-tier collision refusal,
+    (project > local > agents > create_dir > external, shadowed copies logged), same-tier collision refusal,
     same-root identical-copy ranking, quarantine gate, not-found listing. ``(error_json, skill_dir,
     skill_md)``; skill_md set iff no error."""
     from agent.skill_utils import AMBIGUOUS_SKILL_PREFIX, TIER_PROJECT, pick_skill_candidate, skill_candidate_rank
@@ -549,7 +701,7 @@ def locate_skill(name: str, local_category_name: Optional[str], roots):
             (tier_of[root], str(root), skill_candidate_rank(c[1], root), c[1]) for c, root in owned])
         if won is not None:
             if dropped := [str(smd) for i, (_sd, smd) in enumerate(candidates) if i != won]:
-                logger.info("Skill '%s' resolved to %s by precedence (project > local > create_dir > "
+                logger.info("Skill '%s' resolved to %s by precedence (project > local > agents > create_dir > "
                             "external_dirs, then identical same-root copies); not loaded: %s",
                             name, candidates[won][1], "; ".join(dropped))
             candidates = [candidates[won]]
@@ -724,7 +876,11 @@ SKILLS_LIST_SCHEMA = {
             "category": {
                 "type": "string",
                 "description": "Optional category filter to narrow results",
-            }
+            },
+            "query": {
+                "type": "string",
+                "description": "Optional capability keywords: rank matching skills first (lexical, plus judgment rerank when available).",
+            },
         },
         "required": [],
     },
@@ -751,7 +907,8 @@ SKILL_VIEW_SCHEMA = {
 
 registry.register(
     name="skills_list", toolset="skills", schema=SKILLS_LIST_SCHEMA,
-    handler=lambda args, **kw: skills_list(category=args.get("category"), task_id=kw.get("task_id")),
+    handler=lambda args, **kw: skills_list(
+        category=args.get("category"), query=args.get("query"), task_id=kw.get("task_id")),
     check_fn=check_skills_requirements, emoji="📚")
 
 

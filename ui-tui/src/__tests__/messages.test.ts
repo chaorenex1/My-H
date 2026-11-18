@@ -28,22 +28,21 @@ describe('toTranscriptMessages', () => {
     expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toContain('Search Files')
   })
 
-  it('skips hidden display_kind rows entirely', () => {
+  it('skips rows without display text', () => {
     const rows = [
       { role: 'user', text: 'visible prompt' },
-      { role: 'user', text: '[CONTEXT COMPACTION — REFERENCE ONLY]', display_kind: 'hidden' },
+      { role: 'custom', custom_type: 'internal-notification', text: '' },
       { role: 'assistant', text: 'visible reply' }
     ]
 
     const result = toTranscriptMessages(rows)
     expect(result.map(msg => msg.text)).toEqual(['visible prompt', 'visible reply'])
-    expect(result.every(m => !m.text?.includes('COMPACTION'))).toBe(true)
   })
 
   it('projects model_switch as an event with replaced text', () => {
     const rows = [
       { role: 'user', text: 'hello' },
-      { role: 'user', text: '[System: model changed to gpt-5]', display_kind: 'model_switch' },
+      { role: 'custom', custom_type: 'model-switch', text: '[System: model changed to gpt-5]' },
       { role: 'assistant', text: 'hi' }
     ]
 
@@ -55,36 +54,56 @@ describe('toTranscriptMessages', () => {
     ])
   })
 
-  it('projects adviser rows as an adviser card, not a user prompt', () => {
+  it('projects advisor rows as an advisor card, not a user prompt', () => {
     const text = [
-      '[adviser — advisory only]',
+      '[advisor — advisory only]',
       '- [concern · reviewer] The patch drops the retry path.',
       '- [nit] Name the fallback.',
-      '[end adviser]'
+      '[end advisor]'
     ].join('\n')
 
-    const [message] = toTranscriptMessages([{ role: 'user', text, display_kind: 'adviser' }])
+    const [message] = toTranscriptMessages([{
+      role: 'custom',
+      custom_type: 'advisor',
+      text,
+      details: {
+        notes: [
+          { note: 'The patch drops the retry path.', severity: 'concern', advisor: 'reviewer' },
+          { note: 'Name the fallback.', severity: 'nit' }
+        ]
+      }
+    }])
 
     expect(message.role).toBe('system')
-    expect(message.text).not.toContain('[adviser')
-    expect(message.text).not.toContain('[end adviser]')
+    expect(message.text).not.toContain('[advisor')
+    expect(message.text).not.toContain('[end advisor]')
     expect(message.text).toContain('drops the retry path')
-    expect(message.adviser).toMatchObject({ label: 'concern · reviewer', severity: 'concern' })
-    expect(message.adviser?.items).toHaveLength(2)
+    expect(message.advisor).toMatchObject({ label: 'concern · reviewer', severity: 'concern' })
+    expect(message.advisor?.items).toHaveLength(2)
   })
 
   it('lets a blocker listed second raise the card severity', () => {
     const text = [
-      '[adviser — advisory only]',
+      '[advisor — advisory only]',
       '- [concern · reviewer] The patch drops the retry path.',
       '- [blocker · reviewer] The migration never ran.',
-      '[end adviser]'
+      '[end advisor]'
     ].join('\n')
 
-    const [message] = toTranscriptMessages([{ role: 'user', text, display_kind: 'adviser' }])
+    const [message] = toTranscriptMessages([{
+      role: 'custom',
+      custom_type: 'advisor',
+      text,
+      details: {
+        notes: [
+          { note: 'The patch drops the retry path.', severity: 'concern', advisor: 'reviewer' },
+          { note: 'The migration never ran.', severity: 'blocker', advisor: 'reviewer' }
+        ]
+      }
+    }])
 
-    expect(message.adviser).toMatchObject({ severity: 'blocker' })
-    expect(message.adviser?.items.map(item => item.severity)).toEqual(['concern', 'blocker'])
+    expect(message.advisor).toMatchObject({ severity: 'blocker' })
+    expect(message.advisor?.items.map(item => item.severity)).toEqual(['concern', 'blocker'])
   })
 
   it('projects async_delegation_complete with task_count metadata', () => {
@@ -92,10 +111,10 @@ describe('toTranscriptMessages', () => {
       { role: 'user', text: 'do work' },
       { role: 'assistant', text: 'done' },
       {
-        role: 'user',
+        role: 'custom',
+        custom_type: 'async-delegation-complete',
         text: '[IMPORTANT: delegation done]',
-        display_kind: 'async_delegation_complete',
-        display_metadata: { task_count: 3 }
+        details: { task_count: 3 }
       },
       { role: 'assistant', text: 'merged' }
     ]
@@ -114,7 +133,7 @@ describe('toTranscriptMessages', () => {
     const title = 'Subagent Task Failed: Review changes'
 
     const [message] = toTranscriptMessages([
-      { role: 'user', text, display_kind: 'async_delegation_complete', display_metadata: { display_text: title } }
+      { role: 'custom', custom_type: 'async-delegation-complete', text, details: { display_text: title } }
     ])
 
     expect(message).toMatchObject({ kind: 'event', role: 'system', text: title })
@@ -122,7 +141,7 @@ describe('toTranscriptMessages', () => {
   })
 
   it('projects async_delegation_complete without metadata as generic text', () => {
-    const rows = [{ role: 'user', text: 'event', display_kind: 'async_delegation_complete' }]
+    const rows = [{ role: 'custom', custom_type: 'async-delegation-complete', text: 'event', details: {} }]
 
     const result = toTranscriptMessages(rows)
     expect(result[0]?.kind).toBe('event')
@@ -174,7 +193,7 @@ describe('MessageLine', () => {
     expect(renderedLine).toContain('Ψ > Okay')
   })
 
-  it('renders an adviser card with its label instead of a user gutter glyph', () => {
+  it('renders an advisor card with its label instead of a user gutter glyph', () => {
     const stdout = new PassThrough()
     const stdin = new PassThrough()
     const stderr = new PassThrough()
@@ -191,7 +210,7 @@ describe('MessageLine', () => {
       React.createElement(MessageLine, {
         cols: 80,
         msg: {
-          adviser: { items: [], label: 'concern · reviewer', severity: 'concern' },
+          advisor: { items: [], label: 'concern · reviewer', severity: 'concern' },
           role: 'system',
           text: 'The patch drops the retry path.'
         },
@@ -210,7 +229,7 @@ describe('MessageLine', () => {
 
     const rendered = stripAnsi(output)
 
-    expect(rendered).toContain('adviser · concern · reviewer')
+    expect(rendered).toContain('advisor · concern · reviewer')
     expect(rendered).toContain('The patch drops the retry path.')
   })
 
@@ -231,7 +250,7 @@ describe('MessageLine', () => {
       React.createElement(MessageLine, {
         cols: 80,
         msg: {
-          adviser: {
+          advisor: {
             items: [
               { label: 'concern · reviewer', severity: 'concern', text: 'read the import first' },
               { label: 'blocker · reviewer', severity: 'blocker', text: 'the test never ran' }
@@ -257,7 +276,7 @@ describe('MessageLine', () => {
 
     const rendered = stripAnsi(output)
 
-    expect(rendered).toContain('adviser · blocker · reviewer')
+    expect(rendered).toContain('advisor · blocker · reviewer')
     expect(rendered).toContain('concern · reviewer')
     expect(rendered).toContain('blocker · reviewer')
     expect(rendered).toContain('the test never ran')

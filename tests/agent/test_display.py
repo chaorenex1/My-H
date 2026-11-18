@@ -45,6 +45,11 @@ class TestBuildToolPreview:
         """Empty dict has no keys to preview."""
         assert build_tool_preview("terminal", {}) is None
 
+    def test_skills_list_preview_prefers_query_and_falls_back_to_category(self):
+        assert build_tool_preview("skills_list", {"query": "deploy"}) == "deploy"
+        assert build_tool_preview("skills_list", {"query": "deploy", "category": "devops"}) == "deploy"
+        assert build_tool_preview("skills_list", {"category": "devops"}) == "devops"
+
 
 
 

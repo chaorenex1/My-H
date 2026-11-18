@@ -183,7 +183,7 @@ def _agent_cbs(sid: str) -> dict:
         # set_theme (desktop GUI): theme.apply with the tour probe ladder, or a theme.pick card.
         "theme_callback": lambda payload: theme_request(sid, payload),
         "setup_beat_callback": lambda payload: _setup_beat_request(sid, payload),
-        # A plugin-injected adviser row (steer/continuation): let a live surface draw the card
+        # A plugin-injected advisor row (steer/continuation): let a live surface draw the card
         # now instead of waiting for the next transcript hydrate. A plain mid-turn steer is a
         # user row and keeps its own surface path.
         "plugin_message_callback": lambda row: _announce_plugin_row(sid, row)}
@@ -197,30 +197,103 @@ def _agent_cbs(sid: str) -> dict:
 
 
 def _announce_plugin_row(sid: str, row: Any) -> None:
-    """Emit ``message.adviser`` for an injected adviser row, and for nothing else.
+    """Emit the live event for one plugin-injected row (advisor, todo reminder).
 
     ``plugin_message_callback`` also fires for a mid-turn steer delivered at a tool
     boundary; that row is the operator's words and already has a surface path, so
     it must not be redrawn as plugin advice.
     """
-    if not isinstance(row, dict) or str(row.get("display_kind") or "") != "adviser":
+    if not isinstance(row, dict):
         return
-    _emit("message.adviser", sid, _adviser_payload(row))
+    event = plugin_row_event(row)
+    if event is None:
+        return
+    name, payload = event
+    if name == "todo.reminder":
+        _emit("todo.reminder", sid, payload)
+    elif name == "transcript.custom":
+        # ADR-9 D4: the row's own durable projection; never message.advisor.
+        _emit("transcript.custom", sid, payload)
+    else:
+        _emit("message.advisor", sid, payload)
 
 
-def _adviser_payload(row: dict) -> dict:
-    """The event payload for one injected adviser row; the Desktop draws the card."""
+def plugin_row_event(row: dict) -> tuple[str, dict] | None:
+    """`(event_name, payload)` for an injected custom row, or ``None``.
+
+    Both the sidecar and the canonical local viewer dispatch through this one helper so the
+    payload shapes cannot drift (ADR-10 D2/D3). ADR-10 P5: only ``custom_type`` selects the event;
+    the one legacy row still announced is the advisor steer (a model-facing user row).
+    ADR-9 D4: a late-diagnostics row is emitted as ``transcript.custom`` carrying the exact
+    ``session.resume`` projection, and only to the omp-ui local viewer.
+    """
+    kind = str(row.get("custom_type") or "")
+    if kind == "advisor" or row.get("display_kind") == "advisor":
+        return "message.advisor", _advisor_payload(row)
+    if kind == "todo-reminder" or row.get("display_kind") == "todo_reminder":
+        payload = _todo_reminder_payload(row)
+        return ("todo.reminder", payload) if payload is not None else None
+    if kind == "lsp-late-diagnostic":
+        from agent.lsp.delivery import live_event_allowed
+
+        if not live_event_allowed() or not isinstance(row.get("_row_id"), int):
+            return None
+        from tui_gateway.session_history import custom_row_message
+
+        message = custom_row_message(row)
+        return ("transcript.custom", {"message": message}) if message is not None else None
+    return None
+
+
+def _todo_reminder_payload(row: dict) -> dict | None:
+    """ADR-10 D3: the durable reminder row as its event payload.
+
+    ``row_id`` is required: the row is persisted before the event, and a client uses it to
+    merge the live card into a snapshot that already carries the same row. The legacy metadata
+    fallback serves a Desktop/Ink session's raw reminder row.
+    """
+    from agent.custom_messages import custom_fields, todo_details
+
+    row_id = row.get("_row_id")
+    if not isinstance(row_id, int):
+        return None
+    fields = custom_fields(row)
+    details = fields.get("details")
+    if not isinstance(details, dict):
+        details = todo_details(row.get("display_metadata"))
+    if not isinstance(details, dict) or not isinstance(details.get("todos"), list):
+        return None
+    return {
+        "todos": details["todos"],
+        "attempt": int(details.get("attempt") or 0),
+        "max_attempts": int(details.get("max_attempts") or 0),
+        "row_id": row_id,
+    }
+
+
+def _advisor_payload(row: dict) -> dict:
+    """The event payload for one injected advisor row; the Desktop draws the card.
+
+    New rows carry structured ``details`` (ADR-10 D1); ``legacy_details`` only fills the live
+    advisor-steer marker row. ``row_id`` lets a client merge the live event into a snapshot that
+    already has the row.
+    """
+    from agent.custom_messages import custom_fields, legacy_details
     text = str(row.get("content") or "")
     label = "advisory"
     match = re.search(r"^- \[([^\]]+)\]", text, re.MULTILINE)
     if match:
         label = match.group(1).strip()
+    fields = custom_fields(row)
+    details = fields.get("details") or legacy_details(row, display_kind="advisor")
+    severity = details.get("severity") if isinstance(details, dict) else None
     return {
         "id": str(row.get("plugin_message_id") or ""),
         "text": text,
-        "severity": label.split(" · ")[0].strip() or "advisory",
+        "severity": str(severity or label.split(" · ")[0].strip() or "advisory"),
         "label": label,
-        "display_kind": "adviser",
+        "row_id": row.get("_row_id") if isinstance(row.get("_row_id"), int) else None,
+        "details": details,
     }
 
 
@@ -651,6 +724,7 @@ def _reset_session_agent(sid: str, session: dict) -> dict:
         _clear_session_context(tokens)
     session.update(updates)
     session.pop("queued_prompts", None)
+    _emit_queue_update(sid, session)
     with session["history_lock"]:
         session["history"] = []
         session["history_version"] = int(session.get("history_version", 0)) + 1

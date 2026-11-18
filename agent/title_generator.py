@@ -2,10 +2,10 @@
 
 Two stages, both off the critical path: an **instant** deterministic title (written before the model
 is called, cannot fail), then an **upgrade** from one small-model call (cheap tier, thinking off,
-JSON-constrained). Storage enforces provenance ``derived < llm < user``: stage 2 only replaces stage 1
-and neither replaces a name the user typed."""
+``<title>`` marker protocol per ADR-21 D4: the prompt renders from ``title-system.md`` and the
+reply is parsed by ``agent.title_parser``). Storage enforces provenance ``derived < llm < user``:
+stage 2 only replaces stage 1 and neither replaces a name the user typed."""
 
-import json
 import logging
 import os
 import re
@@ -19,6 +19,7 @@ from agent.auxiliary_client import call_llm
 from agent.context_compressor import LEGACY_SUMMARY_PREFIX
 from agent.delegation_context import is_dispatcher_owned_worker_context
 from agent.message_content import flatten_message_text
+from agent.title_parser import parse_title_output
 
 logger = logging.getLogger(__name__)
 
@@ -52,75 +53,36 @@ _ATTACHMENT_REF_RE = re.compile(r"@(?:file|folder):\S+")
 _CONTEXT_FOOTER_RE = re.compile(r"\n+--- (?:Context Warnings|Attached Context) ---\n.*", re.DOTALL)
 # Cap on the instant derived title; a raw fragment reads worse the longer it runs.
 MAX_DERIVED_TITLE_CHARS = 48
-# Answer-shaped guard: a tiny model sometimes answers instead of titling; longer is rejected, not truncated.
-# Upper bound on accepted title word count. Titling is a 3-7 word task; a small tiny-model sometimes ignores
-# the task and answers the user's message instead — that answer must never become the session title (see the
-# answer-shaped output guard in generate_title; port of can1357/oh-my-pi#7306). 12 leaves headroom for
-# legitimate wordy titles while excluding full-sentence answers.
-_MAX_TITLE_WORDS = 12
-# Output budget for the title call: room for a fenced/prefixed JSON reply and for a reasoning model that
-# thinks despite the thinking-disabled request, without letting a runaway reply burn minutes.
+# Output budget for the title call: room for a reasoning model that keeps thinking visibly despite the
+# thinking-disabled request below, without letting a runaway reply burn minutes. A model that honours the
+# marker contract stops after ~15 tokens regardless, so the ceiling only costs on replies that would have
+# been garbage anyway.
 TITLE_MAX_TOKENS = 512
 
-# The example titles shown to the model in the prompt, and the echo-guard
-# set: when the opening message carries little topical signal, a small model
-# sometimes takes the cheapest schema-valid answer and parrots one of these
-# back verbatim — most visibly "Fix login button on mobile" naming sessions
-# that have nothing to do with a login button. The prompt's example lines are
-# rendered from these constants so the guard set and the prompt cannot drift
-# apart. Port of QwenLM/qwen-code#9709.
-_PROMPT_GOOD_EXAMPLES = (
-    "Fix login button on mobile",
-    "Postgres connection pool exhaustion",
-    "Friendly greeting",
-)
-_PROMPT_VAGUE_EXAMPLE = "Code changes"
+# Title-drift judging (ADR-17 P5, port of omp ``title-drift-classifier.ts`` / ``messages.ts``): the
+# judge compares the stored title with the latest conversation, and only a drifted title is
+# regenerated. A single turn is capped so one long reply cannot fill the window, and the whole window
+# is capped so the judgment stays cheap.
+TITLE_DRIFT_CONTEXT_CHARS = 3000
+TITLE_DRIFT_TURN_CHARS = 1000
+# Yes-probability below which the title no longer fits the conversation (omp's tuned cutoff; keyword
+# judges answer exactly 0 or 1).
+TITLE_DRIFT_FITS_THRESHOLD = 0.5
+TITLE_DRIFT_JUDGE_TIMEOUT_MS = 15_000
+# Assistant rows that carry no usable conversation text; ``finish_reason`` mirrors the values the
+# session pickers classify as an errored/interrupted turn.
+_TITLE_DRIFT_DEAD_FINISH_REASONS = frozenset({
+    "aborted", "error", "agent_error", "content_filter", "error_finish", "interrupted",
+})
 
-# "Friendly greeting" is deliberately NOT in the reject set: the prompt
-# instructs the model to produce it for bare greetings, so it is a legitimate
-# output, not an echo failure. The too-vague example is rejected too — a model
-# repeating the counter-example says nothing about the session, and the
-# derived title the guard falls back to is strictly more informative.
-_EXAMPLE_ECHO_REJECT = frozenset(
-    t.lower() for t in _PROMPT_GOOD_EXAMPLES if t != "Friendly greeting"
-) | {_PROMPT_VAGUE_EXAMPLE.lower()}
-
-# "Friendly greeting" is what the prompt asks for when the opener has no topic yet, so
-# it is the one model title that must NOT settle the session: it is persisted at
-# ``derived`` authority (a placeholder, like the instant title) and the next substantive
-# turn upgrades it. Kept as a prompt example on purpose — a predictable placeholder is
-# detectable, an improvised one ("Casual check-in chat") would lock the title as ``llm``.
+# "Friendly greeting" is a legacy of the retired JSON prompt, which prescribed it for bare
+# greetings, so sessions opened before the `<title>` marker protocol still carry it. It is the
+# one model title that must NOT settle the session: it is persisted at ``derived`` authority
+# (a placeholder, like the instant title) and the next substantive turn upgrades it. The new
+# prompt answers greetings with `<title/>`, but the placeholder stays detectable either way —
+# a predictable placeholder is upgradeable, an improvised one ("Casual check-in chat") would
+# lock the title as ``llm``.
 _PROVISIONAL_GREETING_TITLE = "friendly greeting"
-
-
-_TITLE_PROMPT_TEMPLATE = (
-    "You name chat sessions. Given the user's opening message, write a title "
-    "that lets them find this conversation again in a list.\n\n"
-    "Rules:\n"
-    "- 3 to 7 words, sentence case (capitalize only the first word and proper nouns).\n"
-    "- Name what the user wants DONE, not that they asked a question.\n"
-    "- Keep technical terms, filenames, numbers, and error codes exact.\n"
-    "- Drop filler words: the, this, my, a, an.\n"
-    "- No trailing punctuation, no quotes, no tool names, no 'Title:' prefix.\n"
-    "- Never answer the message. Name it.\n"
-    "- Always produce something, even for a bare greeting.\n"
-    "__LANGUAGE_RULE__\n"
-    + "".join(f'Good: {{"title": "{t}"}}\n' for t in _PROMPT_GOOD_EXAMPLES)
-    + f'Too vague: {{"title": "{_PROMPT_VAGUE_EXAMPLE}"}}\n'
-    'Too long: {"title": "Investigate and fix the issue where the login button '
-    'does not respond on mobile devices"}\n\n'
-    'Reply with JSON only: {"title": "..."}'
-)
-
-_LANGUAGE_RULE_MATCH_USER = "- Write the title in the same language as the user's message."
-_LANGUAGE_RULE_PINNED = "- Write the title in {language}."
-
-# Constrains the response to a single title field ("model answered instead of titling" failure class).
-_TITLE_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {"name": "session_title", "strict": True, "schema": {
-        "type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"], "additionalProperties": False}},
-}
 
 # Control-tag wrappers around machine-authored content inside a nominal "user" message (Codex CLI's
 # RECOGNIZED_CONTROL_WRAPPERS): stripped, titling continues on what remains.
@@ -177,16 +139,28 @@ def _model_title_upgrade_enabled() -> bool:
         return True
 
 
+def _title_refresh_after_prompts() -> int:
+    """``auxiliary.title_generation.refresh_after_prompts``; 0 (the default) disables drift checks."""
+    try:
+        raw = _title_config().get("refresh_after_prompts", 0)
+        if isinstance(raw, bool):  # bool is an int subclass; ``true`` is not an interval
+            return 0
+        return max(0, int(raw))
+    except Exception:
+        logger.debug("Failed to read title_generation.refresh_after_prompts", exc_info=True)
+        return 0
+
+
 def title_upgrade_must_wait_for_turn(main_runtime: Optional[dict]) -> bool:
     """True when the model title call would hit the SAME self-hosted endpoint as the turn's own request.
 
     A self-hosted main route (``_is_self_hosted_provider``: custom, lmstudio, local and their aliases)
     whose ``auxiliary.title_generation`` is not pinned elsewhere (a pin naming the same custom route —
     ``custom:<name>``, bare ``<name>`` or its display name — is not "elsewhere", #120558)
-    shares one local server between the streaming main request and the
-    concurrent ``response_format: json_schema`` title request. Single-slot servers then serve the
-    title grammar/completion into the main turn: the user's reply arrives as ``{"title": ...}``, is
-    persisted as a genuine assistant row and replayed, and the model adopts the format (#117296).
+    shares one local server between the streaming main request and the concurrent title request.
+    Single-slot servers then serve the title completion into the main turn: the user's reply arrives
+    as ``<title>…</title>``, is persisted as a genuine assistant row and replayed, and the model
+    adopts the marker as its answer format (#117296).
     Running the title call after the turn settles keeps the two requests off the wire at once.
     Hosted providers multiplex requests independently and keep the turn-start timing.
     """
@@ -236,12 +210,17 @@ def _title_pin_may_share_endpoint(pinned_provider: str, main_provider: str, main
     return bool(pdef and main_base_url and pdef.base_url.strip().rstrip("/") == main_base_url)
 
 
+def _start_title_thread(thread: Optional[threading.Thread]) -> None:
+    """Start a title-related daemon thread and make it joinable at process exit; no-op once started."""
+    if thread is None or thread.ident is not None:
+        return
+    _UPGRADE_THREADS.add(thread)
+    thread.start()
+
+
 def start_title_upgrade(upgrade: Optional[threading.Thread]) -> None:
     """Start a (deferred) title upgrade thread; joinable via ``wait_for_title_upgrades`` only once started."""
-    if upgrade is None or upgrade.ident is not None:
-        return
-    _UPGRADE_THREADS.add(upgrade)
-    upgrade.start()
+    _start_title_thread(upgrade)
 
 
 def strip_control_wrappers(text: str) -> str:
@@ -304,29 +283,32 @@ def _summarize_user_message(user_message: str) -> str:
     return strip_control_wrappers(user_message if described is None else described)
 
 
-def build_title_input(user_message: str, title_preview: str | None = None) -> str:
+def build_title_input(user_message: str, title_preview: str | None = None, *,
+                      max_chars: int = MAX_TITLE_INPUT_CHARS) -> str:
     """Combine the opening text with a bounded Desktop-generated paste preview.
 
     ``title_preview`` is deliberately an explicit, auxiliary-only value: ordinary
     attachments never populate it, and it is never returned to the main turn.
     Keep enough of a separately typed request to preserve a useful instruction,
     then spend the remaining title budget on the beginning of the pasted topic.
+    ``max_chars`` widens the budget for a conversation context (title drift), which is
+    already bounded per turn and in total by its builder.
     """
     message = _summarize_user_message(user_message)
     preview = title_preview.strip() if isinstance(title_preview, str) else ""
     if not preview:
-        return message[:MAX_TITLE_INPUT_CHARS]
+        return message[:max_chars]
     # The titler sees the message AFTER @-reference expansion, so the generated ref drags a
     # warnings/attached-context footer along; the preview already carries the topic, so drop it.
     message = _CONTEXT_FOOTER_RE.sub("", message).strip()
     # A paste-only opener is just the generated `@file:` ref: the preview IS the topic, so it
     # leads (derive_title takes the first line, and a file path is not a title).
     if not _ATTACHMENT_REF_RE.sub("", message).strip():
-        return preview[:MAX_TITLE_INPUT_CHARS]
-    message_budget = min(len(message), MAX_TITLE_INPUT_CHARS // 2)
-    preview_budget = MAX_TITLE_INPUT_CHARS - message_budget - len(_PASTE_PREVIEW_LABEL)
+        return preview[:max_chars]
+    message_budget = min(len(message), max_chars // 2)
+    preview_budget = max_chars - message_budget - len(_PASTE_PREVIEW_LABEL)
     if preview_budget <= 0:
-        return message[:MAX_TITLE_INPUT_CHARS]
+        return message[:max_chars]
     return message[:message_budget] + _PASTE_PREVIEW_LABEL + preview[:preview_budget]
 
 
@@ -354,83 +336,8 @@ def derive_title(user_message: str, title_preview: str | None = None) -> Optiona
     return line or None
 
 
-def _strip_title_prefix(text: str) -> str:
-    return text[6:].strip() if text.lower().startswith("title:") else text
-
-
 def _first_line(text: str) -> str:
     return next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-
-
-def _extract_json_title(raw: str) -> Optional[str]:
-    """Title from a ``{"title": ...}`` payload — strict parse, then a loose ``"title": "..."`` scan; None when absent."""
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict) and isinstance(parsed.get("title"), str):
-            return parsed["title"].strip()
-    except (ValueError, TypeError):
-        pass
-    match = re.search(r'"title\"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
-    if match:
-        with suppress(ValueError):
-            return json.loads(f'"{match.group(1)}"').strip()
-        return match.group(1).strip()
-    return None
-
-
-def _is_truncated_structured_output(raw: str) -> bool:
-    """Structured output the token cap cut before its closing quote/brace/fence (``{"title``, a bare fence opener).
-
-    Checked only after the JSON paths failed, and on structure alone (a JSON-shaped opener, a fence
-    opener that is never closed) so quoted, *emphasized* or ``[WIP]``-prefixed prose titles are
-    untouched (#83903)."""
-    return raw.startswith(('{"', '["', "[{")) or (raw.startswith("```") and raw.count("```") % 2 == 1)
-
-
-def _extract_title_text(content: str) -> str:
-    """Strict JSON, then a loose JSON scan, then first-line prose (a provider ignoring ``response_format`` still titles).
-
-    A truncated structured payload is dropped rather than handed to the prose fallback: the fragment
-    would otherwise be persisted as the session title."""
-    if not content:
-        return ""
-    raw = content.strip()
-    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", raw, re.DOTALL)
-    if fenced:
-        raw = fenced.group(1).strip()
-    title = _extract_json_title(raw)
-    if title is not None:
-        return title
-    if _is_truncated_structured_output(raw):
-        return ""
-    # Prose fallback: scrub <think> blocks so reasoning can't leak into a title.
-    try:
-        from agent.agent_runtime_helpers import strip_think_blocks
-        raw = strip_think_blocks(None, raw).strip()
-    except Exception:
-        logger.debug("strip_think_blocks unavailable for title output", exc_info=True)
-    return _strip_title_prefix(_first_line(raw)).strip("\"'").strip()
-
-
-def _title_from_reasoning(message: Any) -> str:
-    """The ``{"title": ...}`` payload when a reasoning model put it in ``reasoning_content`` / ``reasoning``
-    and left ``content`` empty (glm-5 / minimax under ``json_schema``, #82291). Structured extraction only:
-    chain-of-thought prose is never a title, so there is no prose fallback here."""
-    for field in ("reasoning_content", "reasoning"):
-        text = getattr(message, field, None)
-        if isinstance(text, str) and text.strip():
-            title = _extract_json_title(text.strip())
-            if title:
-                return title
-    return ""
-
-
-def _clean_title(text: str) -> Optional[str]:
-    """Normalize a model-produced title, or None when nothing usable remains."""
-    title = _strip_title_prefix(" ".join((text or "").split()).strip("\"'").strip()).rstrip(".!,;:")
-    if len(title) > 80:
-        title = title[:77].rstrip() + "..."
-    return title or None
 
 
 def _safe_callback(callback: Optional[Callable], args: tuple, log_fmt: str, label: str) -> None:
@@ -451,21 +358,9 @@ def _notify_title(title_callback: Optional[TitleCallback], title: str, source: s
 
 
 def _is_provisional_greeting_title(title: str) -> bool:
-    """The prompt's greeting placeholder (also "Friendly greeting in chat" and quoted/bracketed variants)."""
+    """The greeting placeholder (also "Friendly greeting in chat" and quoted/bracketed variants)."""
     normalized = re.sub(r"^[\W_]+|[\W_]+$", "", title.strip(), flags=re.UNICODE).lower()
     return normalized in (_PROVISIONAL_GREETING_TITLE, _PROVISIONAL_GREETING_TITLE + " in chat")
-
-
-def _is_prompt_example_echo(title: str) -> bool:
-    """Return True when *title* is one of the prompt's own example titles.
-
-    Comparison is case-insensitive after stripping any leading/trailing run of
-    non-letter/non-digit characters, so bracket/quote wrappers cannot bypass
-    the guard — while ``_clean_title`` keeps brackets for real titles like
-    "(WIP) Fix build". Unicode-aware so full-width wrappers are covered too.
-    """
-    normalized = re.sub(r"^[\W_]+|[\W_]+$", "", title.strip(), flags=re.UNICODE).lower()
-    return normalized in _EXAMPLE_ECHO_REJECT
 
 
 def generate_title(
@@ -475,13 +370,15 @@ def generate_title(
     main_runtime: dict | None = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
+    max_input_chars: int = MAX_TITLE_INPUT_CHARS,
 ) -> Optional[str]:
     """Title from the opening message alone (waiting for the assistant made this slow and bought
     nothing). ``runtime_validator`` runs right before the request; False skips silently.
 
     If it returns False (e.g. the user's model was switched since the background thread captured its runtime
     snapshot), the call is skipped silently — no request is sent, so a stale title request can't reload a
-    model the runtime already unloaded (#19027).
+    model the runtime already unloaded (#19027). ``max_input_chars`` lets a caller pass an already bounded
+    conversation context (title drift) without the opening-message budget cutting its latest turns.
     """
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
@@ -492,7 +389,7 @@ def generate_title(
             return None
     except Exception:  # fail open: a broken validator must not disable titling
         logger.debug("Title runtime validator raised; proceeding", exc_info=True)
-    user_snippet = build_title_input(user_message, title_preview)
+    user_snippet = build_title_input(user_message, title_preview, max_chars=max_input_chars)
     if not user_snippet.strip() or (
         # An attachment-only opener (manual attach, no paste preview) reaches
         # here via auto_title_session, which lacks the instant-title guard:
@@ -500,12 +397,11 @@ def generate_title(
         not title_preview and _attachment_only_opener(user_snippet)
     ):
         return None
-    language = _title_language()
-    # str.replace, not str.format: the prompt embeds literal JSON braces.
-    prompt = _TITLE_PROMPT_TEMPLATE.replace(
-        "__LANGUAGE_RULE__", _LANGUAGE_RULE_PINNED.format(language=language) if language else _LANGUAGE_RULE_MATCH_USER,
-    )
     try:
+        from agent.prompts.renderer import render_request
+        # The prompt is the registered `title_system` request template (ADR-21 D5); the language
+        # rule rides the template's `{% if title_language %}` line, not string surgery.
+        prompt = render_request("title_system", {"title_language": _title_language()})
         # Use the provider's default temperature instead of forcing 0.3.
         # Some models (e.g. GPT-5.6) only accept their server-side default
         # and reject explicit temperature values, causing the daemon title
@@ -514,44 +410,28 @@ def generate_title(
         response = call_llm(
             task="title_generation",
             messages=[{"role": "system", "content": prompt}, {"role": "user", "content": user_snippet}],
-            # A title is a handful of tokens, but 64 was cut mid-JSON by fenced/prefixed replies and by
-            # reasoning models whose thinking survives the disable below (#83903, #82291). A model that
-            # honours the JSON contract stops after ~15 tokens regardless, so the ceiling only costs on
-            # replies that would have been garbage anyway. temperature=None: omitted from the wire so
-            # default-only reasoning models accept the first request (#72351).
+            # A title is a handful of tokens, but a low ceiling was cut off by reasoning models whose
+            # thinking survives the disable below (#83903, #82291). A model that honours the marker
+            # contract stops after ~15 tokens regardless, so the ceiling only costs on replies that
+            # would have been garbage anyway. temperature=None: omitted from the wire so default-only
+            # reasoning models accept the first request (#72351).
             max_tokens=TITLE_MAX_TOKENS, temperature=None, timeout=timeout, main_runtime=main_runtime,
-            extra_body={"response_format": _TITLE_RESPONSE_FORMAT},
             # The module contract above promises thinking-disabled operation,
             # but nothing enforced it: with the aux default reasoning_effort
             # "" (provider default), Gemini enables internal thinking and
-            # bills thought tokens against max_tokens=64 — the JSON payload
-            # never lands, and the prose fallback stores the opening fence
-            # ("```json") as the session title (#91927).
+            # bills thought tokens against a small max_tokens — the marker
+            # never lands, and the prose fallback stores stray thinking text
+            # as the session title (#91927).
             reasoning_config={"enabled": False},
         )
-        message = response.choices[0].message
-        title = _clean_title(_extract_title_text(message.content or "") or _title_from_reasoning(message))
-        # Answer-shaped output guard: titling is a 3-7 word task, so a title with many words is a model that
-        # ignored the task and answered the user's message instead ("I don't have context on X — that's not
-        # something I recognize..."). Truncating would store half an assistant blob as the session title,
-        # which is still an assistant blob — reject instead so the caller retries on the next exchange
-        # (maybe_auto_title retries a placeholder title through the third exchange). Port of can1357/oh-my-pi#7306.
-        if title is not None and len(title.split()) > _MAX_TITLE_WORDS:
-            # Answer-shaped output: reject (not truncate) so the caller retries next exchange.
-            logger.debug("Rejecting answer-shaped title output (%d words > %d)", len(title.split()), _MAX_TITLE_WORDS)
+        # The marker parser owns the shared guard (quotes / `Title:` / punctuation stripped; an
+        # answer-shaped output — >80 chars, >12 words or zero words — is rejected, not truncated)
+        # and the `<title/>` / `<title>none</title>` decline, which ends this naming attempt.
+        parsed = parse_title_output(response.choices[0].message.content or "")
+        if parsed.terminal:
+            logger.debug("Title model declined to name this turn; naming attempt ends")
             return None
-        # Example-echo guard: a title that parrots one of the prompt's own
-        # examples back verbatim says nothing about the session — reject it so
-        # the instant derived title (a slice of the user's actual words)
-        # survives instead. Exact match after wrapper-stripping, deliberately
-        # not fuzzy, so a genuinely topical title that merely resembles an
-        # example still passes. Wrappers are stripped for the comparison only
-        # ("(Fix login button on mobile)" is the same canned echo as the bare
-        # example). Port of QwenLM/qwen-code#9709.
-        if title is not None and _is_prompt_example_echo(title):
-            logger.debug("Rejecting prompt-example echo title: %r", title)
-            return None
-        return title
+        return parsed.title
     except Exception as e:
         # WARNING so it shows in agent.log without debug mode; stack at debug.
         logger.warning("Title generation failed: %s", e)
@@ -783,7 +663,7 @@ def maybe_auto_title(
     # The thread must resolve auxiliary.title_generation (config, provider key, language) for the
     # profile whose turn this is: a bare Thread starts with an empty context and lands on the launch
     # profile under multiplex, titling X's session with the default profile's model and billing its key.
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     upgrade_kwargs = dict(failure_callback=failure_callback, main_runtime=main_runtime, title_callback=title_callback,
                           runtime_validator=runtime_validator)
     if isinstance(title_preview, str) and title_preview.strip():
@@ -798,3 +678,300 @@ def maybe_auto_title(
         return upgrade
     start_title_upgrade(upgrade)
     return upgrade
+
+
+# ── title drift (ADR-17 P5) ───────────────────────────────────────────────────────────────────
+#
+# Port of omp ``title-drift-classifier.ts`` + ``buildTitleDriftTurns`` (``session/messages.ts``):
+# after a settled turn, once every ``refresh_after_prompts`` operator prompts, ask the judge whether
+# the stored title still names the recent conversation and regenerate it when it does not. The check
+# is advisory: every failure keeps the title, logs at debug, and never fails the turn.
+
+_TITLE_DRIFT_PROMPT_COUNT_ATTR = "_title_drift_prompt_count"
+_TITLE_DRIFT_LAST_PROMPT_ATTR = "_title_drift_last_prompt"
+_TITLE_DRIFT_IN_FLIGHT_ATTR = "_title_drift_in_flight"
+_title_drift_lock = threading.Lock()
+
+
+def _clean_title_drift_text(text: str) -> str:
+    """Collapse whitespace noise so raw paragraphs and tool-shaped text stay compact."""
+    cleaned = re.sub(r"[ \t]+", " ", text or "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _title_drift_turn(message: Any) -> Optional[dict]:
+    """One judge-visible turn: an operator prompt or an assistant's visible reply text (never
+    thinking), or None for machinery rows and aborted/errored assistant rows."""
+    if not isinstance(message, dict):
+        return None
+    role = message.get("role")
+    if role == "assistant":
+        if str(message.get("finish_reason") or "").strip().lower() in _TITLE_DRIFT_DEAD_FINISH_REASONS:
+            return None
+        raw = flatten_message_text(message.get("content"))
+    elif role == "user":
+        if not _is_real_user_turn(message):
+            return None
+        raw = _summarize_user_message(flatten_message_text(message.get("content")))
+    else:
+        return None
+    text = _clean_title_drift_text(raw)[:TITLE_DRIFT_TURN_CHARS]
+    return {"role": role, "text": text} if text else None
+
+
+def build_title_drift_recent(messages: Any) -> list[dict]:
+    """The latest conversation the drift judge compares with the title, oldest first.
+
+    Collected newest-first, one bounded turn at a time, until ``TITLE_DRIFT_CONTEXT_CHARS`` is
+    spent. When the window holds no operator prompt (a long tool loop's assistant notes), the
+    latest operator prompt is prepended and displaces the oldest turns it would push past the
+    window — the notes alone rarely say what was asked.
+    """
+    messages = list(messages or ())
+    turns: list[dict] = []
+    chars = 0
+    index = len(messages) - 1
+    while index >= 0:
+        turn = _title_drift_turn(messages[index])
+        if turn is None:
+            index -= 1
+            continue
+        if turns and chars + len(turn["text"]) > TITLE_DRIFT_CONTEXT_CHARS:
+            # Leave *index* on the turn that did not fit: the anchor scan below re-reads it.
+            break
+        turns.append(turn)
+        chars += len(turn["text"])
+        index -= 1
+    turns.reverse()
+    if any(turn["role"] == "user" for turn in turns):
+        return turns
+    while index >= 0:
+        anchor = _title_drift_turn(messages[index])
+        index -= 1
+        if anchor is None or anchor["role"] != "user":
+            continue
+        start = 0
+        while start < len(turns) - 1 and chars + len(anchor["text"]) > TITLE_DRIFT_CONTEXT_CHARS:
+            chars -= len(turns[start]["text"])
+            start += 1
+        return [anchor, *turns[start:]]
+    return turns
+
+
+def _format_title_drift_context(recent: list[dict]) -> str:
+    """The bounded window as a chat envelope the title model can name the work from."""
+    turns = "\n\n".join(f"<{turn['role']}>\n{turn['text']}\n</{turn['role']}>" for turn in recent)
+    return f"<chat>\n{turns}\n</chat>" if turns else ""
+
+
+def _terminal_title_status(final_status: Any) -> bool:
+    """True when the turn ended in a state that must never spend a judgment or rewrite a title."""
+    status = str(final_status or "").strip().lower()
+    return (status in {"interrupted", "failed", "aborted", "error", "cancelled", "canceled"}
+            or "interrupt" in status or status.startswith("aborted"))
+
+
+def _session_title(session_db, session_id: str) -> str:
+    getter = getattr(session_db, "get_session_title", None)
+    try:
+        return str(getter(session_id) or "").strip() if callable(getter) else ""
+    except Exception:
+        logger.debug("Title-drift title read failed for %s", session_id, exc_info=True)
+        return ""
+
+
+def _session_title_source(session_db, session_id: str) -> Optional[str]:
+    getter = getattr(session_db, "get_session_title_source", None)
+    try:
+        return getter(session_id) if callable(getter) else None
+    except Exception:
+        logger.debug("Title-drift source read failed for %s", session_id, exc_info=True)
+        return None
+
+
+def _latest_operator_prompt(messages: list) -> tuple[int, int, str]:
+    """``(real operator prompt count, latest index, latest text)``.
+
+    The count keys the per-agent interval counter: assistant/tool rows and synthetic user rows
+    appended after the same prompt must not advance it, while a new prompt (or a duplicate
+    "continue") counts once. ``(-1, "")``-style absence is ``(0, -1, "")``.
+    """
+    count = 0
+    latest_index = -1
+    latest_text = ""
+    for index, message in enumerate(messages):
+        if isinstance(message, dict) and message.get("role") == "user" and _is_real_user_turn(message):
+            count += 1
+            latest_index = index
+            latest_text = flatten_message_text(message.get("content"))
+    return count, latest_index, latest_text
+
+
+def _regenerate_title_from_recent(agent, session_db, session_id: str, recent: list[dict]) -> Optional[str]:
+    """One title generation over the bounded conversation context (same model/guards as auto-title)."""
+    context = _format_title_drift_context(recent)
+    if not context:
+        return None
+    # The thread starts after the turn's ambient context was reset: republish it so the call bills
+    # to this session and resolves the profile whose turn this is (same as ``auto_title_session``).
+    # Restore afterwards: a caller running this inline (tests, CLI) must not leak the session into
+    # every later auxiliary call in the same context.
+    conversation_token = accounting_token = None
+    try:
+        with suppress(Exception):
+            from agent.aux_accounting import set_accounting_context
+            from agent.portal_tags import set_conversation_context
+            conversation_token = set_conversation_context(session_id)
+            accounting_token = set_accounting_context(session_db, session_id)
+        return generate_title(
+            context,
+            failure_callback=(
+                getattr(agent, "_title_failure_callback", None)
+                or getattr(agent, "_emit_auxiliary_failure", None)
+            ),
+            max_input_chars=TITLE_DRIFT_CONTEXT_CHARS + 64,
+        )
+    finally:
+        if conversation_token is not None:
+            with suppress(Exception):
+                from agent.portal_tags import reset_conversation_context
+                reset_conversation_context(conversation_token)
+        if accounting_token is not None:
+            with suppress(Exception):
+                from agent.aux_accounting import reset_accounting_context
+                reset_accounting_context(accounting_token)
+
+
+def _refresh_title_if_drifted(agent, session_db, session_id: str, title: str, source: str,
+                              recent: list[dict]) -> Optional[str]:
+    """Judge ``fits`` and refresh the title when the conversation moved away from it."""
+    from agent.judgment import JudgmentError, JudgmentRequest, judge, load_questions
+
+    try:
+        question = load_questions("title-drift")["fits"]
+        result = judge(
+            JudgmentRequest(state={"title": title, "recent": recent}, questions={"fits": question}),
+            purpose="title-drift",
+            timeout_ms=TITLE_DRIFT_JUDGE_TIMEOUT_MS,
+        )
+        probability = getattr(result.answers.get("fits"), "noul", None)
+        if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+            logger.debug("Title-drift judge returned no probability; keeping %r", title)
+            return None
+        if probability >= TITLE_DRIFT_FITS_THRESHOLD:
+            return None
+    except JudgmentError as exc:
+        logger.debug("title drift: classification failed: %s", exc)
+        return None
+    except Exception as exc:  # health: allow BLE001 -- a judged check must never fail the turn
+        logger.debug("title drift: classification failed: %s", exc)
+        return None
+
+    refreshed = _regenerate_title_from_recent(agent, session_db, session_id, recent)
+    if not refreshed or refreshed == title or _is_provisional_greeting_title(refreshed):
+        return None
+    refresh = getattr(session_db, "refresh_auto_title", None)
+    if not callable(refresh):
+        logger.debug("title drift: %r drifted, but this session store cannot refresh in place; keeping it", title)
+        return None
+    try:
+        persisted = bool(refresh(session_id, refreshed, source=source, expected_title=title))
+    except ValueError as exc:  # unique-title index: keep the current title instead of a "#N" refresh
+        logger.debug("title drift: refreshed title collided: %s", exc)
+        return None
+    except Exception:
+        logger.debug("title drift: title refresh failed", exc_info=True)
+        return None
+    if not persisted:
+        current = _session_title(session_db, session_id)
+        current_source = _session_title_source(session_db, session_id)
+        logger.debug(
+            "title drift: refresh refused (current=%r source=%r, expected=%r source=%r); keeping the current title",
+            current, current_source, title, source,
+        )
+        return None
+    logger.debug("title drift: refreshed session title %r -> %r", title, refreshed)
+    _notify_title(getattr(agent, "_on_session_title", None), refreshed, source, "Title-drift")
+    return refreshed
+
+
+def maybe_refresh_title_drift(agent, session_db, session_id, messages, *, final_status) -> Optional[str]:
+    """ADR-17 P5: check a generated title against the settled turn's conversation, once every
+    ``refresh_after_prompts`` operator prompts, and rewrite it only when the judge says it drifted.
+
+    Returns the newly persisted title, else None. Every skip is silent (debug); neither the judge
+    nor the regeneration may raise into the turn.
+    """
+    try:
+        interval = _title_refresh_after_prompts()
+        if interval <= 0:
+            return None
+        if _terminal_title_status(final_status):
+            return None
+        if agent is None or session_db is None or not session_id:
+            return None
+        messages = list(messages or ())
+        if not messages:
+            return None
+        # A user's name, an untitled row, NULL provenance (a pre-provenance manual rename), and
+        # the provisional greeting are never judged: there is no automatic title to keep fitting.
+        title = _session_title(session_db, session_id)
+        source = _session_title_source(session_db, session_id)
+        if not title or source not in ("derived", "llm") or _is_provisional_greeting_title(title):
+            return None
+        prompt_count, prompt_index, prompt = _latest_operator_prompt(messages)
+        if prompt_index < 0 or not prompt.strip():
+            return None
+        with _title_drift_lock:
+            key = (prompt_count, prompt)
+            count = int(getattr(agent, _TITLE_DRIFT_PROMPT_COUNT_ATTR, 0) or 0)
+            if key != getattr(agent, _TITLE_DRIFT_LAST_PROMPT_ATTR, None):
+                count += 1
+                setattr(agent, _TITLE_DRIFT_LAST_PROMPT_ATTR, key)
+                setattr(agent, _TITLE_DRIFT_PROMPT_COUNT_ATTR, count)
+            # A prompt sent while the previous check runs counts toward the next interval.
+            if getattr(agent, _TITLE_DRIFT_IN_FLIGHT_ATTR, False):
+                return None
+            if count < interval:
+                return None
+            recent = build_title_drift_recent(messages)
+            if not recent:
+                return None
+            # A check consumes the prompts that triggered it whatever its verdict.
+            setattr(agent, _TITLE_DRIFT_PROMPT_COUNT_ATTR, 0)
+            setattr(agent, _TITLE_DRIFT_IN_FLIGHT_ATTR, True)
+        try:
+            return _refresh_title_if_drifted(agent, session_db, session_id, title, source, recent)
+        finally:
+            setattr(agent, _TITLE_DRIFT_IN_FLIGHT_ATTR, False)
+    except Exception:
+        logger.debug("title drift: check failed", exc_info=True)
+        return None
+
+
+def start_title_drift_check(agent, messages, *, final_status) -> Optional[threading.Thread]:
+    """Spawn the post-turn drift check off the critical path; None when it cannot or should not run.
+
+    Uses ``spawn_context_thread`` so the judgment/title request resolves the profile whose turn
+    this was, and registers the thread with the joinable title threads so a usage-ledger read at
+    process exit waits for its billing.
+    """
+    try:
+        if _title_refresh_after_prompts() <= 0 or _terminal_title_status(final_status):
+            return None
+        session_db = getattr(agent, "_session_db", None)
+        session_id = getattr(agent, "session_id", None)
+        if not session_db or not session_id:
+            return None
+        from hermes_threading import spawn_context_thread
+        thread = spawn_context_thread(
+            maybe_refresh_title_drift,
+            name="title-drift",
+            args=(agent, session_db, session_id, list(messages or ())),
+            kwargs={"final_status": final_status},
+        )
+        _start_title_thread(thread)
+        return thread
+    except Exception:
+        logger.debug("title drift: check could not start", exc_info=True)
+        return None

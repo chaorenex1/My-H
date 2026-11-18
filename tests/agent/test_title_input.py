@@ -55,7 +55,7 @@ def test_title_override_preserves_upstream_paste_preview(monkeypatch, override, 
 def test_title_override_preserves_existing_control_message_eligibility(monkeypatch, text, titleable):
     agent = SimpleNamespace(_session_db=Mock(), session_id="test", _session_db_created=True)
     start = Mock()
-    monkeypatch.setattr("agent.memory_provider.spawn_context_thread", start)
+    monkeypatch.setattr("hermes_threading.spawn_context_thread", start)
 
     _maybe_title_session_at_turn_start(agent, [{"role": "user", "content": "injected context"}], text)
 

@@ -23,7 +23,7 @@ def _session_turn_admission(session: dict):
 
 def _start_session_work(target, *, name: str, session: dict | None = None):
     """Reserve before spawning; release only after the worker (including cleanup) has unwound."""
-    from agent.memory_provider import spawn_context_thread
+    from hermes_threading import spawn_context_thread
     from hermes_cli.backend_retirement import retirement
 
     if not retirement.acquire():
@@ -795,6 +795,7 @@ def _interrupt_session_turn(
         session["queued_prompt"] = None
         session.pop("queued_prompts", None)
         session["_queued_prompt_generation"] = int(session.get("_queued_prompt_generation", 0)) + 1
+    _emit_queue_update(sid, session)
     if should_interrupt:
         # Sibling of gateway/run_agent_cache.py::_interrupt_and_clear_session: a user-initiated stop of a
         # live TUI/desktop turn is the same "loop is gone" event for plugins holding per-turn external

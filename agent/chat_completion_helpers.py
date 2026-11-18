@@ -31,11 +31,13 @@ from agent.error_classifier import (
     _extract_status_code)
 from agent.sdk_transform_bypass import bypass_chat_sdk_request_transform
 from agent.errors import EmptyStreamError
-from agent.chat_completion_local import _streams_llamacpp, stale_giveup
+from agent.chat_completion_local import _rejects_stream_options, _streams_llamacpp, stale_giveup
 from agent.chat_completion_headers import _chat_completion_capturing_headers
 from agent.chat_completion_stream_monitor import StreamingWaitMonitor, StreamLifetimeExceeded
 from agent.transports.chat_completions import is_router_timeout_shim, router_timeout_shim_may_follow
 from agent.fast_mode import effective_request_overrides
+from agent.interrupt_control import stream_abort_requested
+from agent.ttsr_stream_hooks import stream_delta, wrap_stream_delta
 from agent.turn_context import substitute_api_content
 from agent.gemini_native_adapter import is_native_gemini_base_url
 # Remote endpoints must never be fingerprinted: the probe waterfall is only valid for local/LM-Studio/Ollama
@@ -1273,25 +1275,15 @@ def interruptible_api_call(agent, api_kwargs: dict):
     return _NonStreamRequest(agent, api_kwargs).run()
 
 
-def _consume_ephemeral_reasoning_off(agent) -> bool:
-    """Consume the one-shot "answer without thinking" continuation flag.
-
-    Set by the length-continuation path when a request returned reasoning but NO
-    visible content (thinking ate the output cap); continuation turns never replay
-    prior reasoning, so thinking ON would re-burn the budget. When True the caller
-    overrides the wire reasoning_config with ``{"enabled": False, "effort": "none"}``
-    for exactly the next call. Prompt-cache cost is bounded to ONE cold prefix write
-    on config-sensitive providers (Anthropic, OpenAI) — far cheaper than four futile
-    full-budget continuations.
-    """
-    consumed = bool(getattr(agent, "_ephemeral_reasoning_off", False))
-    if consumed:
-        agent._ephemeral_reasoning_off = False
-    return consumed
+from agent.reasoning_overlay import (
+    auto_reasoning_overlay as _auto_reasoning_overlay,
+    consume_ephemeral_reasoning_off as _consume_ephemeral_reasoning_off,
+)
 
 
 def _reasoning_config_for_wire(agent):
-    """``agent.reasoning_config`` with the one-shot reasoning-off override applied.
+    """The auto-reasoning overlay else ``agent.reasoning_config``, with the one-shot
+    reasoning-off override applied.
 
     Once the route has answered a disable with "reasoning is mandatory"
     (``agent._reasoning_disable_rejected``), every disable — configured or
@@ -1299,7 +1291,7 @@ def _reasoning_config_for_wire(agent):
     changes: the request goes out without a reasoning config and the route
     applies its own default.
     """
-    cfg = agent.reasoning_config
+    cfg = _auto_reasoning_overlay(agent) or agent.reasoning_config
     ephemeral_off = _consume_ephemeral_reasoning_off(agent)
     if getattr(agent, "_reasoning_effort_rejected", False):
         # The route rejected the configured reasoning LEVEL itself (#100536: ``reasoning.effort:
@@ -1723,24 +1715,6 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     return msg
 
 
-def rewrite_prompt_model_identity(agent, model: str, provider: str) -> None:
-    """Rewrite the cached prompt's ``Model:``/``Provider:`` lines after a provider switch.
-
-    Not persisted: the stored row keeps the primary's labels so a restored primary replays a
-    byte-identical prompt (prefix cache intact). Only the LAST occurrence of each line is touched —
-    earlier matches may be user content (memory snapshots, context files)."""
-    sp = getattr(agent, "_cached_system_prompt", None)
-    if not isinstance(sp, str) or not sp:
-        return
-    for label, value in (("Model", model), ("Provider", provider)):
-        if not value:
-            continue
-        matches = list(re.finditer(rf"(?m)^{label}: .*$", sp))
-        if matches:
-            last = matches[-1]
-            sp = f"{sp[:last.start()]}{label}: {value}{sp[last.end():]}"
-    agent._cached_system_prompt = sp
-
 
 def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
     return (str(fb.get("provider") or "").strip().lower(), str(fb.get("model") or "").strip(),
@@ -1987,6 +1961,10 @@ def _update_fallback_context_compressor(agent) -> None:
 def _reresolve_fallback_reasoning_config(agent) -> None:
     """Per-model override > global reasoning_effort (YAML False = disabled); a config load
     failure keeps the current reasoning_config rather than killing the swap."""
+    # The fallback route changes the effort surface, so the per-turn auto overlay
+    # (ADR-17 P5) is stale even when the resolve below fails.
+    agent._auto_reasoning_config = None
+    agent._auto_reasoning_route = None
     try:
         # Re-resolve reasoning_config for the new fallback model (Closes #21256). Wrapped in try/except
         # because a config load failure must not kill the swap.
@@ -2064,6 +2042,7 @@ def try_activate_fallback(agent, reason: FailoverReason | None = None, reset_at=
                 continue
             old_model, old_provider = bound
             fb_model = agent.model  # normalized by the binder
+            from agent.chat_completion_helpers_identity import rewrite_prompt_model_identity
             rewrite_prompt_model_identity(agent, fb_model, fb_provider)
 
             notice = (
@@ -2400,26 +2379,13 @@ _SSE_CONN_PHRASES = ("connection lost", "connection reset", "connection closed",
     "upstream connect error")
 
 
-def _rejects_stream_options(exc: BaseException) -> bool:
-    """A 400/422 whose body names ``stream_options`` as an unknown/extra field: strict
-    OpenAI-compatible endpoints (Azure AI Foundry MaaS, Pydantic ``extra_forbidden``) reject
-    the usage extension outright (#9705). Distinct from "stream not supported", which turns
-    streaming off on this route (``_disable_streaming`` is a route verdict)."""
-    if getattr(exc, "status_code", None) not in (400, 422):
-        return False
-    body = f"{getattr(exc, 'body', '') or ''} {exc}".lower()
-    return "stream_options" in body and any(
-        k in body for k in ("extra", "not supported", "unrecognized", "unexpected", "unknown"))
-
-
 def _wait_stream_retry_backoff(agent, delay: float) -> None:
     """Sleep ``delay`` seconds in 0.1s steps, returning early as soon as the agent
     is interrupted (so /stop is never held hostage by a backoff; the retry loop's
     own interrupt check then ends the call)."""
     deadline = time.monotonic() + max(0.0, delay)
-    while not getattr(agent, "_interrupt_requested", False):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+    while not stream_abort_requested(agent):
+        if (remaining := deadline - time.monotonic()) <= 0:
             return
         time.sleep(min(0.1, remaining))
 
@@ -2600,10 +2566,15 @@ class _BedrockStream:
             wants_reasoning = agent.reasoning_callback or agent.stream_delta_callback or plugin_reasoning_observer
             try:
                 streamed_response = stream_converse_with_callbacks({"stream": stream},
-                    on_text_delta=self._after_first(agent._fire_stream_delta) if agent._has_stream_consumers() else None,
+                    on_text_delta=wrap_stream_delta(
+                        agent, "text", agent._fire_stream_delta, self._fire_first)
+                    if (agent._has_stream_consumers() or getattr(agent, "ttsr_coordinator", None))
+                    else None,
                     on_tool_start=self._after_first(agent._fire_tool_gen_started),
-                    on_reasoning_delta=self._after_first(agent._fire_reasoning_delta) if wants_reasoning else None,
-                    on_interrupt_check=lambda: agent._interrupt_requested, on_event=_stamp_event)
+                    on_reasoning_delta=wrap_stream_delta(
+                        agent, "thinking", agent._fire_reasoning_delta, self._fire_first)
+                    if (wants_reasoning or getattr(agent, "ttsr_coordinator", None)) else None,
+                    on_interrupt_check=lambda: stream_abort_requested(agent), on_event=_stamp_event)
             except EmptyStreamError:
                 # IAM-denied fallback: no stream events, but converse() already completed.
                 if stream.final_response is None:
@@ -2617,7 +2588,7 @@ class _BedrockStream:
                 stream.close()
 
     def _raise_if_interrupted(self, message: str, worker=None) -> None:
-        if not self.agent._interrupt_requested:
+        if not stream_abort_requested(self.agent):
             return
         _record_interrupted_provider_wait(
             self.agent, time.time() - self.started_at, response_started=self.response_started)
@@ -2804,6 +2775,7 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _emit_text(self, text: str) -> None:
         self._fire_first_delta()
+        stream_delta(self.agent, "text", text)
         self.agent._fire_stream_delta(text)
         self.deltas_were_sent["yes"] = True
 
@@ -2815,6 +2787,7 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _emit_reasoning(self, text: str) -> None:
         self._fire_first_delta()
+        stream_delta(self.agent, "thinking", text)
         self.agent._fire_reasoning_delta(text)
 
     def _emit_tool_started(self, name: str) -> None:
@@ -2826,6 +2799,7 @@ class _StreamingCall(StreamingWaitMonitor):
         reasoning tags inside it must still reach the display: route through
         the delta callback for tag extraction (the CLI drops non-reasoning text
         once the stream box is closed)."""
+        stream_delta(self.agent, "text", text)
         if self.agent.stream_delta_callback and not getattr(self.agent, "_hold_stream", False):
             self._quiet(lambda: (self.agent.stream_delta_callback(text), self.agent._record_streamed_assistant_text(text)))
 
@@ -3017,7 +2991,8 @@ class _StreamingCall(StreamingWaitMonitor):
         reasoning_details: list = []  # OpenRouter replay data (signatures, encrypted blocks)
         pending_text_parts: list[str] = []
         from agent.chat_completion_helpers_tool_calls import _ToolCallAccumulator
-        tool_calls = _ToolCallAccumulator()
+        from tools.eval_speculation import observe_partial
+        tool_calls = _ToolCallAccumulator(on_delta=observe_partial)
         tool_calls_acc = tool_calls.acc
         from agent.reasoning_carriers import StreamCarriers
         carriers = StreamCarriers()
@@ -3073,7 +3048,7 @@ class _StreamingCall(StreamingWaitMonitor):
 
         for chunk in _iter_provider_stream_chunks(stream, response=lambda: self._attempt_stream_response):
             is_progress = self._take_chunk(_diag, chunk, llamacpp)
-            if self.agent._interrupt_requested:
+            if stream_abort_requested(self.agent):
                 _close_half_read_stream("interrupt_stream_close_failed")
                 break
             if not self._stream_attempt_is_active(stream_attempt_id):
@@ -3228,6 +3203,7 @@ class _StreamingCall(StreamingWaitMonitor):
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
                 self._fire_first_delta()
+                stream_delta(self.agent, "text", content)
                 self.agent._fire_stream_delta(content)  # not _emit_text: deltas_were_sent stays False here
         return final_response
 
@@ -3405,7 +3381,7 @@ class _StreamingCall(StreamingWaitMonitor):
             for event in stream:
                 saw_stream_event = True
                 self._count_chunk(_diag, event)
-                if self.agent._interrupt_requested:
+                if stream_abort_requested(self.agent):
                     break
                 event_type = getattr(event, "type", None)
                 if event_type == "message_stop":
@@ -3437,7 +3413,7 @@ class _StreamingCall(StreamingWaitMonitor):
                             runaway = "reasoning"
                             break
             raw_stream = _stream_context["stream"]
-            if not self.agent._interrupt_requested and raw_stream is not None and not runaway:
+            if not stream_abort_requested(self.agent) and raw_stream is not None and not runaway:
                 if not saw_message_stop:
                     raise EmptyStreamError(
                         "Anthropic Messages stream ended before message_stop (possible upstream stream drop)."
@@ -3457,7 +3433,7 @@ class _StreamingCall(StreamingWaitMonitor):
                 if manager is not None:
                     manager.__exit__(None, None, None)
 
-        if self.agent._interrupt_requested:
+        if stream_abort_requested(self.agent):
             return None
         if runaway:
             self._log_runaway_cut(runaway)
@@ -3642,7 +3618,7 @@ class _StreamingCall(StreamingWaitMonitor):
         that decision, so a pending stop must not buy one more request.
         True = handled (caller must not overwrite result); False = propagate ``e``.
         """
-        if getattr(self.agent, "_interrupt_requested", False):
+        if stream_abort_requested(self.agent):
             return False
         if _streams_llamacpp(self.agent):
             # Same error either way, and the router can't cancel this probe once its watchdog gives up.
@@ -3711,8 +3687,9 @@ class _StreamingCall(StreamingWaitMonitor):
             while _stream_attempt < _max_stream_retries + self._compat_retries:
                 _stream_attempt += 1
                 stream_attempt_id = self._start_stream_attempt()
-                # Else /stop closes the socket and the retry opens a fresh one (a full read timeout each).
-                if self.agent._interrupt_requested:
+                # Otherwise /stop closes the connection and the retry opens a
+                # FRESH one, blocking up to a full read timeout per attempt.
+                if stream_abort_requested(self.agent):
                     self._cancel_current_stream_attempt("interrupt_before_stream_retry")
                     raise InterruptedError("Agent interrupted before stream retry")
                 try:
@@ -3936,7 +3913,7 @@ class _StreamingCall(StreamingWaitMonitor):
             self._monitor_loop()
         if self._monitor_interrupted["yes"]:
             raise InterruptedError("Agent interrupted during streaming API call")
-        if self.agent._interrupt_requested:  # worker returned early before the monitor saw the flag
+        if stream_abort_requested(self.agent):  # worker returned early before the monitor saw the flag
             raise InterruptedError("Agent interrupted during streaming API call (post-worker)")
         # Read the outcome once: an abandoned worker can still write into ``self.result`` later.
         error, response = self.result["error"], self.result["response"]
@@ -3962,7 +3939,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
     text token (tool-call turns suppress them) and returns a SimpleNamespace in
     the non-streaming response shape. codex_responses delegates to the already-
     streaming codex runner; cron turns and delegated children run inline."""
-    if agent._interrupt_requested:
+    if stream_abort_requested(agent):
         raise InterruptedError("Agent interrupted before streaming API call")
     if agent.api_mode == "codex_responses":
         return _stream_codex_passthrough(agent, api_kwargs, on_first_delta)

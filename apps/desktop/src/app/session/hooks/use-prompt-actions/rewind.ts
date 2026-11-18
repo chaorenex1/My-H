@@ -201,6 +201,7 @@ interface DurableHistoryMessage {
   display_kind?: string
   role?: string
   row_id?: unknown
+  synthetic_kind?: string
   text?: string
 }
 
@@ -242,6 +243,9 @@ export async function resolveDurableRowId(
   const durableUsers = messages.filter(
     message =>
       message.role === 'user' &&
+      // ADR-10 P5: a synthetic row carries `synthetic_kind`; `display_kind` only exists on
+      // an older gateway's projection.
+      !message.synthetic_kind &&
       !message.display_kind &&
       typeof message.row_id === 'number' &&
       Number.isInteger(message.row_id)

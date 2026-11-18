@@ -23,6 +23,7 @@ from agent.memory_context import build_memory_context_block, sanitize_context
 from agent.memory_provider import is_trivial_prompt
 from agent.message_content import flatten_message_text
 from agent.lsp.deferred import forward_to_agent as forward_lsp_verdicts
+from agent.lsp.deferred import pop_for_agent as pop_lsp_verdicts
 from agent.plugin_live_notes import pop_plugin_notices
 from agent.skills_index_delta import stage_skills_index_note
 from agent.prompt_refresh import refresh_warm_prompt
@@ -670,9 +671,13 @@ _PER_TURN_RESET_STATE: tuple[tuple[str, Any], ...] = (
     ("_iteration_budget_warning_injected", False),
     ("_run_budget_wrapup_injected", False), ("_verification_stop_nudges", 0),
     ("_pre_verify_nudges", 0), ("_lsp_turn_end_notes", 0),
+    ("_unexpected_stop_nudges", 0),
     # Plugin stop-gate continuations (`hermes_cli.plugin_runtime`); a per-turn
     # budget so a plugin asking to continue forever cannot trap the loop.
     ("_plugin_continue_nudges", 0),
+    # Per-step usage for tool.start/message.complete (ADR-2 D1); a response without usage
+    # resets both, so a previous step's numbers never label this one.
+    ("_last_step_usage", None), ("_last_step_cost_usd", None),
 )
 
 
@@ -967,14 +972,49 @@ def _collect_pre_llm_call_context(
     return ""
 
 
+def _delegation_turn_note(agent: Any, existing: str) -> str:
+    """``delegation.eager_tasks`` reminder for this turn; never touches the cached prefix.
+
+    The reminder rides the user-message injection channel with the gateway/plugin notes, so it
+    is re-sent only on the turn it applies to and historical rows keep their exact wire bytes.
+    """
+    if "agent" not in (getattr(agent, "valid_tool_names", None) or ()):
+        return existing
+    try:
+        from agent.prompts.delegation import resolve_delegation_policy
+        from agent.prompts.renderer import render_eager_task
+
+        definition = getattr(agent, "_agent_definition_metadata", None)
+        policy = resolve_delegation_policy(
+            definition=definition if isinstance(definition, dict) else None)
+        if not (policy.get("eager_tasks") or policy.get("eager_tasks_always")):
+            return existing
+        note = render_eager_task(task_batch=True).strip()
+    except Exception:
+        logger.warning("delegation turn note skipped", exc_info=True)
+        return existing
+    if not note:
+        return existing
+    return f"{existing}\n\n{note}" if existing else note
+
+
 def _merge_gateway_notes(
     agent: Any, messages: list[Any], current_turn_user_idx: int, plugin_user_context: str
 ) -> str:
     """Must-deliver per-turn notes ride the user-message injection channel (one-shot) so the
     ephemeral system prompt stays byte-stable: the gateway's staged notes, plugin go-live notices no
     tool result carried, then the surface-switch correction. Multimodal (list) content can't take the
-    string sidecar — append a durable text part instead."""
-    forward_lsp_verdicts(agent)  # late LSP verdicts on last turn's edits ride the plugin-notice queue
+    string sidecar — append a durable text part instead. ADR-9: a custom-message session gets last
+    turn's late LSP verdicts as their own row after this turn's user message, never folded into it."""
+    from agent.lsp import delivery as lsp_delivery
+
+    if lsp_delivery.custom_messages_enabled():
+        late_notes = pop_lsp_verdicts(agent)
+        if late_notes:
+            index = current_turn_user_idx + 1 if 0 <= current_turn_user_idx < len(messages) else len(messages)
+            lsp_delivery.insert_row(agent, messages, late_notes, index)
+    else:
+        forward_lsp_verdicts(agent)  # legacy: verdicts ride the plugin-notice queue
     _turn_notes = "\n\n".join(
         part for part in (consume_gateway_turn_context_notes(agent), pop_plugin_notices(agent),
                           consume_surface_switch_note(agent),
@@ -1360,6 +1400,7 @@ def build_turn_context(
     plugin_user_context = _merge_gateway_notes(
         agent, messages, current_turn_user_idx, plugin_user_context
     )
+    plugin_user_context = _delegation_turn_note(agent, plugin_user_context)
 
     _bind_interrupt_scope(agent, ra)
     # A vetoed prompt never leaves the host: no external-memory prefetch, no titling call.
@@ -1388,6 +1429,9 @@ def build_turn_context(
             )
 
     _persist_turn_start(agent, messages, conversation_history, pending_cli_message)
+    # ADR-9: a late-diagnostics row inserted above is durable now; announce it once (never before).
+    from agent.lsp import delivery as lsp_delivery
+    lsp_delivery.notify_ready(agent)
     # Turn clock: the row exists now, so a resumed session seeds step_seq/turn_seq exactly.
     from scheduler.agent_hooks import on_turn_start
 
@@ -1457,10 +1501,27 @@ def build_api_messages(
     canonical_messages = canonicalize_replay_history(messages[:split], now=turn_now) + messages[split:]
 
     api_messages = []
+    from agent.custom_messages import DISPLAY_KIND_TO_CUSTOM_TYPE, MESSAGE_CUSTOM_TYPES, project_for_api
+    from gateway.session_policy import active_policy
+    custom_messages = bool(getattr(active_policy(), "custom_messages", False))
     for idx, msg in enumerate(canonical_messages):
         # Structural clone, NOT msg.copy(): in-place transforms below must not reach
         # persisted history via nested containers; see _clone_message_for_send.
         api_msg = _clone_message_for_send(msg)
+        was_custom = msg.get("role") == "custom" or (
+            custom_messages and (msg.get("custom_type") in MESSAGE_CUSTOM_TYPES
+                                 or msg.get("display_kind") in DISPLAY_KIND_TO_CUSTOM_TYPE))
+        # ADR-10 D9/D11: custom rows never reach a provider. Map message-bearing ones to
+        # developer/user (dropping display-only markers) before the persistence-field sweep.
+        projected = project_for_api(api_msg, custom_messages=custom_messages)
+        if not projected:
+            continue
+        api_msg, extra_api_messages = projected[0], projected[1:]
+        # A split image message is derived from the same row; provider bookkeeping must not ride it.
+        for extra in extra_api_messages:
+            extra.pop("api_content", None)
+            for key in PERSISTENCE_ONLY_MESSAGE_FIELDS:
+                extra.pop(key, None)
         # api_content is bookkeeping (exact bytes sent), never a provider field — pop
         # it from EVERY outgoing copy. Persistence/display fields (display_*, _row_id,
         # timestamp) are local bookkeeping: strict OpenAI backends reject unknown keys
@@ -1472,7 +1533,7 @@ def build_api_messages(
 
         # Inject ephemeral context (memory prefetch + pre_llm_call user hooks)
         # at API time only; `messages` is untouched beyond the api_content stamp.
-        if msg is current_turn_message and msg.get("role") == "user":
+        if msg is current_turn_message and msg.get("role") == "user" and not was_custom:
             if isinstance(_api_content, str) and _api_content:
                 # Reuse the prologue's stamp so sidecar and wire cannot drift
                 # and every pass this turn sends identical bytes.
@@ -1486,7 +1547,7 @@ def build_api_messages(
                     api_msg["content"] = _composed
         elif (
             isinstance(_api_content, str) and _api_content
-            and msg.get("role") in ("user", "assistant")
+            and msg.get("role") in ("user", "assistant") and not was_custom
         ):
             # Historical row: replay the exact bytes sent live so the prompt-cache
             # prefix stays byte-stable. User rows carry the injection sidecar; user
@@ -1516,6 +1577,7 @@ def build_api_messages(
         # 'reasoning_details' is shaped by the replay policy above on chat_completions and
         # left intact for the native adapters (anthropic/bedrock rebuild signed blocks from it).
         api_messages.append(api_msg)
+        api_messages.extend(extra_api_messages)
 
     # Rows rebuilt from the session DB carry ``[screenshot]`` lines: re-attach the newest retained
     # images on this wire copy (vision.replay_recent_images; native image input only).

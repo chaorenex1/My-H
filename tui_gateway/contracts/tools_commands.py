@@ -165,6 +165,20 @@ class ShellExecResult(Result):
     stdout: str
     stderr: str
     code: int
+    # User-facing combined output (stdout, then stderr when non-empty), already redacted/sliced.
+    output: str | None = None
+    cancelled: bool = False
+    timed_out: bool = False
+    truncated: bool = False
+    total_lines: int = 0
+    total_bytes: int = 0
+    output_lines: int = 0
+    output_bytes: int = 0
+    artifact_id: str | None = None
+    artifact_elided_bytes: int | None = None
+    artifact_error: str | None = None
+    working_dir: str | None = None
+    images: list[JsonValue] = Field(default_factory=list)
 
 
 method("shell.exec", params=ShellExecParams, result=ShellExecResult,
@@ -229,6 +243,19 @@ class SkillCatalogEntry(Result):
     origin: str = "local"
 
 
+class CommandCatalogEntry(Result):
+    """One flat per-command row: ``name`` has no leading slash; ``aliases``/``subcommands`` are bare
+    names too. ``source`` is builtin|quick|plugin|skill; ``hint`` is the registry args hint."""
+
+    name: str
+    description: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    source: str = "builtin"
+    argument_mode: ArgumentMode | None = None
+    hint: str | None = None
+    subcommands: list[str] = Field(default_factory=list)
+
+
 class CommandsCatalogResult(Result):
     pairs: list[list[str]] = Field(default_factory=list)
     sub: dict[str, list[str]] = Field(default_factory=dict)
@@ -243,6 +270,8 @@ class CommandsCatalogResult(Result):
     # Every plugin command (name without ``/`` -> description), also one a display row such as Ink's
     # ``/logs`` hides from ``categories``: route on this, not on the display list.
     plugin_commands: dict[str, str] = Field(default_factory=dict)
+    # Flat, deduped view of ``pairs`` (one row per name) carrying aliases / hint / mode / subcommands.
+    entries: list[CommandCatalogEntry] = Field(default_factory=list)
 
 
 method("commands.catalog", params=CommandsCatalogParams, result=CommandsCatalogResult,

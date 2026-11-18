@@ -136,6 +136,15 @@ def _safe_heartbeat_snapshot(state) -> dict | None:
     }
 
 
+def _safe_estop_snapshot() -> dict | None:
+    """ESTOP is profile-global and read-only here: ``None`` means disengaged (no ``engaged:false``)."""
+    from agent.estop import get_state
+
+    state = get_state()
+    return ({'engaged': True, 'reason': state.get('reason'), 'engaged_at': state.get('engaged_at')}
+            if state is not None else None)
+
+
 def _snapshot_control(session_key: str) -> dict:
     """Serialize persisted session-control state once, without wall-clock churn."""
     goal_state = _load_goal_state(session_key)
@@ -151,21 +160,25 @@ def _snapshot_control(session_key: str) -> dict:
     goal = _safe_goal_snapshot(goal_state)
     loop = _safe_loop_snapshot(loop_state, deferred_by_goal=deferred_by_goal)
     heartbeat = _safe_heartbeat_snapshot(heartbeat_state)
+    estop = _safe_estop_snapshot()
     return {
         "goal": goal,
         "loop": loop,
         "heartbeat": heartbeat,
-        "revision": _snapshot_revision(goal, loop, heartbeat),
+        # The standalone sidecar has no authority session tree, so it never freezes one.
+        "freeze": None,
+        "estop": estop,
+        "revision": _snapshot_revision(goal, loop, heartbeat, freeze=None, estop=estop),
         "updated_at": _snapshot_updated_at(goal_state, loop_state, heartbeat_state),
     }
 
 
-def _snapshot_revision(goal, loop, heartbeat) -> str:
+def _snapshot_revision(goal, loop, heartbeat, *, freeze=None, estop=None) -> str:
     """Hash canonical visible state so equal reads always have equal revisions."""
-    if goal is None and loop is None and heartbeat is None:
+    if goal is None and loop is None and heartbeat is None and freeze is None and estop is None:
         return ""
     canonical = json.dumps(
-        {"goal": goal, "loop": loop, "heartbeat": heartbeat},
+        {"goal": goal, "loop": loop, "heartbeat": heartbeat, "freeze": freeze, "estop": estop},
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,

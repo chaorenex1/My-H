@@ -290,6 +290,7 @@ from hermes_cli.subcommands.uninstall import build_uninstall_parser
 from hermes_cli.subcommands.dashboard import build_dashboard_parser, build_serve_parser
 from hermes_cli.subcommands.webapp import build_webapp_parser
 from hermes_cli.subcommands.gui import build_gui_parser
+from hermes_cli.subcommands.omp import build_omp_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
 from hermes_cli.subcommands.memory import build_memory_parser
@@ -298,6 +299,9 @@ from hermes_cli.subcommands.tools import build_tools_parser
 from hermes_cli.subcommands.insights import build_insights_parser
 from hermes_cli.subcommands.usage import build_usage_parser
 from hermes_cli.subcommands.monitoring import build_monitoring_parser
+from hermes_cli.subcommands.rules import build_rules_parser
+from hermes_cli.subcommands.judgment import build_judgment_parser, cmd_judgment
+from hermes_cli.subcommands.git import build_git_parser, cmd_git
 from hermes_cli.subcommands.skills import build_skills_parser
 from hermes_cli.subcommands.pairing import build_pairing_parser
 from hermes_cli.subcommands.plugins import build_plugins_parser
@@ -318,6 +322,8 @@ from hermes_cli.subcommands.curator import build_curator_parser
 from hermes_cli.subcommands.pets import build_pets_parser
 from hermes_cli.subcommands.clipboard import build_clipboard_parser
 from hermes_cli.subcommands.journey import build_journey_parser
+from hermes_cli.subcommands.graph import build_graph_parser, cmd_graph
+from hermes_cli.subcommands.code import build_code_parser, cmd_code
 from hermes_cli.subcommands.computer_use import build_computer_use_parser
 from hermes_cli.subcommands.sessions import build_sessions_parser, cmd_sessions_lazy
 from hermes_cli.subcommands.completion import build_completion_parser
@@ -716,6 +722,7 @@ from hermes_cli.main_agent_cmds import (
     cmd_insights,
     cmd_memory,
     cmd_monitoring,
+    cmd_rules,
     cmd_skills,
     cmd_tools,
 )
@@ -784,6 +791,7 @@ from hermes_cli.old_updater_main import (
     _write_web_ui_build_stamp,
 )
 from hermes_cli.main_install_repair import _cleanup_quarantined_exes, _recover_update_debts_on_startup
+from hermes_cli.main_resume_args import _coalesce_session_name_args
 from hermes_cli.main_install_repair import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _UPDATE_REEXEC_ENV,
     _clear_lazy_refresh_incomplete_marker,
@@ -800,9 +808,8 @@ from hermes_cli.main_install_repair import (  # frozen updater surface: update_c
     _update_marker_path,
     _venv_scripts_dir,
 )
-from hermes_cli.main_desktop import (
-    cmd_gui,
-)
+from hermes_cli.omp_launch import cmd_omp
+from hermes_cli.main_desktop import cmd_gui
 from hermes_cli.main_desktop import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _desktop_build_needed,
     _desktop_dist_exists,
@@ -811,9 +818,7 @@ from hermes_cli.main_desktop import (  # frozen updater surface: update_cmd*.py 
     _install_rebuilt_desktop_app,
     _installed_desktop_apps,
 )
-from hermes_cli.main_web_build import (
-    _sweep_stale_bytecode_if_checkout_changed,
-)
+from hermes_cli.main_web_build import _sweep_stale_bytecode_if_checkout_changed
 from hermes_cli.main_web_build import (  # frozen updater surface: update_cmd*.py resolve these via _m()
     _build_web_ui,
     _nixos_build_env,
@@ -1259,13 +1264,19 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
         source = sorted(CLI_FAMILY_SOURCES)
     with _session_db() as db:
         ws_key = _resolve_workspace_key()
+        # ADR-16 D8: ``-c`` is read-only at startup, so an offloaded (cold-mirror-only)
+        # session must never be picked: it would either need an implicit restore or open empty.
+        def _first_live(rows):
+            return next((row for row in rows if not row.get("offloaded")), None)
+
         if ws_key:
-            sessions = db.search_sessions(source=source, limit=1, workspace_key=ws_key, skip_launch_stubs=True)
-            if sessions:
-                return sessions[0]["id"]
+            sessions = db.search_sessions(source=source, limit=200, workspace_key=ws_key, skip_launch_stubs=True)
+            if (row := _first_live(sessions)) is not None:
+                return row["id"]
         # Fallback: global MRU for this source.
-        sessions = db.search_sessions(source=source, limit=1, skip_launch_stubs=True)
-        return sessions[0]["id"] if sessions else None
+        sessions = db.search_sessions(source=source, limit=200, skip_launch_stubs=True)
+        row = _first_live(sessions)
+        return row["id"] if row else None
     return None
 
 
@@ -2343,45 +2354,6 @@ def cmd_update(args):
 
 
 
-def _coalesce_session_name_args(argv: list) -> list:
-    """Join unquoted multi-word session names after -c/--continue and -r/--resume.
-
-    ``hermes -c Pokemon Agent Dev`` → ``['-c', 'Pokemon Agent Dev']``; tokens
-    are collected until the next flag (``-*``) or known top-level subcommand.
-    """
-    _SUBCOMMANDS = {
-        "chat", "model", "gateway", "setup", "whatsapp", "whatsapp-cloud", "login", "logout",
-        "auth", "status", "cron", "doctor", "config", "pairing", "skills", "tools", "mcp",
-        "sessions", "insights", "update", "uninstall", "profile", "dashboard", "serve", "webapp",
-        "desktop", "gui", "honcho", "claw", "plugins", "security", "acp", "webhook", "peer",
-        "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage",
-    }
-    _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
-
-    result = []
-    i = 0
-    while i < len(argv):
-        token = argv[i]
-        if token in _SESSION_FLAGS:
-            result.append(token)
-            i += 1
-            # Collect subsequent non-flag, non-subcommand tokens as one name
-            parts: list = []
-            while (
-                i < len(argv)
-                and not argv[i].startswith("-")
-                and argv[i] not in _SUBCOMMANDS
-            ):
-                parts.append(argv[i])
-                i += 1
-            if parts:
-                result.append(" ".join(parts))
-        else:
-            result.append(token)
-            i += 1
-    return result
-
-
 from hermes_cli.profile_cmd import cmd_profile
 
 
@@ -2652,10 +2624,10 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
-        "journey", "memory-graph", "learning",
+        "journey", "memory-graph", "learning", "graph", "code",
         "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
         "project", "proxy", "prompt-size", "resume", "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "tools", "uninstall", "update",
+        "skin", "skills", "rules", "slack", "status", "tools", "uninstall", "update",
         "usage", "vault",
         "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security",
         "browser",
@@ -3251,6 +3223,9 @@ def _build_cli_parser():
     build_console_parser(subparsers, cmd_console=cmd_console)
     build_pairing_parser(subparsers, cmd_pairing=cmd_pairing)
     build_skills_parser(subparsers, cmd_skills=cmd_skills)
+    build_rules_parser(subparsers, cmd_rules=cmd_rules)
+    build_judgment_parser(subparsers, cmd_judgment=cmd_judgment)
+    build_git_parser(subparsers, cmd_git=cmd_git)
     build_bundles_parser(subparsers)
     build_plugins_parser(subparsers, cmd_plugins=cmd_plugins)
 
@@ -3260,6 +3235,8 @@ def _build_cli_parser():
     build_pets_parser(subparsers)
     build_clipboard_parser(subparsers)
     build_journey_parser(subparsers)
+    build_graph_parser(subparsers, cmd_graph=cmd_graph)
+    build_code_parser(subparsers, cmd_code=cmd_code)
     build_memory_parser(subparsers, cmd_memory=cmd_memory)
     build_tools_parser(subparsers, cmd_tools=cmd_tools)
     build_computer_use_parser(subparsers)
@@ -3281,6 +3258,7 @@ def _build_cli_parser():
     # "desktop" is canonical (Hermes-Setup.exe tells users to run it, so it
     # must be the name --help shows); "gui" is a deprecated alias.
     build_gui_parser(subparsers, cmd_gui=cmd_gui)
+    build_omp_parser(subparsers, cmd_omp=cmd_omp)
     build_logs_parser(subparsers, cmd_logs=cmd_logs)
     build_prompt_size_parser(subparsers, cmd_prompt_size=cmd_prompt_size)
     return parser, subparsers

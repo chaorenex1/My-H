@@ -183,27 +183,27 @@ const NOTICE_DISPLAY_KINDS = [
   'personality_switch',
   // Hermes closing a failed turn, not the model speaking.
   'failed_turn',
-  // Plugin adviser guidance: a user-role row the model saw, but not a human prompt.
-  'adviser',
+  // Plugin advisor guidance: a user-role row the model saw, but not a human prompt.
+  'advisor',
   // A safety-refused turn retained for display: the user's own message, shown
   // greyed with a notice. Rendered through the system path, never a user bubble.
   'content_refused'
 ] as const
 
-const ADVISER_HEADER_RE = /^\[adviser[^\n]*\]\s*/
-const ADVISER_FOOTER_RE = /\s*\[end adviser\]\s*$/
-const ADVISER_ITEM_RE = /^- \[([^\]]+)\]\s*(.*)$/gm
-const ADVISER_SEVERITY_RANK: Record<string, number> = { blocker: 3, concern: 2, nit: 1 }
+const ADVISOR_HEADER_RE = /^\[advisor[^\n]*\]\s*/
+const ADVISOR_FOOTER_RE = /\s*\[end advisor\]\s*$/
+const ADVISOR_ITEM_RE = /^- \[([^\]]+)\]\s*(.*)$/gm
+const ADVISOR_SEVERITY_RANK: Record<string, number> = { blocker: 3, concern: 2, nit: 1 }
 
-/** Parse the rendered adviser block into the card's label and body. Display-only. */
-export function adviserFromMessage(content: string): ChatMessage['adviser'] | undefined {
+/** Parse the rendered advisor block into the card's label and body. Display-only. */
+export function advisorFromMessage(content: string): ChatMessage['advisor'] | undefined {
   const raw = String(content || '').trim()
   if (!raw) {
     return undefined
   }
 
-  const body = raw.replace(ADVISER_HEADER_RE, '').replace(ADVISER_FOOTER_RE, '').trim()
-  const items = [...body.matchAll(ADVISER_ITEM_RE)].map(match => {
+  const body = raw.replace(ADVISOR_HEADER_RE, '').replace(ADVISOR_FOOTER_RE, '').trim()
+  const items = [...body.matchAll(ADVISOR_ITEM_RE)].map(match => {
     const label = match[1].trim()
 
     return { label, severity: label.split(' · ')[0]?.trim() || 'advisory', text: match[2].trim() }
@@ -212,7 +212,7 @@ export function adviserFromMessage(content: string): ChatMessage['adviser'] | un
   // the card a blocker even when a concern was listed first.
   const top = items.reduce<(typeof items)[number] | undefined>(
     (best, item) =>
-      !best || (ADVISER_SEVERITY_RANK[item.severity] ?? 0) > (ADVISER_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
+      !best || (ADVISOR_SEVERITY_RANK[item.severity] ?? 0) > (ADVISOR_SEVERITY_RANK[best.severity] ?? 0) ? item : best,
     undefined
   )
 
@@ -592,7 +592,7 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
     const imageRefExtraction = displayRole === 'user' && rawDisplayContent ? persistedImageRefs(rawDisplayContent) : null
     const fileRefExtraction = imageRefExtraction ? splitLeadingAttachmentRefs(imageRefExtraction.cleanedText) : null
     const displayContent = fileRefExtraction ? fileRefExtraction.text : rawDisplayContent
-    const adviser = message.display_kind === 'adviser' ? adviserFromMessage(displayContent || '') : undefined
+    const advisor = message.display_kind === 'advisor' ? advisorFromMessage(displayContent || '') : undefined
     const liftedRefs = [...(fileRefExtraction?.refs ?? []), ...(imageRefExtraction?.refs ?? [])]
     const extractedAttachmentRefs = liftedRefs.length ? liftedRefs : undefined
 
@@ -736,7 +736,7 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
       id: `${message.timestamp || Date.now()}-${index}-${displayRole}`,
       role: displayRole,
       parts,
-      ...(adviser ? { adviser } : {}),
+      ...(advisor ? { advisor } : {}),
       ...(message.plugin_message_id
         ? { pluginMessageId: String(message.plugin_message_id) }
         : {}),

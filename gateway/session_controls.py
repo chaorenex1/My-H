@@ -102,14 +102,21 @@ _PROFILE_IMPLICIT = frozenset({'session.create', 'session.list', 'session.info',
                                'approval.respond', 'clarify.respond'})
 
 
-def display_projection(history, profile_home, image_urls=True):
+def display_projection(history, profile_home, image_urls=True, *, include_tool_content: str = 'none',
+                       include_compaction: bool = False, running: bool = False):
     """Main's TUI display rows for a snapshot's stored rows: the sidecar's own
     ``_history_to_messages`` (compaction handoffs stripped, ``/steer`` unwrapped, tool rows
     labelled from the paired assistant ``tool_calls``), never a re-implementation. ``image_urls=False``:
-    image parts read ``[image]``."""
+    image parts read ``[image]``.
+
+    ADR-10 P5: the projection is always the custom shape; there is no viewer flag to opt in.
+    ``running`` keeps the live turn's open tool batch from being reported as elided.
+    """
     from tui_gateway import server
     rows = [{**row, '_row_id': row['row_id']} if 'row_id' in row else row for row in history]
-    return server._history_to_messages(rows, profile_home=profile_home, image_urls=image_urls)
+    return server._history_to_messages(rows, profile_home=profile_home, image_urls=image_urls,
+                                       include_tool_content=include_tool_content,
+                                       include_compaction=include_compaction, running=running)
 
 
 def model_only(row):
@@ -244,6 +251,8 @@ class AuthorityConnection:
                     'approval.respond': self.respond, 'clarify.respond': self.respond_clarify}
         from gateway.session_busy_controls import handlers as busy_handlers
         handlers.update(busy_handlers(self))
+        from gateway.session_freeze import handlers as freeze_handlers
+        handlers.update(freeze_handlers(self))
         from gateway.session_queued_controls import handlers as queued_handlers
         handlers.update(queued_handlers(self))
         from gateway.session_config import handlers as config_handlers
@@ -260,8 +269,28 @@ class AuthorityConnection:
         handlers.update(side_handlers(self))
         from gateway.session_llm_oneshot import handlers as oneshot_handlers
         handlers.update(oneshot_handlers(self))
+        from gateway.session_recap import handlers as recap_handlers
+        handlers.update(recap_handlers(self))
+        from gateway.session_git import handlers as git_handlers
+        handlers.update(git_handlers(self))
+        from gateway.session_hooks import handlers as hooks_handlers
+        handlers.update(hooks_handlers(self))
+        from gateway.session_skins import handlers as skin_handlers
+        handlers.update(skin_handlers(self))
+        from gateway.session_config_schema import handlers as schema_handlers
+        handlers.update(schema_handlers(self))
+        from gateway.session_plan import handlers as plan_handlers
+        handlers.update(plan_handlers(self))
+        from gateway.session_btw_history import handlers as btw_handlers
+        handlers.update(btw_handlers(self))
+        from gateway.session_subagent_config import handlers as subagent_config_handlers
+        handlers.update(subagent_config_handlers(self))
         from gateway.session_images import attach_bytes
         from functools import partial
+        from gateway.session_lease import lease
+        handlers['session.lease'] = partial(lease, self)
+        from gateway.session_auth_accounts import accounts
+        handlers['auth.accounts'] = partial(accounts, self)
         handlers['image.attach_bytes'] = partial(attach_bytes, self)
         from gateway.session_complete_path import complete_path
         handlers['complete.path'] = partial(complete_path, self)
@@ -285,6 +314,8 @@ class AuthorityConnection:
         handlers.update(onboarding_handlers(self))
         from gateway.session_stored_reads import handlers as stored_read_handlers
         handlers.update(stored_read_handlers(self))
+        from gateway.session_promoted import handlers as promoted_handlers
+        handlers.update(promoted_handlers(self))
         return handlers
 
     async def dispatch(self, request):
@@ -555,6 +586,8 @@ class AuthorityConnection:
 
     async def describe(self, ref, params):
         await self.ping(ref, params)
+        from gateway.panel_inventory import capabilities as panel_capabilities
+        from gateway.panel_inventory import transcript_capabilities
         from gateway.session_policy import CREATE_FIELDS, SURFACES
         from gateway.session_skin import resolved_skin
         return {'instance_id': self.authority.instance_id, 'profile_id': self.authority.profile_id,
@@ -563,6 +596,10 @@ class AuthorityConnection:
                                  'acp-session-mcp-v1', 'clarify-batch-v1', 'plugin-rpc-v1', 'session-client-v1', 'session-transcript-v1', 'session-list-picker-v1'],
                 'session_create': {'sources': sorted(SURFACES),
                                    'parameters': sorted(CREATE_FIELDS | {'title'})},
+                # Panel readiness: the client marks unsupported/pending panels before its first
+                # call instead of discovering ``-32601`` at runtime.
+                'panels': panel_capabilities(),
+                'transcript_blocks': transcript_capabilities(),
                 # Main's ``gateway.ready.skin``: the canonical client's own ready carries it.
                 'skin': await asyncio.to_thread(resolved_skin)}
 
@@ -725,7 +762,10 @@ class AuthorityConnection:
         if params.get('display_projection'):
             # A micro-compaction merge stays in ``messages`` (an undo target); its originals are what shows.
             display['display_messages'] = display_projection(
-                [row for row in history if not model_only(row)], self.authority.profile_id)
+                [row for row in history if not model_only(row)], self.authority.profile_id,
+                include_tool_content=params.get('include_tool_content') or 'none',
+                include_compaction=params.get('include_compaction') is True,
+                running=snapshot.handle.execution_state == 'running')
         return {'session_id': ref.session_id, 'stored_session_id': ref.session_id,
                 **await _resume_transcript(self.authority, ref, snapshot, history, omit), **display,
                 'running': snapshot.handle.execution_state == 'running',

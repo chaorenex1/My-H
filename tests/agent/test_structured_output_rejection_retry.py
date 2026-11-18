@@ -1,9 +1,11 @@
 """Regression tests for the structured-output rejection retry in
 ``agent.auxiliary_client``.
 
-Auxiliary callers (title generation, plugin structured completions) send an
-OpenAI ``response_format`` request field. Some providers reject the field, or
-its Anthropic translation, with a hard 400:
+Auxiliary callers that send an OpenAI ``response_format`` request field (the
+plugin structured completions in ``agent.plugin_llm``; the naming path no
+longer does — session titles run the ``<title>`` marker protocol of ADR-21
+D4, so ``title_generation`` never sends the field). Some providers reject the
+field, or its Anthropic translation, with a hard 400:
 
   * vLLM gateways translate ``response_format: json_schema`` into
     ``guided_grammar`` and fail when the grammar backend is absent
@@ -19,11 +21,10 @@ its Anthropic translation, with a hard 400:
     ``422 ... body.response_format.json_schema: str type expected`` -- instead
     of naming the feature, so the error never mentions an unsupported option.
 
-Callers tolerate an unconstrained reply: the title prompt demands bare JSON
-and ``_extract_title_text`` has a loose-JSON fallback. The fix is reactive,
-like the temperature retry: when the provider rejects the structured-output
-field, retry once without it. These tests lock in that behaviour for both
-sync and async paths.
+Callers tolerate an unconstrained reply: a structured ``spec`` degrades to
+prompt compliance, so the fix is reactive, like the temperature retry: when
+the provider rejects the structured-output field, retry once without it.
+These tests lock in that behaviour for both sync and async paths.
 """
 
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -38,7 +39,7 @@ from agent.auxiliary_client import (
 )
 
 
-_TITLE_RESPONSE_FORMAT = {
+_STRUCTURED_OUTPUT_FORMAT = {
     "type": "json_schema",
     "json_schema": {
         "name": "session_title",
@@ -110,7 +111,7 @@ class TestWithoutStructuredOutputFormat:
         kwargs = {
             "model": "m",
             "extra_body": {
-                "response_format": dict(_TITLE_RESPONSE_FORMAT),
+                "response_format": dict(_STRUCTURED_OUTPUT_FORMAT),
                 "metadata": {"user_id": "u1"},
             },
         }
@@ -123,14 +124,14 @@ class TestWithoutStructuredOutputFormat:
     def test_drops_extra_body_entirely_when_it_becomes_empty(self):
         kwargs = {
             "model": "m",
-            "extra_body": {"response_format": dict(_TITLE_RESPONSE_FORMAT)},
+            "extra_body": {"response_format": dict(_STRUCTURED_OUTPUT_FORMAT)},
         }
         result = _without_structured_output_format(kwargs)
         assert result is not None
         assert "extra_body" not in result
 
     def test_removes_top_level_kwarg(self):
-        kwargs = {"model": "m", "response_format": dict(_TITLE_RESPONSE_FORMAT)}
+        kwargs = {"model": "m", "response_format": dict(_STRUCTURED_OUTPUT_FORMAT)}
         result = _without_structured_output_format(kwargs)
         assert result is not None
         assert "response_format" not in result
@@ -178,10 +179,10 @@ class TestCallLlmStructuredOutputRetry:
                   side_effect=lambda resp, _task, **_kw: resp),
         ):
             result = call_llm(
-                task="title_generation",
+                task="plugin_llm.summary",
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=64,
-                extra_body={"response_format": dict(_TITLE_RESPONSE_FORMAT)},
+                extra_body={"response_format": dict(_STRUCTURED_OUTPUT_FORMAT)},
             )
 
         assert result == {"ok": True}
@@ -215,11 +216,11 @@ class TestCallLlmStructuredOutputRetry:
         ):
             with pytest.raises(RuntimeError, match="Invalid value"):
                 call_llm(
-                    task="title_generation",
+                    task="plugin_llm.summary",
                     messages=[{"role": "user", "content": "x"}],
                     max_tokens=64,
                     extra_body={
-                        "response_format": dict(_TITLE_RESPONSE_FORMAT),
+                        "response_format": dict(_STRUCTURED_OUTPUT_FORMAT),
                     },
                 )
         assert client.chat.completions.create.call_count == 1
@@ -244,7 +245,7 @@ class TestCallLlmStructuredOutputRetry:
         ):
             with pytest.raises(RuntimeError):
                 call_llm(
-                    task="title_generation",
+                    task="plugin_llm.summary",
                     messages=[{"role": "user", "content": "x"}],
                     max_tokens=64,
                 )
@@ -275,10 +276,10 @@ class TestAsyncCallLlmStructuredOutputRetry:
                   side_effect=lambda resp, _task, **_kw: resp),
         ):
             result = await async_call_llm(
-                task="title_generation",
+                task="plugin_llm.summary",
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=64,
-                extra_body={"response_format": dict(_TITLE_RESPONSE_FORMAT)},
+                extra_body={"response_format": dict(_STRUCTURED_OUTPUT_FORMAT)},
             )
 
         assert result == {"ok": True}
@@ -309,11 +310,11 @@ class TestAsyncCallLlmStructuredOutputRetry:
         ):
             with pytest.raises(RuntimeError, match="Invalid value"):
                 await async_call_llm(
-                    task="title_generation",
+                    task="plugin_llm.summary",
                     messages=[{"role": "user", "content": "x"}],
                     max_tokens=64,
                     extra_body={
-                        "response_format": dict(_TITLE_RESPONSE_FORMAT),
+                        "response_format": dict(_STRUCTURED_OUTPUT_FORMAT),
                     },
                 )
         assert client.chat.completions.create.await_count == 1

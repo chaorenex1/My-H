@@ -946,6 +946,16 @@ class SessionSchemaMixin:
             )
         except sqlite3.OperationalError as exc:
             logger.debug("idx_messages_platform_msg_id create skipped: %s", exc)
+        # The reconciler adds ``agent_session.short_name`` on legacy stores, so this unique
+        # index must be created after it (SCHEMA_SQL runs before reconciliation). The partial
+        # predicate leaves pre-migration rows ('' = no short name) unconstrained.
+        try:
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_short_name "
+                "ON agent_session(short_name) WHERE short_name <> ''"
+            )
+        except sqlite3.OperationalError as exc:
+            logger.debug("idx_agent_session_short_name create skipped: %s", exc)
         self._execute_ddl_skipping_settled_triggers(cursor, DEFERRED_INDEX_SQL)  # same ordering constraint (``active``)
 
         # Heal NULL ``active`` rows on every startup: older reconciler builds added ``active``

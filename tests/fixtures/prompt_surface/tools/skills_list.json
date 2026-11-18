@@ -6,6 +6,10 @@
       "category": {
         "description": "Optional category filter to narrow results",
         "type": "string"
+      },
+      "query": {
+        "description": "Optional capability keywords: rank matching skills first (lexical, plus judgment rerank when available).",
+        "type": "string"
       }
     },
     "required": [],

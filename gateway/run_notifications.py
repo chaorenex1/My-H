@@ -190,7 +190,10 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
 
     # Coalescing keys: process completions (short-window fan-in) and async delegations (+ parent session).
     _COMPLETION_BATCH_KEY_FIELDS = ("session_key", "platform", "chat_type", "chat_id", "thread_id", "user_id")
-    _ASYNC_GROUP_KEY_FIELDS = ("session_key", "parent_session_id", "task_failure_notice", *_COMPLETION_BATCH_KEY_FIELDS[1:])
+    # ``inbox_id`` is empty for async delegations (so they still coalesce) and unique per
+    # child→owner message, which must never share a "N delegations completed" batch header.
+    _ASYNC_GROUP_KEY_FIELDS = ("session_key", "parent_session_id", "task_failure_notice",
+                               "inbox_id", *_COMPLETION_BATCH_KEY_FIELDS[1:])
 
     @dataclasses.dataclass
     class _CompletionClaim:
@@ -1682,7 +1685,8 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                         evt = _pr.completion_queue.get_nowait()
                     except Exception:
                         break
-                    (async_events if evt.get("type") == "async_delegation" else requeue).append(evt)
+                    (async_events if evt.get("type") in {"async_delegation", "agent_message"}
+                     else requeue).append(evt)
                 for evt in requeue:
                     _pr.completion_queue.put(evt)
                 # A fan-out finishing together yields N completions for one session; group by full route +

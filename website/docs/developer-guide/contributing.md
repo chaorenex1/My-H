@@ -23,10 +23,12 @@ We value contributions in this order:
 ## Contribution rubric
 
 The project's intent layer, summarised in the root `AGENTS.md`; this is the long form with the
-examples. Hermes ships a lot: most merges are bug fixes and the product surface (platforms,
-providers, models, desktop/TUI features) expands on purpose. The restraint targets the core agent
-and the model tool schema, where every addition is paid for on every API call: expansive at the
-edges, conservative at the waist.
+examples. The triage sweeper may only close on `implemented_on_main`, `cannot_reproduce` or
+`incoherent`; taste-based closes are a maintainer's call, and when in doubt a PR stays open.
+Hermes ships a lot: most merges are bug fixes and the product surface (platforms, providers,
+models, desktop/TUI features) expands on purpose. The restraint targets the core agent and the
+model tool schema, where every addition is paid for on every API call: expansive at the edges,
+conservative at the waist.
 
 ### What we want
 
@@ -115,6 +117,12 @@ Throughline: **verify the claim AND the intent against the codebase before writi
 a fix.** A reproduction on current `main` plus a line-level account beats a plausible
 rationale. When unsure about intent, asking is cheaper than shipping a fix that fights the
 design.
+
+### Security disclosure scope
+
+`SECURITY.md` is the scope authority. A §3.1 finding goes private (GitHub Security Advisories or
+security@nousresearch.com), never into a public issue, PR, commit or comment; §3.2 hardening is
+ordinary public work. Name the §2 boundary crossed, with a repro on `main`.
 
 ### The Footprint Ladder (new capability decision)
 

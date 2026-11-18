@@ -136,7 +136,7 @@ class CLICommandsSessionToolsMixin:
             from agent.interrupt_compat import request_hard_interrupt
             _cp(f"  {t('cli.tui.interrupting')}")
             request_hard_interrupt(self.agent)
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         spawn_context_thread(_stop_background_work, name="cli-stop").start()
 
     def _handle_agents_command(self):

@@ -43,7 +43,7 @@ from agent.context_compressor_tail import (
 from agent.context_compressor_telemetry import CompressionTelemetryMixin
 from agent.error_classifier import ClassifiedError, FailoverReason, classify_api_error
 from agent.micro_compaction import MicroCompactionMixin
-from agent.prompt_builder import ADVISER_DISPLAY_KIND, STEER_DISPLAY_KIND
+from agent.prompt_builder import ADVISOR_DISPLAY_KIND, STEER_DISPLAY_KIND
 from agent.model_metadata import (
     CHARS_PER_TOKEN, MINIMUM_CONTEXT_LENGTH, get_model_context_length, estimate_messages_tokens_rough, estimate_tokens_rough,
     strip_opaque_replay_items,
@@ -1336,11 +1336,11 @@ def _last_assistant_index(messages: list[dict[str, Any]]) -> int:
 
 def _pending_tool_round(messages: list[dict[str, Any]]) -> range:
     """Indices of the tool results the transcript ends with — a round the model has not answered yet; empty when
-    the transcript ends in any other row. /steer and adviser rows after the round do not answer it: a steer is
+    the transcript ends in any other row. /steer and advisor rows after the round do not answer it: a steer is
     delivered after the newest tool result before the next API call, and two can land in one iteration (one when
-    the tool batch ends, one before the request), so every contiguous trailing steer/adviser row is skipped."""
+    the tool batch ends, one before the request), so every contiguous trailing steer/advisor row is skipped."""
     end = len(messages)
-    while end and messages[end - 1].get("display_kind") in (STEER_DISPLAY_KIND, ADVISER_DISPLAY_KIND):
+    while end and messages[end - 1].get("display_kind") in (STEER_DISPLAY_KIND, ADVISOR_DISPLAY_KIND):
         end -= 1
     start = end
     while start > 0 and messages[start - 1].get("role") == "tool":
@@ -1850,10 +1850,10 @@ def _sum_skill_manage(name, args, content, content_len, line_count):
 
 
 def _sum_skills_list(name, args, content, content_len, line_count):
-    # `skills_list` takes only `category`, not a top-level `name` — the count
-    # from the payload is what identifies the call after compression.
-    category = _str_arg(args, "category")
-    scope = f" category={category}" if category else ""
+    # `skills_list` takes `category` and an optional `query`, not a top-level `name` —
+    # the count from the payload is what identifies the call after compression.
+    query, category = _str_arg(args, "query"), _str_arg(args, "category")
+    scope = (f" query={query}" if query else "") + (f" category={category}" if category else "")
     payload = _json_dict(content)
     count = payload.get("count")
     listed = f" {count} skills" if isinstance(count, int) else ""
@@ -4173,6 +4173,12 @@ Write only the summary body. Do not include any preamble or prefix."""
         )
         return None
 
+    @classmethod
+    def summary_body_for_display(cls, message: Any) -> str:
+        """ADR-5 D3: the display body of a compaction carrier (projection lives in ``compaction_display``)."""
+        from agent.compaction_display import summary_body_for_display
+        return summary_body_for_display(message)
+
     @staticmethod
     def _strip_summary_prefix(summary: str) -> str:
         """Return the summary body without the current, legacy, or any historical prefix."""
@@ -4427,65 +4433,9 @@ Write only the summary body. Do not include any preamble or prefix."""
 
     @classmethod
     def _strip_context_summary_handoff_message(cls, message: dict[str, Any]) -> Optional[dict[str, Any]]:
-        """Drop stale handoff data while preserving merged prior-tail content.
-        Returns a copy for non-handoff rows, the unwrapped prior-tail content for merged handoffs
-        (delimiter form, or legacy end-marker form), and ``None`` for standalone ones."""
-        if not isinstance(message, dict):
-            return message
-        if not cls._is_context_summary_message(message):
-            return message.copy()
-        content = message.get("content")
-
-        def _unwrapped(new_content: Any) -> dict[str, Any]:
-            unwrapped = {**message, "content": new_content}
-            unwrapped.pop(COMPRESSED_SUMMARY_METADATA_KEY, None)
-            return unwrapped
-
-        if isinstance(content, str):
-            if _MERGED_SUMMARY_DELIMITER in content:
-                prior = content.split(_MERGED_SUMMARY_DELIMITER, 1)[0].strip()
-                if prior.startswith(_MERGED_PRIOR_CONTEXT_HEADER):
-                    prior = prior[len(_MERGED_PRIOR_CONTEXT_HEADER):].lstrip()
-            elif _SUMMARY_END_MARKER in content:
-                prior = content.split(_SUMMARY_END_MARKER, 1)[1].lstrip()
-            else:
-                prior = ""
-            return _unwrapped(prior) if prior else None
-        if isinstance(content, list):
-            prior_blocks: list[Any] = []
-            found_delimiter = False
-            for item in content:
-                text = _part_text(item)
-                if isinstance(text, str) and _MERGED_SUMMARY_DELIMITER in text:
-                    before = text.split(_MERGED_SUMMARY_DELIMITER, 1)[0]
-                    if before.strip():
-                        prior_blocks.append(_with_part_text(item, before))
-                    found_delimiter = True
-                    break
-                prior_blocks.append(item.copy() if isinstance(item, dict) else item)
-            if not found_delimiter:
-                # Legacy end-marker form: live content follows the marker inside/after one part.
-                for index, item in enumerate(content):
-                    text = _part_text(item)
-                    if isinstance(text, str) and _SUMMARY_END_MARKER in text:
-                        remainder = text.split(_SUMMARY_END_MARKER, 1)[1].lstrip()
-                        legacy_blocks = [_with_part_text(item, remainder)] if remainder else []
-                        legacy_blocks += [later.copy() if isinstance(later, dict) else later for later in content[index + 1:]]
-                        return _unwrapped(legacy_blocks) if legacy_blocks else None
-                return None
-
-            # Strip the PRIOR CONTEXT header from the first block that carries it.
-            for index, item in enumerate(prior_blocks):
-                text = _part_text(item)
-                if isinstance(text, str) and text.lstrip().startswith(_MERGED_PRIOR_CONTEXT_HEADER):
-                    leading = text.lstrip()[len(_MERGED_PRIOR_CONTEXT_HEADER):].lstrip()
-                    if leading:
-                        prior_blocks[index] = _with_part_text(item, leading)
-                    else:
-                        prior_blocks.pop(index)
-                    break
-            return _unwrapped(prior_blocks) if prior_blocks else None
-        return None
+        """Thin forwarder: the display projection lives in ``agent.compaction_display``."""
+        from agent.compaction_display import strip_context_summary_handoff_message
+        return strip_context_summary_handoff_message(message)
 
     @staticmethod
     def _get_tool_call_id(tc) -> str:
@@ -5419,6 +5369,11 @@ Write only the summary body. Do not include any preamble or prefix."""
         self._reset_proactive_prune_rearm()
         return compressed
 
+    def _stamp_compaction_display(self, compressed: list[dict[str, Any]]) -> None:
+        """ADR-5 D2: stamp the carrier (implementation in ``agent.compaction_display``)."""
+        from agent.compaction_display import stamp_compaction_display
+        stamp_compaction_display(self, compressed)
+
     def compress(
         self, messages: list[dict[str, Any]], current_tokens: Optional[int] = None, focus_topic: Optional[str] = None,
         force: bool = False, memory_context: str = "", bypass_cooldown: bool = False,
@@ -5534,7 +5489,10 @@ Write only the summary body. Do not include any preamble or prefix."""
             )
         # Phase 4: Assemble compressed message list
         compressed = self._assemble_compressed(messages, compress_start, compress_end, scan, summary)
-        return self._finalize_compressed(compressed, canonical_messages, n_messages, spare_pending_images, pruned_count)
+        compressed = self._finalize_compressed(compressed, canonical_messages, n_messages, spare_pending_images,
+                                               pruned_count)
+        self._stamp_compaction_display(compressed)
+        return compressed
 
     def _assemble_compressed(
         self, messages: list[dict[str, Any]], compress_start: int, compress_end: int, scan: _HandoffScan, summary: str,

@@ -11,7 +11,7 @@ export type ChatEvent =
   | GatewayEvent<"message.start">
   | GatewayEvent<"message.delta">
   | GatewayEvent<"message.complete">
-  | GatewayEvent<"message.adviser">
+  | GatewayEvent<"message.advisor">
   | GatewayEvent<"reasoning.delta">
   | GatewayEvent<"tool.start">
   | GatewayEvent<"tool.complete">
@@ -20,7 +20,7 @@ export type ChatEvent =
 export type ChatRow =
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string; streaming: boolean }
-  | { id: string; kind: "adviser"; text: string; severity: string; label: string }
+  | { id: string; kind: "advisor"; text: string; severity: string; label: string }
   | {
       id: string;
       kind: "tool";
@@ -48,9 +48,9 @@ export const EMPTY_CHAT: ChatState = {
 
 const SEVERITIES = new Set(["blocker", "concern", "nit"]);
 
-/** `adviser · concern · reviewer` / `- [concern · reviewer]` → `concern`. */
-export function adviserSeverity(text: string): string {
-  const match = text.match(/\[(?:adviser\s*·\s*)?([a-z]+)\s*·/i);
+/** `advisor · concern · reviewer` / `- [concern · reviewer]` → `concern`. */
+export function advisorSeverity(text: string): string {
+  const match = text.match(/\[(?:advisor\s*·\s*)?([a-z]+)\s*·/i);
   if (match && SEVERITIES.has(match[1].toLowerCase())) return match[1].toLowerCase();
   const header = text.split("\n", 1)[0] ?? "";
   const token = header.match(/\b(blocker|concern|nit)\b/i);
@@ -81,13 +81,13 @@ function historyRow(message: TranscriptMessage, index: number): ChatRow | null {
   const kind = String(message.display_kind || "");
   if (role === "user") {
     if (!text) return null;
-    if (kind === "adviser") {
+    if (kind === "advisor") {
       return {
         id: `history-${message.row_id ?? index}`,
-        kind: "adviser",
+        kind: "advisor",
         text,
-        severity: adviserSeverity(text),
-        label: "adviser",
+        severity: advisorSeverity(text),
+        label: "advisor",
       };
     }
     return { id: `history-${message.row_id ?? index}`, kind: "user", text };
@@ -183,7 +183,7 @@ export function applyEvent(state: ChatState, event: ChatEvent): ChatState {
         ),
       };
     }
-    case "message.adviser": {
+    case "message.advisor": {
       const payload = event.payload;
       if (!payload?.text || state.rows.some((row) => row.id === payload.id)) return state;
       return {
@@ -192,10 +192,10 @@ export function applyEvent(state: ChatState, event: ChatEvent): ChatState {
           ...state.rows,
           {
             id: payload.id,
-            kind: "adviser",
+            kind: "advisor",
             text: payload.text,
-            severity: String(payload.severity || adviserSeverity(payload.text)).toLowerCase(),
-            label: payload.label || "adviser",
+            severity: String(payload.severity || advisorSeverity(payload.text)).toLowerCase(),
+            label: payload.label || "advisor",
           },
         ],
       };

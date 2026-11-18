@@ -39,7 +39,7 @@ CAPABILITY_VERSION = "plugin_runtime_v3"
 #: ``display_kind`` on the durable row a continuation is delivered as. Clients
 #: that do not know it still render the text; the value keeps it distinguishable
 #: from a human prompt in the transcript.
-DISPLAY_KIND = "adviser"
+DISPLAY_KIND = "advisor"
 #: A single steer/continuation text is a device-side message; cap it like a tool result.
 MAX_TEXT_CHARS = 4000
 DEFAULT_MAX_CONTINUATIONS = 2
@@ -161,7 +161,7 @@ def turn_state(session_id: str) -> dict[str, Any]:
 def set_flag(session_id: str, key: str, value: Any) -> bool:
     """Publish a cooperative session flag (``plan_mode``, ``review_only``...).
 
-    Flags are not turn-scoped: a plugin sets one when its mode changes and the adviser reads it
+    Flags are not turn-scoped: a plugin sets one when its mode changes and the advisor reads it
     through :func:`turn_state`. Only a live session can publish; a flag is advisory metadata,
     never an authorization.
     """
@@ -256,7 +256,7 @@ def interrupt(session_id: str, text: str, *, source: str = "plugin") -> dict[str
 
 
 def queue_post_turn(session_id: str, text: str, *, source: str = "plugin",
-                    kind: str = "adviser") -> dict[str, Any]:
+                    kind: str = "advisor") -> dict[str, Any]:
     """Leave text for the surface to run as a fresh turn after this one ends.
 
     The surfaces already auto-submit a leftover ``pending_steer`` as the next user input
@@ -274,7 +274,7 @@ def queue_post_turn(session_id: str, text: str, *, source: str = "plugin",
         if session in _POST_TURN:
             return {"ok": False, "reason": "already_pending"}
         _POST_TURN[session] = {"text": body, "source": str(source or ""),
-                               "kind": str(kind or "adviser"), "created_at": time.time()}
+                               "kind": str(kind or "advisor"), "created_at": time.time()}
     return {"ok": True, "reason": ""}
 
 
@@ -287,7 +287,7 @@ def attach_post_turn(agent: Any, result: Any) -> None:
     """Merge a queued post-turn text into the conversation result the surface reads.
 
     The result's ``pending_steer`` is the contract all surfaces already honour; the extra
-    ``pending_steer_kind`` lets a surface label an adviser-triggered turn instead of showing it
+    ``pending_steer_kind`` lets a surface label an advisor-triggered turn instead of showing it
     as leftover operator input. Never raises into the turn path.
     """
     try:
@@ -298,7 +298,7 @@ def attach_post_turn(agent: Any, result: Any) -> None:
         existing = str(result.get("pending_steer") or "")
         text = str(pending.get("text") or "")
         result["pending_steer"] = f"{existing}\n{text}" if existing else text
-        result["pending_steer_kind"] = str(pending.get("kind") or "adviser")
+        result["pending_steer_kind"] = str(pending.get("kind") or "advisor")
         logger.debug("plugin post-turn queued (session=%s, source=%s)",
                      session, pending.get("source") or "")
     except Exception:
@@ -310,9 +310,9 @@ def preserve_handle(session_id: str) -> Optional[Callable[..., dict[str, Any]]]:
 
     A review that decides to *preserve* advice finishes after the turn, when the plugin no
     longer has an agent handle. Call this while the turn is live (the plugin does it in
-    ``post_llm_call``) and keep the closure: it appends one adviser row at the end of the
+    ``post_llm_call``) and keep the closure: it appends one advisor row at the end of the
     turn, flushes that row to the session DB, and notifies the surface. The row is a real
-    transcript message (``display_kind=adviser``), so it hydrates as a card on resume.
+    transcript message (``display_kind=advisor``), so it hydrates as a card on resume.
     """
     agent = _agent_for(str(session_id or ""))
     if agent is None:
@@ -365,7 +365,7 @@ def steer(session_id: str, text: str, *, source: str = "") -> dict[str, Any]:
 
     Always the host's queued-steer path, never ``redirect``: redirect persists a *user
     correction* row, and a reviewer's advice must not borrow the user's authority. The row is
-    typed ``display_kind="adviser"`` (see ``agent.prompt_builder.advisory_user_row``), so the
+    typed ``display_kind="advisor"`` (see ``agent.prompt_builder.advisory_user_row``), so the
     model is not told the text is a direct user message.
 
     Returns ``{"ok": bool, "mode": "steer"|"", "reason": str}``.
@@ -379,7 +379,7 @@ def steer(session_id: str, text: str, *, source: str = "") -> dict[str, Any]:
     if agent is None:
         return {"ok": False, "mode": "", "reason": "no_live_turn"}
     try:
-        accepted = bool(agent.steer(body, kind="adviser"))
+        accepted = bool(agent.steer(body, kind="advisor"))
     except TypeError:
         # A host that predates the ``kind`` keyword still accepts the text; the row then
         # carries the operator marker, which is the pre-patch behaviour.

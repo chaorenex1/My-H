@@ -171,6 +171,16 @@ def python_tool(name: str, executable: str, *, root: Path | None = None) -> Path
     return _tool(python, executable) if python is not None else None
 
 
+def python_tool_is_current(
+    name: str, requirements: Sequence[str], executable: str, *, root: Path | None = None,
+) -> bool:
+    """True when the selected generation was built from exactly these requirements."""
+    python = environment_python(name, root=root)
+    if python is None or _tool(python, executable) is None:
+        return False
+    return _selection(_environment_root(name, root)).get("requirements") == _requirements(requirements)
+
+
 def _requirements(requirements: Sequence[str]) -> list[str]:
     from packaging.requirements import InvalidRequirement, Requirement
 

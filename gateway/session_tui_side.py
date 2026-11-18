@@ -216,8 +216,14 @@ async def btw(connection, ref, params):
             model, runtime = _resolve_runtime(authority, policy)
             main_runtime = {'model': model, 'session_id': ref.session_id,
                             **{key: runtime.get(key) for key in ('provider', 'base_url', 'api_key', 'api_mode')}}
-            return answer_side_question(text, history, parent_agent=agent, main_runtime=main_runtime,
-                                        on_fork=handle.set_fork, should_stop=handle.stopped.is_set) or ''
+            answer = answer_side_question(
+                text, history, parent_agent=agent, main_runtime=main_runtime,
+                on_fork=handle.set_fork, should_stop=handle.stopped.is_set) or ''
+            # The answer is not a transcript row (that is the point of /btw), so the history panel
+            # reads this side store. Inside ``_side_scope`` the profile home is the owner's.
+            from gateway.session_btw_history import record
+            record(ref.session_id, task_id, text, answer)
+            return answer
 
     return _spawn(authority, ref, task_id, 'btw.complete', body, extra={'question': text}, holder=[handle])
 

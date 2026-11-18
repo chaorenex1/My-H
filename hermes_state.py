@@ -50,6 +50,7 @@ from hermes_state_guard import (
     _register_test_instance, _set_last_init_error, get_last_init_error,
 )
 from hermes_state_readpool import _READ_POOL_MAX, _proc_fd_targets, _read_budget_for
+from hermes_state_bundles import SessionBundlesMixin
 from hermes_state_sessions import SessionSessionsMixin
 from hermes_state_fts import SessionFtsSetupMixin
 from hermes_state_portability import SessionPortabilityMixin
@@ -78,8 +79,12 @@ from hermes_state_repair import _claim_repair_attempt, preflight_db_writability,
 from hermes_state_titles import SessionTitlesMixin
 from hermes_state_prompt_refresh import SessionPromptRefreshMixin
 from hermes_state_session_jobs import SessionJobsMixin
+from hermes_state_ttsr import SessionTtsrMixin
+from hermes_state_agent_sessions import SessionAgentSessionsMixin
+from hermes_state_agent_inbox import SessionAgentInboxMixin
 from hermes_state_steps import SessionStepsMixin
 from hermes_state_tasks import SessionTasksMixin
+from hermes_state_agent_config import SessionAgentConfigMixin
 from hermes_state_usage import SessionUsageMixin
 from hermes_state_maintenance import SessionMaintenanceMixin
 from hermes_state_gateway import SessionGatewayMixin
@@ -434,15 +439,52 @@ def _close_time_checkpoint_configurable() -> bool:
             and hasattr(sqlite3.Connection, "setconfig"))
 
 
+def _divert_bundle_path(sid: str) -> Optional[Path]:
+    """The bundle transcript for *sid* when its row is readable (ADR-16 D2/D8).
+
+    A divert is an emergency append when state.db was replaced under a live process; the
+    canonical bundle path keeps a third transcript location from appearing. The old
+    ``sessions/<id>.jsonl`` stays the fallback when no row can be located.
+    """
+    try:
+        from hermes_state_registry import acquire, release_or_close
+
+        db = acquire()
+    except Exception:  # health: allow BLE001 -- emergency fallback must never fail the divert
+        return None
+    try:
+        meta = db.get_session_bundle_meta(sid)
+    except Exception:  # health: allow BLE001 -- unreadable row -> old layout
+        return None
+    finally:
+        release_or_close(db)
+    if not isinstance(meta, dict) or meta.get("started_at") is None:
+        return None
+    import hermes_session_paths as session_paths
+
+    try:
+        return session_paths.allocate_bundle_dir(
+            meta.get("cwd") or os.getcwd(), meta.get("started_at"), sid,
+            hermes_home=get_hermes_home(),
+        ).with_suffix(".jsonl")
+    except Exception:  # health: allow BLE001 -- derivation failure -> old layout
+        return None
+
+
 def divert_session_transcript_jsonl(session_id: str, messages) -> Optional[Path]:
-    """Append pending messages to HERMES_HOME/sessions/<id>.jsonl (state.db was replaced under a
-    live process). Returns the path, or None if nothing to write."""
+    """Append pending messages to the session bundle (ADR-16 D8), else the legacy
+    ``HERMES_HOME/sessions/<id>.jsonl`` when state.db was replaced under a live process.
+    Returns the path, or None if nothing to write."""
     sid = str(session_id or "").strip()
     if not sid or not messages:
         return None
-    sessions_dir = get_hermes_home() / "sessions"
-    make_user_dir(sessions_dir, parents=True, exist_ok=True)
-    path = sessions_dir / f"{sid}.jsonl"
+    path = _divert_bundle_path(sid)
+    if path is None:
+        sessions_dir = get_hermes_home() / "sessions"
+        make_user_dir(sessions_dir, parents=True, exist_ok=True)
+        path = sessions_dir / f"{sid}.jsonl"
+    else:
+        make_user_dir(path.parent, parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         for msg in messages:
             if msg is not None:
@@ -467,7 +509,8 @@ def _foreign_state_db_holders(db_path: Path) -> list[tuple[int, str]]:
 class SessionDB(
     SessionSessionsMixin, SessionFtsSetupMixin, SessionSearchMixin, SessionSchemaMixin,
     SessionPortabilityMixin, SessionTelegramTopicsMixin, SessionCompressionMixin,
-    SessionGatewayMixin, SessionMaintenanceMixin, SessionUsageMixin, SessionStepsMixin, SessionTasksMixin, SessionJobsMixin, SessionTitlesMixin,
+    SessionGatewayMixin, SessionMaintenanceMixin, SessionUsageMixin, SessionStepsMixin, SessionTasksMixin, SessionJobsMixin, SessionTtsrMixin, SessionAgentSessionsMixin, SessionAgentInboxMixin, SessionBundlesMixin, SessionTitlesMixin,
+    SessionAgentConfigMixin,
     SessionMessagesMixin, SessionPruneRewriteMixin, SessionApiContentMixin, SessionCoverageMixin, SessionRewindMixin, SessionProfileRepairMixin,
     SessionPromptRefreshMixin,
 ):

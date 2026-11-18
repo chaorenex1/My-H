@@ -305,6 +305,25 @@ lsp:
   trusted_workspaces: []
   # trusted_workspaces: ["~/code/my-app"]
 
+  # WHERE diagnostics are shown — never whether a scanner runs. `enabled` above and
+  # `code_intel.semgrep.enabled` remain the subsystem switches; Semgrep is live-only,
+  # so `hermes code index` never runs it and ignores this block.
+  display:
+    lsp:
+      # off | inline | late | both
+      #   inline — a verdict inside the write budget goes into the tool result; a
+      #            timeout is dropped (no late block)
+      #   late   — every verdict becomes a late-diagnostics block, nothing inline
+      #   both   — the default: inline when it fits, a late block when it does not
+      #   off    — this source is absent from the diagnostics surface (also skips
+      #            the write-time edit check)
+      mode: both
+      # error | warning (default: errors only)
+      severities: [error]
+    semgrep:
+      mode: both
+      severities: [error, warning]
+
   # How to handle missing server binaries.
   #   auto    — install via npm/pip/go install into <HERMES_HOME>/lsp/bin
   #   manual  — only use binaries already on PATH
@@ -344,6 +363,72 @@ lsp:
     typescript:
       disabled: true       # skip TS even when its extensions match
 ```
+
+### Display policy
+
+`lsp.display` decides **where** a verdict appears, not whether the scan happens.
+Defaults reproduce the pre-existing behaviour: LSP errors surface both inline
+and (when the write budget runs out) as a late block; Semgrep shows errors and
+warnings the same way.
+
+| `mode` | Inside the write budget | After it |
+|---|---|---|
+| `both` (default) | inline in the tool result | late diagnostics block |
+| `inline` | inline in the tool result | dropped |
+| `late` | late diagnostics block | late diagnostics block |
+| `off` | nothing (LSP also skips that edit check) | nothing |
+
+`severities` accepts `error` and `warning`; `info`/`hint` have no renderer
+tone. The filtered set is the *same* set the model reads and the client
+renders — there is no UI-only filter, so a diagnostic the card hides is also a
+diagnostic the model never sees. The inline half applies to every client
+(CLI, Desktop, messaging platforms); the late block is a `role:"custom"`
+transcript row only in omp-ui sessions (`custom_messages:true`), and its
+`transcript.custom` live event is sent only to the omp-ui local viewer. A
+malformed `mode`/`severities` entry falls back to the default and logs one
+warning; a write never fails because of this block.
+
+`hermes lsp status` prints the resolved policy (`display.lsp.mode`,
+`display.semgrep.mode`, and their severities) plus the separate
+`code_intel.semgrep.enabled` scanner switch, so `display.semgrep.mode: off`
+is not mistaken for turning the Semgrep scanner off.
+
+Every verdict that reaches one delivery point becomes a single row: files keep
+the queue's pop order and appear once, and each file's lines keep their source
+order (the renderer sorts inside a file; the gateway never re-sorts). The queue
+identifies a file by its resolved absolute path (case-folded on Windows), so
+`C:\Repo\A.py` and `c:\repo\a.py` — or a symlink and its target — share one
+entry and one card; the row still carries the path the write used, so it
+matches the tool card.
+
+### Semgrep as an immediate source
+
+With `code_intel.semgrep.enabled: true`, Semgrep runs beside LSP on every
+successful `write_file`/`patch`: both scans start before the write waits, share
+one latency budget, and their findings merge into the same late-diagnostics
+row, one `files[]` entry per path with recomputed `summary`/`errored`. A scan
+that fits the budget is returned in the edit's tool result as
+`semgrep_diagnostics` (separate from `lsp_diagnostics`, which stays
+LSP-only); a slower one is queued and delivered at the same points as a late
+LSP verdict. `source` is fixed to `semgrep`; each line ends with the rule id.
+
+Every successful edit rescans the bytes it wrote. Findings from the previous
+scan are dropped even when the new scan is clean, disabled, or fails — a stale
+finding is never merged back. `lsp.display.semgrep.mode: off` skips the
+write-time scan only; `code_intel.semgrep.enabled` remains the scanner switch.
+
+Semgrep is live-only: `hermes code index` never runs it and never stores
+findings, so there is no Semgrep layer in the graph to go stale, and
+`hermes code status` reports `semgrep.source: "live_only"`.
+
+Explicit tool calls are not filtered by `lsp.display`: `code_graph_update`
+with `refresh_file` + `semgrep: true` returns the scan's findings for the
+current bytes in the stored-diagnostic shape (`code` is the rule id), and
+`code_intel` with `action: "diagnostics"` plus a `path` scans that file live
+(`"source": "live_scan"`). Without a path, or when Semgrep cannot scan, the
+stored graph is returned and labelled `"source": "stored_graph"` with
+`"semgrep": "live_only"`; that answer carries parsing/analysis diagnostics
+only — stored Semgrep rows are filtered out rather than served as current.
 
 ### Per-server keys
 

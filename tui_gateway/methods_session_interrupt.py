@@ -60,6 +60,7 @@ def _recover_unreachable_compute_host_turn(sid: str, session: dict, inflight_at_
         if not pending and session.get("running") and inflight_now is not None and inflight_now is inflight_at_interrupt:
             session["running"] = False
             _clear_inflight_turn(session)
+    _emit_queue_update(sid, session)
     _clear_pending(sid)
     with contextlib.suppress(Exception):
         _announce_cancelled_gateway_approvals(session, "interrupt", session_id=sid)
@@ -140,12 +141,13 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         session, err = _sess_nowait(params, rid)
         if err:
             return err
+        sid = str(params.get("session_id") or "")
         _note_user_input(session)
         agent = session.get("agent")
         # Redirect during the turn-build window (running=True, agent None): queue for the next turn instead of
         # a misleading 4010 the client swallows into a lost follow-up.
         if verb == "redirect" and agent is None and session.get("running"):
-            _enqueue_prompt(session, text, current_transport() or _stdio_transport)
+            _enqueue_prompt(session, text, current_transport() or _stdio_transport, sid=sid)
             session["last_active"] = time.time()
             return _ok(rid, {"status": "queued", "text": text})
         # Compression in flight: queue instead of steering/redirecting. A correction that
@@ -154,7 +156,7 @@ def _correction_method(name: str, verb: str, accepted_status: str, supported, un
         # drains when compression finishes (the Discord-gateway contract; mirrors the
         # interrupt→queue demotion in gateway/run_busy.py for the channel busy path).
         if _session_compression_in_flight(session):
-            _enqueue_prompt(session, text, current_transport() or _stdio_transport)
+            _enqueue_prompt(session, text, current_transport() or _stdio_transport, sid=sid)
             session["last_active"] = time.time()
             return _ok(rid, {"status": "queued", "text": text})
         if not supported(agent):

@@ -210,15 +210,15 @@ function splitCompactionContent(content: string): CompactionSplit | null {
   };
 }
 
-// A plugin adviser row persists as user-role content with ``display_kind="adviser"``:
+// A plugin advisor row persists as user-role content with ``display_kind="advisor"``:
 // model-facing guidance, never a human prompt. Its bracketed header/footer are machine
 // chrome, so the inspector shows the severity label + advice body instead.
-const ADVISER_HEADER_RE = /^\[adviser[^\n]*\]\s*/;
-const ADVISER_FOOTER_RE = /\s*\[end adviser\]\s*$/;
-const ADVISER_ITEM_RE = /^- \[([^\]]+)\]\s*(.+)$/gm;
-const ADVISER_TURNS_RE = /\((\d+) turns? ago\)/i;
+const ADVISOR_HEADER_RE = /^\[advisor[^\n]*\]\s*/;
+const ADVISOR_FOOTER_RE = /\s*\[end advisor\]\s*$/;
+const ADVISOR_ITEM_RE = /^- \[([^\]]+)\]\s*(.+)$/gm;
+const ADVISOR_TURNS_RE = /\((\d+) turns? ago\)/i;
 
-function splitAdviserContent(
+function splitAdvisorContent(
   content: string,
 ): {
   label: string;
@@ -228,27 +228,27 @@ function splitAdviserContent(
   items: { label: string; severity: string; text: string }[];
 } | null {
   const raw = content.trim();
-  if (!ADVISER_HEADER_RE.test(raw)) return null;
+  if (!ADVISOR_HEADER_RE.test(raw)) return null;
   const body = raw
-    .replace(ADVISER_HEADER_RE, "")
-    .replace(ADVISER_FOOTER_RE, "")
+    .replace(ADVISOR_HEADER_RE, "")
+    .replace(ADVISOR_FOOTER_RE, "")
     .trim();
-  // The per-note header is `severity · target · adviser`; find the known severity token
+  // The per-note header is `severity · target · advisor`; find the known severity token
   // instead of trusting a fixed position.
-  const items = [...body.matchAll(ADVISER_ITEM_RE)].map((match) => {
+  const items = [...body.matchAll(ADVISOR_ITEM_RE)].map((match) => {
     const itemLabel = match[1].trim();
     const itemSeverity =
       itemLabel
         .split(" · ")
         .map((part) => part.trim().toLowerCase())
-        .find((part) => part in ADVISER_SEVERITY_STYLES) || "advisory";
+        .find((part) => part in ADVISOR_SEVERITY_STYLES) || "advisory";
     return { label: itemLabel, severity: itemSeverity, text: match[2].trim() };
   });
   const top = items.reduce<(typeof items)[number] | undefined>((best, item) => {
     const rank = (value: string) => ({ blocker: 3, concern: 2, nit: 1 })[value] ?? 0;
     return !best || rank(item.severity) > rank(best.severity) ? item : best;
   }, undefined);
-  const turns = ADVISER_TURNS_RE.exec(body);
+  const turns = ADVISOR_TURNS_RE.exec(body);
   return {
     label: top?.label ?? "advisory",
     body,
@@ -258,9 +258,9 @@ function splitAdviserContent(
   };
 }
 
-// Severity coloring for an adviser card: the inspector should read the same way the
+// Severity coloring for an advisor card: the inspector should read the same way the
 // TUI/Desktop cards do (blocker red, concern amber, everything else muted).
-const ADVISER_SEVERITY_STYLES: Record<
+const ADVISOR_SEVERITY_STYLES: Record<
   string,
   { bg: string; text: string }
 > = {
@@ -311,11 +311,11 @@ function MessageBubble({
       text: "text-muted-foreground italic",
       label: "Context handoff",
     },
-    // Plugin adviser guidance: model-facing, so it must never read as a user turn.
-    adviser: {
+    // Plugin advisor guidance: model-facing, so it must never read as a user turn.
+    advisor: {
       bg: "bg-muted/50",
       text: "text-muted-foreground",
-      label: "adviser",
+      label: "advisor",
     },
   };
 
@@ -355,22 +355,22 @@ function MessageBubble({
   }
 
   const isCompaction = compactionSplit !== null;
-  const adviserSplit =
-    msg.display_kind === "adviser" && typeof msg.content === "string"
-      ? splitAdviserContent(msg.content)
+  const advisorSplit =
+    msg.display_kind === "advisor" && typeof msg.content === "string"
+      ? splitAdvisorContent(msg.content)
       : null;
-  const adviserStyle = adviserSplit
-    ? { ...ROLE_STYLES.adviser, ...(ADVISER_SEVERITY_STYLES[adviserSplit.severity] ?? {}) }
+  const advisorStyle = advisorSplit
+    ? { ...ROLE_STYLES.advisor, ...(ADVISOR_SEVERITY_STYLES[advisorSplit.severity] ?? {}) }
     : null;
-  const style = adviserStyle
-    ? adviserStyle
+  const style = advisorStyle
+    ? advisorStyle
     : isCompaction
       ? ROLE_STYLES.compaction
       : ROLE_STYLES[msg.role] ?? ROLE_STYLES.system;
-  const label = adviserSplit
-    ? `${ROLE_STYLES.adviser.label} · ${adviserSplit.label}` +
-      (adviserSplit.turnsAgo != null
-        ? ` · ${adviserSplit.turnsAgo} ${adviserSplit.turnsAgo === 1 ? "turn" : "turns"} ago`
+  const label = advisorSplit
+    ? `${ROLE_STYLES.advisor.label} · ${advisorSplit.label}` +
+      (advisorSplit.turnsAgo != null
+        ? ` · ${advisorSplit.turnsAgo} ${advisorSplit.turnsAgo === 1 ? "turn" : "turns"} ago`
         : "")
     : isCompaction
       ? ROLE_STYLES.compaction.label
@@ -408,14 +408,14 @@ function MessageBubble({
           </span>
         )}
       </div>
-      {adviserSplit && (
+      {advisorSplit && (
         <div className="flex flex-col gap-1 text-sm text-foreground leading-relaxed">
-          {adviserSplit.items.length > 0 ? (
-            adviserSplit.items.map((item, index) => (
+          {advisorSplit.items.length > 0 ? (
+            advisorSplit.items.map((item, index) => (
               <div className="whitespace-pre-wrap" key={`${index}-${item.label}`}>
                 <span
                   className={`text-xs font-semibold ${
-                    (ADVISER_SEVERITY_STYLES[item.severity] ?? ADVISER_SEVERITY_STYLES.nit).text
+                    (ADVISOR_SEVERITY_STYLES[item.severity] ?? ADVISOR_SEVERITY_STYLES.nit).text
                   }`}
                 >
                   {item.label}
@@ -424,11 +424,11 @@ function MessageBubble({
               </div>
             ))
           ) : (
-            <div className="whitespace-pre-wrap">{adviserSplit.body}</div>
+            <div className="whitespace-pre-wrap">{advisorSplit.body}</div>
           )}
         </div>
       )}
-      {!adviserSplit &&
+      {!advisorSplit &&
         msg.content &&
         (msg.role === "system" ? (
           <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">

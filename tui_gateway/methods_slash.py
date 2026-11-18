@@ -204,7 +204,9 @@ def _format_live_history_output(sid: str, session: dict, arg: str) -> str:
     with session["history_lock"]:
         history = list(session.get("history", []))
     db_history = _live_session_messages(session)
-    messages = _history_to_messages(history if db_history is None else db_history, profile_home=session.get("profile_home"))
+    messages = _history_to_messages(history if db_history is None else db_history, profile_home=session.get("profile_home"), running=bool(session.get("running")))
+    from tui_gateway.session_history_stripped import is_stripped_tool_calls
+    messages = [message for message in messages if not is_stripped_tool_calls(message)]
     if not messages:
         return "No conversation history yet."
     lines = ["Conversation History", "────────────────────────────────────────"]
@@ -219,13 +221,16 @@ def _format_live_history_output(sid: str, session: dict, arg: str) -> str:
 
 def _format_live_context_output(sid: str, session: dict, arg: str) -> str:
     from collections import Counter
+    from tui_gateway.session_history_stripped import is_stripped_tool_calls
     try:
-        messages = _history_to_messages(_live_session_messages(session) or [], profile_home=session.get("profile_home"))
+        messages = _history_to_messages(_live_session_messages(session) or [], profile_home=session.get("profile_home"), running=bool(session.get("running")))
     except Exception:
         messages = []  # malformed db rows fall back to the live history below
+    messages = [message for message in messages if not is_stripped_tool_calls(message)]
     if not messages:
         with session["history_lock"]:
-            messages = _history_to_messages(list(session.get("history", [])), profile_home=session.get("profile_home"))
+            messages = _history_to_messages(list(session.get("history", [])), profile_home=session.get("profile_home"), running=bool(session.get("running")))
+        messages = [message for message in messages if not is_stripped_tool_calls(message)]
 
     breakdown_lines: list[str] = []
     if (agent := session.get("agent")) is not None:

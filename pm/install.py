@@ -17,7 +17,7 @@ from pm import paths
 from pm.downloader import DownloadPaused, ProgressFn
 from pm.filesystem import native, remove_tree, retry_held
 from pm.lock import Facts, Lockfile
-from pm.package import InstallError, Package, Runner, StatePackage, compose_env
+from pm.package import InstallError, Package, PythonToolPackage, Runner, StatePackage, compose_env
 from pm.plugin_inputs import Candidates, Members, PluginInput, Selection, StagedUpdate
 from pm.registry import get_package, walk
 from pm.store import Store, current_target, digest_matches, merge_tree, tree_digest
@@ -125,6 +125,12 @@ def installed_package(name: str, *, allow_outdated: bool = False) -> InstalledPa
     package = get_package(name)
     if package.internal:
         raise ValueError(f"{name} is internal PM tooling, not an application package")
+    if isinstance(package, PythonToolPackage):
+        tool = package.selected_tool()
+        if tool is None:
+            return None
+        return InstalledPackage(Path(native(tool.parent.parent)),
+                                _lockfile().version(name) or "", Path(native(tool)))
     target = current_target()
     location = _installed_location(package, _lockfile(), target, allow_outdated=allow_outdated)
     if location is None:
@@ -527,7 +533,11 @@ def stage_only(
     download_progress: ProgressFn | None = None,
 ) -> Path:
     """Realize a cross-target pin without host facts or an executable Runner."""
-    return _install(get_package(name), _lockfile(), None, _store(), target,
+    package = get_package(name)
+    if isinstance(package, PythonToolPackage):
+        raise InstallError(name, "a Python tool environment is built on the host, not staged "
+                                 "for another target", f"run `hermes pm install {name}` on that target")
+    return _install(package, _lockfile(), None, _store(), target,
                     progress=progress, pause_event=pause_event, download_progress=download_progress)
 
 
@@ -584,11 +594,15 @@ def ensure(
     ``progress(stage, done, total, label)`` reports the slow parts of an
     install to a UI, including ordered multi-archive labels.
     """
-    if isinstance(get_package(name), StatePackage):
+    package = get_package(name)
+    if isinstance(package, StatePackage):
         if _operation is not None:
             # Python construction can provision tools itself. Drop both the
             # lock and its validity before entering that independent operation.
             _operation.close()
+        if isinstance(package, PythonToolPackage):
+            package.apply_tool(explicit=explicit)
+            return Runner(name, compose_env([package.activation_env()], base=base_env))
         sync_venv(explicit=explicit)
         return Runner(name, compose_env([], base=base_env))
 
@@ -642,6 +656,11 @@ def env_for(*names: str, base_env: Optional[dict] = None) -> dict[str, str]:
     # repeat would put node's bundled npm ahead of the pinned one on PATH.
     for package in walk(known):
         if package.internal:
+            continue
+        if isinstance(package, StatePackage):
+            diff = package.activation_env()
+            if diff:
+                diffs.append(diff)
             continue
         location = _installed_location(package, lockfile, target)
         if location:
@@ -1073,13 +1092,15 @@ def _dependents_first(names: list[str]) -> list[str]:
 
 
 def _store_path_dirs() -> list[str]:
-    """Composed PATH dirs of all installed (non-internal, on_path) store
-    packages, each package ahead of its dependencies (``_dependents_first``),
-    deduped. Includes optional packages that are
+    """Composed PATH dirs of all installed (non-internal, on_path) packages,
+    each package ahead of its dependencies (``_dependents_first``), deduped.
+    Includes optional packages that are
     *installed* (facts say so) — an installed git/gh must be on PATH even
-    though it's not in the root closure. A package whose dependency chain is
-    not fully installed contributes nothing: store npm over a missing store
-    node would run the user's node, a partial toolchain. Never installs."""
+    though it's not in the root closure. A ``StatePackage`` contributes the
+    dirs it selected (a Python tool environment's entrypoint); a store
+    package whose dependency chain is not fully installed contributes
+    nothing: store npm over a missing store node would run the user's node, a
+    partial toolchain. Never installs."""
 
     lockfile = _lockfile()
     target = current_target()
@@ -1102,6 +1123,14 @@ def _store_path_dirs() -> list[str]:
         if not getattr(package, "on_path", True):
             continue
         if package.missing_reason(target) is not None:
+            continue
+        if isinstance(package, StatePackage):
+            path_dirs = package.activation_env().get("PATH") or []
+            if isinstance(path_dirs, str):
+                path_dirs = [path_dirs]
+            for directory in path_dirs:
+                if directory and native(directory) not in dirs:
+                    dirs.append(native(directory))
             continue
         location = located(package)
         if location is None or any(located(dep) is None for dep in chain

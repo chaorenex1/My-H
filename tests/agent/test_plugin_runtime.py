@@ -83,7 +83,7 @@ def test_steer_marks_advice_and_never_uses_the_user_correction_path():
     plugin_runtime.bind_turn(agent)
     result = plugin_runtime.steer("session-1", "stop and re-read the diff")
     assert result["ok"] is True and result["mode"] == "steer"
-    assert agent.steered == [("stop and re-read the diff", "adviser")]
+    assert agent.steered == [("stop and re-read the diff", "advisor")]
     # redirect would persist a "user correction"; plugin advice must not borrow that.
     assert agent.redirected == []
 
@@ -128,8 +128,8 @@ def test_discard_marks_the_token_expired_not_taken():
 def test_advisory_row_does_not_claim_user_authority():
     from agent.prompt_builder import STEER_DISPLAY_KIND, advisory_user_row, steer_row
 
-    advice = advisory_user_row("[adviser — advisory only]\nre-read the diff")
-    assert advice["role"] == "user" and advice["display_kind"] == "adviser"
+    advice = advisory_user_row("[advisor — advisory only]\nre-read the diff")
+    assert advice["role"] == "user" and advice["display_kind"] == "advisor"
     assert "OUT-OF-BAND USER MESSAGE" not in advice["content"]
 
     operator = steer_row("hello")
@@ -151,21 +151,21 @@ def test_interrupt_queues_advice_before_stopping_the_tool_batch():
     result = plugin_runtime.interrupt("session-1", "stop, the premise is wrong", source="minir")
 
     assert result["ok"] is True and result["mode"] == "interrupt"
-    assert agent.steered == [("stop, the premise is wrong", "adviser")]
+    assert agent.steered == [("stop, the premise is wrong", "advisor")]
     assert agent.interrupts == ["minir"]
 
 
 def test_post_turn_is_merged_into_the_surface_contract():
     agent = _Agent()
     plugin_runtime.bind_turn(agent)
-    first = plugin_runtime.queue_post_turn("session-1", "[adviser] finish the test", source="minir")
+    first = plugin_runtime.queue_post_turn("session-1", "[advisor] finish the test", source="minir")
     assert first["ok"] is True
     assert plugin_runtime.queue_post_turn("session-1", "second")["reason"] == "already_pending"
 
     result = {"pending_steer": "leftover operator text"}
     plugin_runtime.attach_post_turn(agent, result)
-    assert result["pending_steer"] == "leftover operator text\n[adviser] finish the test"
-    assert result["pending_steer_kind"] == "adviser"
+    assert result["pending_steer"] == "leftover operator text\n[advisor] finish the test"
+    assert result["pending_steer_kind"] == "advisor"
 
 
 def test_session_flags_are_readable_only_while_live():
@@ -189,11 +189,11 @@ def test_preserve_writer_survives_the_turn_and_appends_a_card():
     assert callable(handle)
     plugin_runtime.unbind_turn(agent)
 
-    result = handle("[adviser] keep this card", {"preserved": True, "severity": "concern"})
+    result = handle("[advisor] keep this card", {"preserved": True, "severity": "concern"})
 
     assert result["ok"] is True
     row = agent.messages[-1]
-    assert row["role"] == "user" and row["display_kind"] == "adviser"
+    assert row["role"] == "user" and row["display_kind"] == "advisor"
     assert row["display_metadata"] == {"preserved": True, "severity": "concern"}
     assert agent.flushed and agent.flushed[-1][-1] is row
     assert seen and seen[-1]["plugin_message_id"] == row["plugin_message_id"]
@@ -206,4 +206,4 @@ def test_preserve_one_shot_refuses_after_the_turn():
         "ok": False, "reason": "no_live_turn"}
     plugin_runtime.bind_turn(agent)
     assert plugin_runtime.preserve("session-1", "on time")["ok"] is True
-    assert agent.messages[-1]["display_kind"] == "adviser"
+    assert agent.messages[-1]["display_kind"] == "advisor"

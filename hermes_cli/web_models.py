@@ -110,6 +110,17 @@ class FileTicketRequest(BaseModel):
     profile: Optional[str] = None
     session_id: Optional[str] = None
 
+class AuxFallbackRoute(BaseModel):
+    """One ``auxiliary.<task>.fallback_chain`` route.
+
+    Every field defaults to blank so a malformed entry is rejected by
+    ``hermes_cli.aux_fallback.normalize_fallback_chain`` (HTTP 400 naming the index) rather than
+    by pydantic's 422 — one validation path for the whole chain.
+    """
+    provider: str = ""
+    model: str = ""
+    base_url: str = ""
+
 class ModelAssignment(BaseModel):
     """POST /api/model/set — assign a provider/model to a slot.
 
@@ -123,6 +134,9 @@ class ModelAssignment(BaseModel):
     # Auxiliary only. Omitted → the task's override is left alone; explicit null → cleared
     # (inherit the main agent's effort); a level → set. ``model_fields_set`` tells the two apart.
     reasoning_effort: Optional[str] = None
+    # Auxiliary only, same omitted/null/replace semantics: omitted = leave the stored chain
+    # alone, [] = clear, otherwise a full replacement (max 8 routes).
+    fallback_chain: Optional[list[AuxFallbackRoute]] = None
     # Custom/local endpoint URL + key, honored on main AND auxiliary slots: the runtime resolvers
     # read model.base_url / auxiliary.<task>.base_url (+ .api_key) and ignore OPENAI_BASE_URL.
     base_url: str = ""

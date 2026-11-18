@@ -421,7 +421,7 @@ _CONTROL_STATE: dict[str, Any] = {
     "_executing_tools": False,  # lets _vprint print while tools run with stream consumers on
     "_trim_after_tool_batch": False,  # a >=1 MB tool result was committed; trim once the batch unwinds
     "_tool_guardrails": ToolCallGuardrailController,
-    "_tool_guardrail_halt_decision": None,
+    "_tool_guardrail_halt_decision": None, "_yield_state": None,
     # Interrupts. Hard cancellation is separate from redirect/message state; the Event makes
     # the cause atomic for auxiliary stream pollers.
     "_interrupt_requested": False,
@@ -434,12 +434,12 @@ _CONTROL_STATE: dict[str, Any] = {
     "_supports_active_turn_redirect": True,
     # /steer: the drain hook appends the note to the last tool result after the current
     # batch — no interrupt, no new user turn (role alternation preserved). ``kind`` is
-    # "user" for an operator steer and "adviser" for plugin advice, which must not be
+    # "user" for an operator steer and "advisor" for plugin advice, which must not be
     # framed as a direct user message.
     "_pending_steer": None,
     "_pending_steer_kind": "user",
     "_pending_steer_lock": threading.Lock,
-    # Surface-installed observer for rows a plugin injects (adviser steer/continuation).
+    # Surface-installed observer for rows a plugin injects (advisor steer/continuation).
     "plugin_message_callback": None,
     # Active-turn redirect: keep the valid turn prefix, cancel only the in-flight request,
     # rebuild the tail with the correction. Drained at a role-safe boundary.
@@ -1061,11 +1061,6 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     # Kanban guidance is session-static for the dispatcher-owned worker only. Profiles may
     # expose kanban_show interactively, and children/cron runs inherit the env var, without
     # owning a task.
-    from agent.delegation_context import owned_kanban_task
-    from agent.prompt_builder import KANBAN_GUIDANCE
-    agent._kanban_worker_guidance = (
-        KANBAN_GUIDANCE if owned_kanban_task() and "kanban_show" in agent.valid_tool_names else ""
-    )
     if agent.quiet_mode:
         return
     if agent.tools:
@@ -2210,7 +2205,7 @@ def init_agent(
     _init_fallback_chain(agent, fallback_model)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     _merge_extra_tools(agent, extra_tools)
-    # A caller that runs many agents against one logical conversation (the adviser) can pin the
+    # A caller that runs many agents against one logical conversation (the advisor) can pin the
     # cache scope: the prompt_cache_key derivation then keys every run of that reviewer into its
     # own shard instead of the process-wide session id. Empty keeps the host's own resolution.
     agent._declared_cache_scope = str(cache_scope or "").strip()

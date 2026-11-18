@@ -2145,7 +2145,7 @@ def _dispatch_lane_task(
     _kbw._maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
     if lane == "review":
         # Force-load sdlc-review; the kanban lifecycle is already in every
-        # worker's system prompt via KANBAN_GUIDANCE.
+        # worker's system prompt via the kanban lifecycle block.
         claimed.skills = list(dict.fromkeys([*(claimed.skills or []), "sdlc-review"]))
     try:
         pid = _call_spawn_fn(spawn_fn if spawn_fn is not None else _default_spawn, claimed, str(workspace), board)

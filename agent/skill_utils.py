@@ -399,10 +399,11 @@ def display_skill_create_dir() -> str:
     return create_dir.as_posix() + "/"
 
 
-# Cross-directory precedence, lowest tier wins: trusted project > local profile > skills.create_dir >
-# skills.external_dirs. Inside ONE tier two different skills sharing a name stay ambiguous — refused,
-# never guessed (59da8ec4e) — while identical copies under one root resolve to the shallowest.
-TIER_PROJECT, TIER_LOCAL, TIER_CREATE_DIR, TIER_EXTERNAL = range(4)
+# Cross-directory precedence, lowest tier wins: trusted project > local profile > shared .agents >
+# skills.create_dir > skills.external_dirs. Inside ONE tier two different skills sharing a name stay
+# ambiguous — refused, never guessed (59da8ec4e) — while identical copies under one root resolve to
+# the shallowest.
+TIER_PROJECT, TIER_LOCAL, TIER_AGENTS, TIER_CREATE_DIR, TIER_EXTERNAL = range(5)
 # Leading words of every same-tier refusal (skill_view error, preload/cron label) — one spelling.
 AMBIGUOUS_SKILL_PREFIX = "Ambiguous skill name "
 # (shadowed path, *sorted higher-tier paths) already judged: the identity check (it hashes both
@@ -415,7 +416,13 @@ def get_skill_search_roots(local: Optional[Path] = None, *, include_project: boo
     prompt index, slash commands, skill_view, preload and cron share. *local* overrides the profile
     skills dir (skills_tool passes its live root); that entry is kept even when missing."""
     roots = [(TIER_PROJECT, d) for d in get_project_skills_dirs()] if include_project else []
-    roots.append((TIER_LOCAL, Path(local) if local is not None else get_skills_dir()))
+    local_dir = Path(local) if local is not None else get_skills_dir()
+    roots.append((TIER_LOCAL, local_dir))
+    # The shared ``.agents/skills`` convention sits beside the active profile's ``skills/``.
+    # It is a separate, lower tier so a migrated Hermes-native copy always wins a name clash.
+    agents_dir = local_dir.parent / ".agents" / "skills"
+    if agents_dir.is_dir():
+        roots.append((TIER_AGENTS, agents_dir))
     create_dir = get_skill_create_dir()
     if create_dir is not None and create_dir.is_dir():
         roots.append((TIER_CREATE_DIR, create_dir))
@@ -425,7 +432,7 @@ def get_skill_search_roots(local: Optional[Path] = None, *, include_project: boo
 
 
 def get_all_skills_dirs() -> list[Path]:
-    """Skill dirs: local ``~/.hermes/skills/`` first, then create_dir, then external.
+    """Skill dirs: local ``~/.hermes/skills/`` first, then ``.agents/skills``, create_dir, external.
     Trusted project dirs are NOT included (higher precedence; see get_project_skills_dirs)."""
     return [d for _tier, d in get_skill_search_roots(include_project=False)]
 
@@ -500,7 +507,7 @@ def resolve_skill_catalog(entries: list[dict[str, Any]]) -> list[dict[str, Any]]
                 _SHADOW_CHECKED.add(key)
                 if not any(provably_same_skill([e["path"], out[j]["path"]]) for j in higher):
                     logger.warning("Skill '%s' at %s is shadowed by a higher-precedence copy "
-                                   "(project > local > create_dir > external_dirs)", name, e["path"])
+                                   "(project > local > agents > create_dir > external_dirs)", name, e["path"])
         elif winner[name] == i:
             e.update(status="unique", load_name=name)
         else:

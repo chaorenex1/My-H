@@ -1,0 +1,60 @@
+# Template for HERMES_HOME/code-intelligence/tree-sitter/languages.yaml
+# Validate with:
+#   python SKILL_DIR/scripts/validate_language_registry.py languages.yaml
+# Keep one descriptor per language; whole-file validation rejects any bad entry.
+schema_version: 1
+languages:
+  - language: python
+    aliases: [py]
+    extensions: [.py, .pyi]
+    filenames: []
+    grammar_package: tree-sitter-python
+    grammar_version: 0.25.0
+    grammar_install: builtin
+    parser: parsers/python/parser.so
+    tree_sitter_queries:
+      symbols: queries/python/symbols.scm
+      imports: queries/python/imports.scm
+      calls: queries/python/calls.scm
+      types: queries/python/types.scm
+      tests: queries/python/tests.scm
+    kind_map:
+      function_definition: function
+      class_definition: class
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "0.25.0+1"
+
+  - language: typescript
+    aliases: [ts, tsx]
+    extensions: [.ts, .tsx]
+    filenames: []
+    grammar_package: tree-sitter-typescript
+    grammar_version: 0.23.2
+    grammar_install: builtin
+    parser: parsers/typescript/parser.so
+    tree_sitter_queries:
+      symbols: queries/typescript/symbols.scm
+      imports: queries/typescript/imports.scm
+      calls: queries/typescript/calls.scm
+      types: queries/typescript/types.scm
+      tests: queries/typescript/tests.scm
+    kind_map:
+      function_declaration: function
+      class_declaration: class
+      interface_declaration: interface
+    capabilities:
+      symbols: true
+      references: true
+      calls: true
+      types: true
+      inheritance: true
+      tests: true
+      change: true
+    parser_version: "0.23.2+1"

@@ -581,6 +581,235 @@ class TestBuildExecuteCodeSchema(unittest.TestCase):
         schema_all = build_execute_code_schema(SANDBOX_ALLOWED_TOOLS)
         self.assertEqual(schema_none["description"], schema_all["description"])
 
+    def test_language_enum_follows_js_availability(self):
+        """Without Bun + the JS kernel the enum is py-only; with them js joins it (D8)."""
+        py_only = build_execute_code_schema(SANDBOX_ALLOWED_TOOLS, mode="strict", js_available=False)
+        props = py_only["parameters"]["properties"]
+        self.assertEqual(props["language"]["enum"], ["py"])
+        self.assertEqual(props["cells"]["items"]["properties"]["language"]["enum"], ["py"])
+        for key in ("code", "cells", "language", "title", "timeout", "background", "reset"):
+            self.assertIn(key, props)
+        # code and cells are mutually exclusive; the handler enforces exactly-one.
+        self.assertNotIn("required", py_only["parameters"])
+
+        both = build_execute_code_schema(SANDBOX_ALLOWED_TOOLS, mode="strict", js_available=True)
+        self.assertEqual(both["parameters"]["properties"]["language"]["enum"], ["py", "js"])
+        self.assertEqual(
+            both["parameters"]["properties"]["cells"]["items"]["properties"]["language"]["enum"],
+            ["py", "js"],
+        )
+
+
+class TestExecuteCodeCellSurface(unittest.TestCase):
+    """ADR-4 D8: language/cells/title/timeout/background, dispatch and aggregation."""
+
+    _OK = {"status": "success", "output": "ok", "exit_code": 0, "duration_seconds": 0.01,
+           "tool_calls_made": 0, "stdout_truncated": False, "stdout_bytes_captured": 2,
+           "stdout_bytes_total": 2, "stdout_bytes_omitted": 0}
+
+    def _capture_kernel(self, calls, payloads=None):
+        payloads = payloads or [self._OK]
+
+        def fake(code, **kwargs):
+            calls.append((code, kwargs))
+            return json.dumps(payloads[min(len(calls) - 1, len(payloads) - 1)])
+
+        return fake
+
+    def test_rejects_code_and_cells_together(self):
+        result = json.loads(execute_code(code="print(1)", cells=[{"code": "print(2)"}],
+                                         task_id="surface"))
+        self.assertIn("exactly one", result["error"])
+
+    def test_cells_validation_errors(self):
+        cases = [
+            ([], "at least one cell"),
+            ([{"code": ""}], "cells[0].code"),
+            ([{"code": "x", "language": "ruby"}], "unsupported language"),
+            ("print(1)", "must be a list"),
+        ]
+        for cells, expected in cases:
+            with self.subTest(cells=cells):
+                result = json.loads(execute_code(cells=cells, task_id="surface"))
+                self.assertIn(expected, result["error"])
+
+    def test_cells_honor_configured_max(self):
+        config = {"mode": "strict", "timeout": 30, "max_cells": 2}
+        with patch("tools.code_execution_tool._load_config", return_value=config):
+            result = json.loads(execute_code(cells=[{"code": "1"}] * 3, task_id="surface"))
+        self.assertIn("at most 2 cells", result["error"])
+
+    def test_unsupported_call_language(self):
+        result = json.loads(execute_code(code="print(1)", language="ruby", task_id="surface"))
+        self.assertIn("Unsupported language", result["error"])
+
+    def test_js_without_bun_names_install_command(self):
+        with patch("tools.code_execution_tool._bun_binary", return_value=None):
+            result = json.loads(execute_code(code="1", language="js", task_id="surface"))
+        self.assertIn("hermes pm install bun", result["error"])
+
+    def test_js_rejected_on_non_local_backend(self):
+        with patch("tools.terminal_tool._get_env_config", return_value={"env_type": "docker"}):
+            result = json.loads(execute_code(code="1", language="js", task_id="surface"))
+        self.assertIn("local terminal backend", result["error"])
+
+    def test_js_without_kernel_module_is_explicit(self):
+        with patch("tools.code_execution_tool._bun_binary", return_value="bun"), \
+             patch("tools.code_execution_tool._js_kernel_available", return_value=False):
+            result = json.loads(execute_code(code="1", language="js", task_id="surface"))
+        self.assertIn("unavailable in this build", result["error"])
+
+    def test_background_delegates_to_the_job_manager(self):
+        sentinel = json.dumps({"status": "running",
+                               "async": {"state": "running", "jobId": "eval_test",
+                                         "type": "eval"}})
+        with patch("tools.code_execution_tool._load_config",
+                   return_value={"mode": "strict", "timeout": 30}), \
+             patch("tools.code_execution_tool._preflight_cell_call", return_value=None), \
+             patch("tools.terminal_tool._get_env_config", return_value={"env_type": "local"}), \
+             patch("tools.eval_jobs.start_eval_job", return_value=sentinel) as start:
+            result = json.loads(execute_code(code="print(1)", background=True,
+                                             task_id="surface", tool_call_id="call-bg"))
+        self.assertEqual(result["status"], "running")
+        kwargs = start.call_args.kwargs
+        self.assertEqual(kwargs["tool_call_id"], "call-bg")
+        self.assertEqual(kwargs["env_type"], "local")
+
+    def test_single_cell_echoes_explicit_language_and_title(self):
+        config = {"mode": "strict", "timeout": 30}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel", return_value=json.dumps(self._OK)):
+            result = json.loads(execute_code(code="print('ok')", language="python", title="hi",
+                                             task_id="surface"))
+        self.assertEqual(result["language"], "py")
+        self.assertEqual(result["title"], "hi")
+        # Existing key order is preserved; the additive fields trail it.
+        self.assertEqual(list(result)[:3], ["status", "output", "exit_code"])
+        self.assertEqual(list(result)[-2:], ["language", "title"])
+
+    def test_multi_cell_runs_in_order_and_aggregates(self):
+        calls = []
+        payloads = [
+            {**self._OK, "output": "", "tool_calls_made": 1, "stdout_bytes_captured": 0,
+             "stdout_bytes_total": 0},
+            {**self._OK, "output": "42\n", "tool_calls_made": 2},
+        ]
+        config = {"mode": "strict", "timeout": 30, "max_tool_calls": 50}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel",
+                   side_effect=self._capture_kernel(calls, payloads)):
+            result = json.loads(execute_code(
+                cells=[{"code": "x = 41"}, {"code": "print(x + 1)", "title": "answer"}],
+                task_id="surface",
+            ))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual([cell["index"] for cell in result["cells"]], [0, 1])
+        self.assertEqual(result["cells"][1]["title"], "answer")
+        self.assertEqual(result["cells"][1]["output"], "42\n")
+        self.assertEqual(result["output"], "42\n")
+        self.assertEqual(result["tool_calls_made"], 3)
+        self.assertEqual(result["stdout_bytes_captured"], 2)
+        # One kernel per language, cells in order, each cell's own timeout window.
+        self.assertEqual(calls[0][1]["mode"], calls[1][1]["mode"])
+        self.assertGreater(calls[0][1]["timeout"], 0)
+        self.assertGreater(calls[1][1]["timeout"], 0)
+
+    def test_one_item_cells_keeps_cell_shape_and_title(self):
+        calls = []
+        config = {"mode": "strict", "timeout": 30}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel",
+                   side_effect=self._capture_kernel(calls)):
+            result = json.loads(execute_code(
+                cells=[{"code": "print(1)", "language": "py", "title": "T"}],
+                task_id="surface",
+            ))
+        self.assertIn("cells", result)
+        self.assertEqual(len(result["cells"]), 1)
+        self.assertEqual(result["cells"][0]["language"], "py")
+        self.assertEqual(result["cells"][0]["title"], "T")
+        self.assertEqual(calls[0][1]["reset"], False)
+
+    def test_multi_cell_shares_python_kernel_state(self):
+        """Real kernel: a later cell sees the earlier cell's top-level binding."""
+        config = {"mode": "strict", "timeout": 30, "max_tool_calls": 50}
+        with patch("tools.code_execution_tool._load_config", return_value=config):
+            result = json.loads(execute_code(
+                cells=[{"code": "x = 41"}, {"code": "print(x + 1)"}],
+                task_id="multi-state",
+            ))
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(result["cells"][1]["output"].strip(), "42")
+
+    def test_different_languages_run_concurrently_while_results_keep_input_order(self):
+        """ADR-4 D11.4: py and js groups may overlap; the cells array stays in input order."""
+        from tools.code_execution_tool import _execute_multi_cells
+
+        barrier = threading.Barrier(2, timeout=10)
+
+        def fake(code, language, **_kwargs):
+            barrier.wait()  # both groups must be running before either returns
+            return json.dumps({**self._OK, "output": language})
+
+        spec = {
+            "single": False, "timeout": 30, "title": None,
+            "cells": [{"code": "py", "language": "py", "title": None},
+                      {"code": "js", "language": "js", "title": None}],
+        }
+        config = {"mode": "strict", "timeout": 30}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_execution_tool._run_local_cell", side_effect=fake):
+            result = json.loads(_execute_multi_cells(
+                spec, task_id="parallel", enabled_tools=None, env_type="local",
+                reset=False, max_tool_calls=5, is_interrupted=lambda: False,
+            ))
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual([cell["output"] for cell in result["cells"]], ["py", "js"])
+
+    def test_reset_clears_each_language_once(self):
+        calls = []
+        config = {"mode": "strict", "timeout": 30}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel",
+                   side_effect=self._capture_kernel(calls)):
+            result = json.loads(execute_code(
+                cells=[{"code": "a"}, {"code": "b"}, {"code": "c", "language": "py"}],
+                reset=True, task_id="surface",
+            ))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual([call[1]["reset"] for call in calls], [True, False, False])
+
+    def test_timeout_is_capped_by_config_and_zero_rejected(self):
+        calls = []
+        config = {"mode": "strict", "timeout": 12}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel",
+                   side_effect=self._capture_kernel(calls)):
+            result = json.loads(execute_code(code="1", timeout=999, task_id="surface"))
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(calls[0][1]["timeout"], 12.0)
+        zero = json.loads(execute_code(code="1", timeout=0, task_id="surface"))
+        self.assertIn("greater than zero", zero["error"])
+
+    def test_call_deadline_skips_later_cells(self):
+        calls = []
+
+        def slow(code, **_kwargs):
+            calls.append(code)
+            time.sleep(0.2)  # health: allow HX013 -- the delay is the deadline behavior under test
+            return json.dumps({**self._OK, "output": code})
+
+        config = {"mode": "strict", "timeout": 30}
+        with patch("tools.code_execution_tool._load_config", return_value=config), \
+             patch("tools.code_kernel.execute_in_session_kernel", side_effect=slow):
+            result = json.loads(execute_code(cells=[{"code": "a"}, {"code": "b"}], timeout=0.1,
+                                             task_id="surface"))
+        self.assertEqual(calls, ["a"])
+        self.assertEqual(result["status"], "timeout")
+        self.assertEqual(result["cells"][0]["status"], "success")
+        self.assertEqual(result["cells"][1]["status"], "timeout")
+        self.assertIn("deadline", result["cells"][1]["error"])
+
 
 # ---------------------------------------------------------------------------
 # Environment variable filtering (security critical)
@@ -858,6 +1087,9 @@ class TestHeadTailTruncation(unittest.TestCase):
         self.assertIn("TAIL", result["output"])
         self.assertGreater(result["stdout_bytes_total"], result["stdout_bytes_captured"])
         self.assertGreater(result["stdout_bytes_omitted"], 0)
+        self.assertEqual(result["stdout_lines_total"], 3)
+        self.assertGreater(result["stdout_lines_shown"], 0)
+        self.assertLessEqual(result["stdout_lines_shown"], result["stdout_lines_total"])
         # Spillover (#96997-adjacent): the warning now points at the saved
         # full-output file instead of advising a narrower re-run.
         self.assertIn("execute_code stdout was truncated", result["warning"])
@@ -879,12 +1111,12 @@ class TestRpcTokenAuthorization(unittest.TestCase):
     """
 
     def _drive_server(self, rpc_token, requests):
-        """Run _rpc_server_loop against a real AF_UNIX socketpair.
+        """Run serve_rpc against a real AF_UNIX socketpair.
 
         Sends each dict in *requests* as a newline-delimited JSON message
         and returns the list of decoded JSON responses.
         """
-        from tools.code_execution_rpc import _rpc_server_loop
+        from tools.code_execution_rpc import serve_rpc
 
         # socketpair gives us a connected client end and a "server" end we
         # can hand to accept() by wrapping it in a tiny listener shim.
@@ -916,7 +1148,7 @@ class TestRpcTokenAuthorization(unittest.TestCase):
                 "model_tools.handle_function_call",
                 side_effect=_mock_handle_function_call,
             ):
-                _rpc_server_loop(
+                serve_rpc(
                     listener,
                     "test-task",
                     tool_call_log,

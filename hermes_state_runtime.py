@@ -830,7 +830,8 @@ def _worker_append(db, conn, session_id, payload):
         raise RuntimeStoreError('invalid_params')
     for msg in messages:
         if (not isinstance(msg, dict) or set(msg) - _MESSAGE_FIELDS
-                or msg.get('role') not in ('user', 'assistant', 'system', 'tool')):
+                # ADR-10: custom rows are session-layer messages (converted before any request).
+                or msg.get('role') not in ('user', 'assistant', 'system', 'tool', 'custom')):
             raise RuntimeStoreError('invalid_params')
         # Existing row annotations can adopt only rows in THIS transcript.
         if '_row_id' in msg and not conn.execute(

@@ -1,0 +1,6 @@
+(import_statement source: (string) @import.module)
+(import_statement (import_clause (identifier) @import.name))
+(import_statement (import_clause (named_imports (import_specifier name: (identifier) @import.name alias: (identifier) @import.alias))))
+(import_statement (import_clause (namespace_import (identifier) @import.alias)))
+(export_statement source: (string) @import.module)
+(export_statement (export_clause (export_specifier name: (identifier) @import.name)))

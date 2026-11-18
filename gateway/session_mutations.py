@@ -279,6 +279,20 @@ async def write_mutation(authority, ref, params, editor_servers, *, principal_id
         try:
             await _project_result(authority, ref, live, params, result, editor_servers, applied=applied)
         finally:
+            if operation == 'compress' and applied:
+                # ADR-5 D4: the one live event for a manual commit, from the same carrier row the
+                # receipt wrote (the row ids are stamped on these dicts by archive/publish).
+                from agent.compaction_display import compaction_carrier, compaction_summary_event
+
+                carrier = compaction_carrier((prepared or {}).get('messages'))
+                payload = compaction_summary_event(carrier, trigger='manual') if carrier is not None else None
+                if payload is not None and live is not None:
+                    from gateway.local_viewer_events import publish_compaction_summary
+
+                    publish_compaction_summary(
+                        lambda event_type, body: live.event_stream.publish(
+                            ref.session_id, body, event_type=event_type),
+                        payload)
             # The receipt is committed: a failed projection must not swallow the hook, and an exact
             # retry (applied=False) never refires it.
             if operation == 'compress' and applied and (prepared or {}).get('post_compaction'):

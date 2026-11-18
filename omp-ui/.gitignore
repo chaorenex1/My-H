@@ -1,0 +1,4 @@
+node_modules/
+app/out/
+coding-agent/hermes/out/
+.bun/

@@ -10,7 +10,9 @@ import types
 
 import pytest
 
-from agent.prompt_builder import PLATFORM_HINTS
+from agent.prompts.platforms import load_platform_hints
+
+PLATFORM_HINTS = load_platform_hints()
 from agent.system_prompt import platform_hint
 from gateway.platform_registry import platform_registry
 from gateway.session_context import _VAR_MAP

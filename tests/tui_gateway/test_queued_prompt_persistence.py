@@ -187,6 +187,20 @@ def test_cleared_queue_keeps_the_queued_row_as_the_interrupted_shape(monkeypatch
         db.close()
 
 
+def test_queue_update_carries_the_displayable_follow_up_snapshot(monkeypatch):
+    """omp's queue chips read one snapshot event; the TUI queue never steers into a live turn, so
+    ``steering`` is empty and ``live_steered`` is 0."""
+    events = []
+    monkeypatch.setattr(server, "_emit", lambda event, sid, payload=None: events.append((event, sid, payload)))
+    session = {"queued_prompt": {"text": "first"}, "queued_prompts": [{"text": "second"}]}
+
+    server._emit_queue_update("sid", session)
+    server._emit_queue_update(None, session)  # no addressee, no frame
+
+    assert events == [("queue.updated", "sid",
+                       {"steering": [], "follow_up": ["first", "second"], "live_steered": 0})]
+
+
 def test_drained_turn_adopts_the_replaced_row_and_writes_no_duplicate(monkeypatch, tmp_path):
     """Four active rows after the whole flow (uA, aA, uB, aB): the drained turn adopted the
     re-placed row instead of appending a fifth."""

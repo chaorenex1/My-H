@@ -63,13 +63,45 @@ async def test_resume_display_projection_matches_main(tmp_path, monkeypatch):
     texts = json.dumps(shown)
     assert 'CONTEXT COMPACTION' not in texts and 'END OF CONTEXT SUMMARY' not in texts
     assert 'OUT-OF-BAND' not in texts
-    steer = [m for m in shown if m.get('display_kind') == 'steer']
+    steer = [m for m in shown if m.get('synthetic_kind') == 'steer']
     assert [m['text'].strip() for m in steer] == ['focus on the numbers']
+    assert steer[0]['live_steered'] is True
+    assert 'display_kind' not in steer[0] and 'display_metadata' not in steer[0]
     tool = next(m for m in shown if m['role'] == 'tool')
     assert (tool['name'], tool['context']) == ('read_file', 'notes.txt')
     # The raw rows stay for rewind targeting (content + row_id).
     assert all('row_id' in m for m in result['messages'])
     assert result['message_count'] == len(result['messages'])
+
+
+@pytest.mark.asyncio
+async def test_resume_projects_tool_content_only_on_request(tmp_path, monkeypatch):
+    db, native = await _native(tmp_path, monkeypatch)
+    _seed(db)
+    base = {'session_id': 'old-tui', 'display_projection': True}
+    default = (await native.dispatch({'id': 1, 'method': 'session.resume', 'params': base}))['result']
+    tool = next(m for m in default['display_messages'] if m['role'] == 'tool')
+    assert 'content' not in tool  # read_file: today's whitelist, no opt-in
+    full = (await native.dispatch({'id': 2, 'method': 'session.resume',
+                                   'params': {**base, 'include_tool_content': 'full'}}))['result']
+    tool = next(m for m in full['display_messages'] if m['role'] == 'tool')
+    assert tool['content'] == 'file body'
+    assert tool['row_id']  # ADR-10 D4: the durable result row is addressable
+
+
+@pytest.mark.asyncio
+async def test_resume_projects_compaction_only_on_request(tmp_path, monkeypatch):
+    db, native = await _native(tmp_path, monkeypatch)
+    _seed(db)
+    base = {'session_id': 'old-tui', 'display_projection': True}
+    default = (await native.dispatch({'id': 1, 'method': 'session.resume', 'params': base}))['result']
+    assert not any(m['role'] == 'compaction_summary' for m in default['display_messages'])
+    shown = (await native.dispatch({'id': 2, 'method': 'session.resume',
+                                    'params': {**base, 'include_compaction': True}}))['result']
+    summary = next(m for m in shown['display_messages'] if m['role'] == 'compaction_summary')
+    assert summary['text'].startswith('User Messages')
+    assert 'tokens_before' not in summary  # ADR-5 P1 supplies the stamp
+    assert summary['row_id']
 
 
 @pytest.mark.asyncio

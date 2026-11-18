@@ -423,6 +423,10 @@ def _broadcast_watched_changes(now: float | None = None) -> None:
         _change_broadcast_at[event] = now
         with contextlib.suppress(Exception):
             _broadcast_global_event(event, payload_fn())
+            if event == "skills.changed":
+                # The slash catalog is profile-scoped and built on demand: signal the refetch, do not
+                # ship the catalog through a watcher frame.
+                _broadcast_global_event("commands.changed", {})
 
 
 _skin_watcher_started = False

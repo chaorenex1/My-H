@@ -94,6 +94,67 @@ def test_interrupt_exit_reason_names_the_system_issuer(tool_interrupt_reason, ex
     assert (verdict.action, verdict.interrupted, verdict._turn_exit_reason) == ("break", True, expected)
 
 
+def test_begin_iteration_delivers_a_pending_ttsr_reminder_before_the_retry():
+    class _Coordinator:
+        def __init__(self) -> None:
+            self.delivered = 0
+
+        def has_pending_rewind(self) -> bool:
+            return True
+
+        def deliver_rewind(self, _agent, messages) -> bool:
+            self.delivered += 1
+            messages.append({"role": "custom", "custom_type": "ttsr-injection"})
+            return True
+
+        def drop_pending_rewind(self) -> None:
+            raise AssertionError("a live retry must not drop its reminder")
+
+    budget = SimpleNamespace(consume=lambda: True)
+    agent = SimpleNamespace(
+        _drain_pending_redirect=lambda: None, _checkpoint_mgr=SimpleNamespace(new_turn=lambda: None),
+        _interrupt_requested=False, iteration_budget=budget, _budget_grace_call=False,
+        _touch_activity=lambda *_a: None, _api_call_count=0, _current_turn_id="t",
+        ttsr_coordinator=_Coordinator(), persisted=0,
+    )
+    agent._persist_session = lambda *_a, **_k: setattr(agent, "persisted", agent.persisted + 1)
+    messages: list[dict] = []
+    verdict = begin_iteration(
+        agent, messages=messages, conversation_history=[], original_user_message="hi",
+        api_call_count=0, interrupted=False, _turn_exit_reason="unknown",
+    )
+    assert verdict.action == "fallthrough"
+    assert agent.ttsr_coordinator.delivered == 1
+    assert messages == [{"role": "custom", "custom_type": "ttsr-injection"}]
+    assert agent.persisted == 1
+
+
+def test_ttsr_restart_refunds_and_delivers_the_reminder_at_the_limit():
+    """ADR-6 D11: a stream rewind refunds the iteration; the cap delivers the pending reminder
+    (the published ``ttsr.triggered`` must not lack its injection) and ends the turn."""
+    class _Coordinator:
+        def __init__(self) -> None:
+            self.delivered = 0
+
+        def deliver_rewind(self, _agent, _messages) -> bool:
+            self.delivered += 1
+            return True
+
+    agent = _agent()
+    agent.ttsr_coordinator = _Coordinator()
+    agent._persist_session = lambda *_a, **_k: None
+
+    restart_count, verdicts = 0, []
+    while len(verdicts) < MAX_RETRIES + 3 and (not verdicts or verdicts[-1].action != "break"):
+        verdicts.append(_apply(agent, "restart_with_ttsr_messages", restart_count))
+        restart_count = verdicts[-1].restart_count
+
+    assert [v.action for v in verdicts] == ["continue"] * MAX_RETRIES + ["break"]
+    assert agent.iteration_budget.refunds == MAX_RETRIES
+    assert verdicts[-1]._turn_exit_reason == "ttsr_restart_limit_exceeded"
+    assert agent.ttsr_coordinator.delivered == 1
+
+
 @pytest.mark.parametrize("flag", RESTART_FLAGS)
 def test_response_between_restarts_resets_the_bound(flag):
     """#128000: the user answering clarify cards / sending follow-ups while the model works

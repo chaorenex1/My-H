@@ -16,7 +16,7 @@ from pydantic import Field
 from .base import JsonValue, Params, Result, WireEnum
 from .common import OpenModel, ProfileParams, SessionParams, SubagentStatus
 from .config_free_tier_control import ModelOptionProvider
-from .registry import method
+from .registry import canonical_method, method
 
 # ── completions / paste / model keys (methods_complete) ───────────────────────────────────────
 
@@ -658,7 +658,13 @@ method("session.foreign.import", params=SessionForeignIdParams, result=SessionFo
 
 
 class SubagentSnapshot(Result):
-    """``methods_subagents._SUBAGENT_SNAPSHOT_FIELDS`` projection of one live child record."""
+    """``methods_subagents._SUBAGENT_SNAPSHOT_FIELDS`` projection of one live child record.
+
+    ``agent`` is the child's derived role, never the live agent object. ``description`` / ``task`` /
+    ``assignment`` all carry the delegation goal under the name each client asks for. ``progress``
+    is the live counter triple and is ``None`` until the child has one. ``session_file`` stays
+    ``None`` while no helper maps a child's session id to a transcript path, and
+    ``parent_tool_call_id`` only when the child carries that attribute."""
 
     subagent_id: str
     parent_id: str | None = None
@@ -673,6 +679,15 @@ class SubagentSnapshot(Result):
     accepting_steer: bool | None = None
     #: The child's own stored session (``session.transcript`` reads it by ``subagent_id``); None until it has one.
     child_session_id: str | None = None
+    index: int | None = None  # the child's task_index in its delegation batch
+    agent: str | None = None  # child role ("leaf" / "orchestrator")
+    description: str | None = None
+    task: str | None = None
+    assignment: str | None = None
+    session_file: str | None = None
+    last_update: float | None = None  # epoch of the last progress stamp
+    progress: dict[str, JsonValue] | None = None  # {tool_count, last_tool, status}
+    parent_tool_call_id: str | None = None
 
 
 class FailedDelegation(Result):
@@ -687,11 +702,42 @@ class FailedDelegation(Result):
     completed_at: float | None = None
 
 
+class SubagentDefinitionConfig(Result):
+    """The dynamic ``agent_config`` row for one agent (``None`` = inherit the definition)."""
+
+    model: str | None = None
+    provider: str | None = None
+    advisor: bool | None = None
+    prewalk: bool | None = None
+    thinking: str | None = None
+    pattern: str | None = None
+    prompt_path: str | None = None
+
+
+class SubagentDefinition(Result):
+    """One statically discovered named agent (project / profile / installation scan). The flat
+    ``model``/``provider``/``thinking`` are the DEFINITION's frontmatter; ``config`` is the dynamic
+    row that overrides it."""
+
+    agent_id: str
+    name: str
+    source: str = ""
+    scope: str = "custom"  # project | profile | installation | custom
+    enabled: bool | None = None
+    model: str | None = None
+    provider: str | None = None
+    thinking: str | None = None
+    prompt_path: str | None = None
+    config: SubagentDefinitionConfig = Field(default_factory=SubagentDefinitionConfig)
+
+
 class SubagentListResult(Result):
-    """``delegations``: recently failed async delegation tasks for the session (durable store), newest first."""
+    """``delegations``: recently failed async delegation tasks for the session (durable store), newest first.
+    ``agents``: the static agent definitions scoped around this session and their dynamic config."""
 
     subagents: list[SubagentSnapshot] = Field(default_factory=list)
     delegations: list[FailedDelegation] = Field(default_factory=list)
+    agents: list[SubagentDefinition] = Field(default_factory=list)
 
 
 method("subagent.list", params=SessionParams, result=SubagentListResult,
@@ -720,6 +766,7 @@ class SubagentIdParams(SessionParams):
 class SubagentInterruptResult(Result):
     found: bool
     subagent_id: str
+    cancelled: bool = False  # alias of ``found``: the interrupt was accepted for a live child
 
 
 method("subagent.interrupt", params=SubagentIdParams, result=SubagentInterruptResult,
@@ -727,13 +774,53 @@ method("subagent.interrupt", params=SubagentIdParams, result=SubagentInterruptRe
 
 
 class SubagentTailResult(Result):
-    """``available`` is false while the child has no live transcript yet (or it was cleaned up)."""
+    """``available`` is false while the child has no live transcript yet (or it was cleaned up).
+    ``from_byte`` / ``next_byte`` bracket the bytes this reply read, so a client can resume after
+    ``next_byte``; ``session_file`` is the transcript the offsets refer to."""
 
     subagent_id: str
     available: bool = False
     text: str = ""
     truncated: bool = False
+    session_file: str | None = None
+    from_byte: int = 0
+    next_byte: int = 0
 
 
 method("subagent.tail", params=SubagentIdParams, result=SubagentTailResult,
        doc="Last 16KB of an owned child's live transcript.")
+
+
+class SubagentConfigParams(ProfileParams):
+    """Per-agent custom configuration stored in the profile's state.db (not config.yaml):
+    model/provider, advisor/prewalk toggles, reasoning effort and pattern. ``session_id`` resolves
+    the running-directory scope (its policy cwd); ``source`` pins a scope explicitly (the roster
+    file path). Omitted fields keep their stored value."""
+
+    subagent_id: str
+    session_id: str | None = None
+    source: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    prewalk: bool | None = None
+    advisor: bool | None = None
+    thinking: str | None = None
+    pattern: str | None = None
+    prompt_path: str | None = None
+
+
+class SubagentConfigResult(Result):
+    subagent_id: str
+    source: str = ""
+    model: str | None = None
+    provider: str | None = None
+    prewalk: bool | None = None
+    advisor: bool | None = None
+    thinking: str | None = None
+    pattern: str | None = None
+    prompt_path: str | None = None
+    updated_at: float | None = None
+
+
+canonical_method("subagent.config", params=SubagentConfigParams, result=SubagentConfigResult,
+                 doc="Read or update one agent role's custom configuration (profile state.db).")

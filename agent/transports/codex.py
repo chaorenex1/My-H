@@ -740,14 +740,15 @@ class ResponsesApiTransport(ProviderTransport):
         is_xai_responses: bool — xAI/Grok backend profile_reasoning: dict | None — the claiming profile's
         ``reasoning_payload`` (sent verbatim on ``responses_profile_reasoning`` endpoints)
         """
-        from agent.prompt_builder import DEFAULT_AGENT_IDENTITY
-
+        
         instructions = params.get("instructions", "")
         payload_messages = messages
         if not instructions and messages and messages[0].get("role") == "system":
             instructions = str(messages[0].get("content") or "").strip()
             payload_messages = messages[1:]
-        instructions = instructions or DEFAULT_AGENT_IDENTITY
+        if not instructions:
+            from agent.prompts.renderer import render_identity
+            instructions = render_identity()
 
         from agent.codex_responses_adapter import responses_endpoint_quirks
 

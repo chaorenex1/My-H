@@ -44,8 +44,10 @@ from agent.inline_tool_executors import (
     emit_terminal_post_tool_call,
     tool_hook_ids,
 )
-from agent.message_metadata import stamp_data_use
-from agent.session_persistence import sync_rewritten_tool_rows
+from agent.message_metadata import stamp_data_use, stamp_tool_output_artifacts, stamp_tool_result_metadata
+from tools.tool_output_archive import archive_tool_result
+from agent.pause_gate import park as park_frozen
+from agent.session_persistence import record_persisted_path_for_stub, sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
     _is_destructive_command,
@@ -53,16 +55,13 @@ from agent.tool_dispatch_helpers import (
     _multimodal_text_summary,
     _append_subdir_hint_to_multimodal,
     _context_pruned_argument_paths,
+    _persisted_model_result,
     _plan_tool_batch_segments,
     make_tool_result_message,
 )
 from tools.terminal_tool_lifecycle import get_active_env
 from tools.thread_context import propagate_context_to_thread
-from tools.tool_result_storage import (
-    maybe_persist_tool_result,
-    enforce_turn_budget,
-    extract_persisted_path,
-)
+from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_budget
 from tools.budget_config import BudgetConfig, DEFAULT_BUDGET, budget_for_context_window
 from hermes_cli.observability.shared_metrics_efficiency import note_tool_result, record_tool_batch
 
@@ -79,20 +78,6 @@ _pairing_tool_call_id = coalesce_tool_call_id  # canonical id used by the persis
 
 def _tc_name(tool_call: Any) -> str:
     return getattr(getattr(tool_call, "function", None), "name", "") or "tool"
-
-
-def _record_persisted_path_for_stub(agent, tool_call_id: str, function_result) -> None:
-    """Record the spillover file path so a later result-reference stub can't dangle (best-effort)."""
-    try:
-        candidates = [function_result] if isinstance(function_result, str) else [
-            function_result.get("text_summary"),
-            *(p.get("text") for p in function_result.get("content") or [] if isinstance(p, dict)),
-        ] if _is_multimodal_tool_result(function_result) else []
-        path = next((p for p in map(extract_persisted_path, candidates) if p), None)
-        if path:
-            agent._tool_guardrails.record_persisted_result(tool_call_id, path)
-    except Exception as exc:
-        logger.debug("persisted-path record for result stub failed: %s", exc)
 
 
 def _ensure_file_checkpoint(agent, function_name: str, function_args: dict, effective_task_id: str) -> None:
@@ -742,9 +727,9 @@ def _dispatch_authorized_once(
     from agent.terminal_approval_batch import prepare_current_terminal
     prepare_current_terminal(ref)
     _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
-    from agent.tool_progress_relay import bound_tool_progress
+    from agent.tool_progress_relay import bound_tool_relay
     from tools.connectors.data_use import collect_data_use
-    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
+    with bound_tool_relay(agent, ref.name, ref.call_id), collect_data_use() as data_use:
         try:
             return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
         finally:
@@ -1114,10 +1099,14 @@ def _commit_tool_result(
             logging.debug("Tool result (%d chars): %s", len(_log_result), _log_result)
 
     agent._current_tool = None
+    # ADR-2 D11: any completed tool result after a reminder proves progress; both success and
+    # failure clear the latch so the next stop may remind again.
+    agent._todo_reminder_awaiting_progress = False
     _status_suffix = " (error)" if is_error else ""
     agent._touch_activity(f"tool completed: {function_name} ({tool_duration:.1f}s){_status_suffix}")
 
-    persisted_result = function_result
+    # ADR-4 D11.1: display-only fields ride the live event and display_metadata, never the model copy.
+    persisted_result = _persisted_model_result(function_name, function_result)
     if _is_multimodal_tool_result(persisted_result):
         persisted_result = _persist_multimodal_text_parts(
             persisted_result, function_name, tool_call_id, get_active_env(effective_task_id), budget,
@@ -1130,8 +1119,12 @@ def _commit_tool_result(
             env=get_active_env(effective_task_id),
             config=budget,
         )
-    _record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
+    record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
     note_tool_result(agent, function_name, tool_call_id, function_result, persisted_result)
+    # ADR-16 D3: host-side archive of what the model saw (and the pre-truncation text when
+    # there is one). Best-effort and outside the model's recovery path.
+    archive_metadata = None if blocked else archive_tool_result(
+        agent, function_name, function_result, persisted_result)
 
     subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
     if subdir_hints:
@@ -1145,9 +1138,10 @@ def _commit_tool_result(
     # string-safe fallback so a rejected image result never poisons history.
     _tool_content = agent._tool_result_content_for_active_model(function_name, persisted_result)
     tool_message = make_tool_result_message(function_name, _tool_content, tool_call_id, effect_disposition=effect_disposition)
-    # A plugin that went live during this turn, and late LSP verdicts on this session's earlier edits,
-    # are told on this new row (outside any untrusted-data wrapper).
-    lsp_deferred.forward_to_agent(agent)
+    # Plugin go-live rides this row; ADR-9 late verdicts get their own row after it (flush below).
+    custom_late_rows = lsp_deferred.custom_rows_enabled()
+    if not custom_late_rows:
+        lsp_deferred.forward_to_agent(agent)
     plugin_live_notes.attach_to_tool_message(agent, tool_message)
     # Prepare presentation data before the append. The emitting completion callback
     # stays below the durability fence; raw tool/model content remains unchanged.
@@ -1156,14 +1150,20 @@ def _commit_tool_result(
         try:
             display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
             metadata = prepare_metadata(tool_call_id, function_name, display_args, function_result)
-            if metadata:
-                tool_message["display_metadata"] = metadata
         except Exception as callback_error:
             logging.debug("Tool result metadata callback error: %s", callback_error)
+            metadata = None
+        # ADR-10 D5: the callback owns the preview (inline_diff); the executor owns the verdict.
+        # Merge, never replace: display_metadata is durable and other keys may already ride it.
+        stamp_tool_result_metadata(tool_message, metadata, is_error=is_error)
     stamp_data_use(tool_message, sorted(data_use))
+    if archive_metadata:
+        stamp_tool_output_artifacts(tool_message, archive_metadata)
     messages.append(tool_message)
     if not _flush_session_db_after_tool_progress(agent, messages, stage=f"tool result {function_name}"):
         return None
+    if custom_late_rows and (late_notes := lsp_deferred.pop_for_agent(agent)):
+        lsp_deferred.deliver_notes(agent, messages, late_notes)
 
     if not blocked:
         # ``tool.completed`` projects AFTER the canonical append + flush so resume can
@@ -1215,11 +1215,19 @@ def _finalize_tool_batch(agent, messages: list, effective_task_id: str, num_tool
         return
     batch = messages[-num_tools:]
     contents_before = [message.get("content") for message in batch]
+    result_ids = {
+        str(message.get("tool_call_id")) for message in batch
+        if isinstance(message, dict) and message.get("role") == "tool"
+    }
     enforce_turn_budget(batch, env=get_active_env(effective_task_id), config=budget)
     plugin_live_notes.keep_after_turn_budget(agent, batch)
     sync_rewritten_tool_rows(agent, batch, contents_before)
     record_tool_batch(agent, batch, contents_before)
     agent._apply_pending_steer_to_tool_results(messages, num_tools)
+    coordinator = getattr(agent, "ttsr_coordinator", None)
+    if coordinator is not None:
+        # ADR-6 D5: the hidden reminder is the batch's last row, after any /steer marker.
+        coordinator.after_tool_batch(agent, messages, num_tools, result_ids=result_ids)
 
 
 def _tool_progress_enabled(agent) -> bool:
@@ -1581,6 +1589,9 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     segmented dispatcher owns turn-end work)."""
     tool_calls = assistant_message.tool_calls
     num_tools = len(tool_calls)
+    # A frozen session must not start new side effects: park here, outside every worker/start-order
+    # slot, so a Stop during the pause leaves no in-flight call holding a deadline.
+    park_frozen(agent, boundary=f"tool batch ({num_tools} concurrent)")
     _tool_budget = _budget_for_agent(agent)  # once per turn, not per result
 
     if agent._interrupt_requested:
@@ -1883,6 +1894,9 @@ def _execute_tool_calls_sequential(agent, assistant_message, messages: list, eff
     owns turn-end work)."""
     _tool_budget = _budget_for_agent(agent)  # once per turn, not per result
     tool_calls = assistant_message.tool_calls
+    # Batch boundary, never inside a call: an in-flight tool runs to completion before the freeze
+    # takes effect, and a Stop during the pause is handled by the per-tool check below.
+    park_frozen(agent, boundary=f"tool batch ({len(tool_calls)} sequential)")
 
     for i, tool_call in enumerate(tool_calls, 1):
         if getattr(agent, "_incremental_persistence_failed", False):

@@ -322,6 +322,85 @@ class TestSkillsList:
         assert result["skills"][0]["name"] == "knowledge-brain"
 
 
+class TestSkillsListQuery:
+    def test_query_keeps_only_lexical_matches(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(skills_tool_module, "_skills_search_setting", lambda: "off")
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "deploy-helper", body="Deploy the service safely.")
+            _make_skill(tmp_path, "invoice-helper", body="Reconcile invoices.")
+            result = json.loads(skills_list(query="deploy"))
+
+        assert result["count"] == 1
+        assert [s["name"] for s in result["skills"]] == ["deploy-helper"]
+
+    def test_judge_pick_ranks_first_even_without_lexical_match(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(skills_tool_module, "_skills_search_setting", lambda: "auto")
+        monkeypatch.setattr("agent.judgment.choice.judgment_route_available", lambda: True)
+
+        def fake_ask(queries, candidates, *, question_file, purpose, **_kwargs):
+            assert queries == ["release the service"]
+            assert question_file == "skill-choice"
+            assert purpose == "skill_choice"
+            return {0: ["invoice-helper"]}
+
+        monkeypatch.setattr("agent.judgment.choice.ask_choices", fake_ask)
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "deploy-helper")
+            _make_skill(tmp_path, "invoice-helper")
+            result = json.loads(skills_list(query="release the service"))
+
+        assert [s["name"] for s in result["skills"]] == ["invoice-helper"]
+
+    def test_repeated_query_is_served_from_the_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(skills_tool_module, "_skills_search_setting", lambda: "off")
+        calls: list[int] = []
+        real = skills_tool_module._skill_lexical_order
+        monkeypatch.setattr(
+            skills_tool_module, "_skill_lexical_order",
+            lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs))
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "deploy-helper", body="Deploy the service safely.")
+            first = skills_list(query="deploy")
+            second = skills_list(query="deploy")
+
+        assert first == second
+        assert len(calls) == 1, "the second identical query must come from the cache"
+
+    def test_search_cache_is_bounded_lru(self, monkeypatch):
+        from hermes_cache import EvictionPolicy
+        from tools import skills_tool
+
+        seen: dict = {}
+
+        class FakeNamespace:
+            pass
+
+        class FakeCache:
+            def namespace(self, name, **kwargs):
+                seen["name"] = name
+                seen.update(kwargs)
+                return FakeNamespace()
+
+        monkeypatch.setattr("hermes_cache.get_cache", lambda: FakeCache())
+        assert isinstance(skills_tool._skill_search_cache(), FakeNamespace)
+        assert seen == {
+            "name": "skill_choice",
+            "default_ttl": skills_tool._SKILL_SEARCH_TTL_S,
+            "max_entries": 10,
+            "eviction": EvictionPolicy.LRU,
+        }
+
+    def test_query_without_match_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(skills_tool_module, "_skills_search_setting", lambda: "off")
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            _make_skill(tmp_path, "deploy-helper")
+            result = json.loads(skills_list(query="zzzznomatch"))
+
+        assert result["success"] is True
+        assert result["skills"] == []
+        assert result["count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # skill_view
 # ---------------------------------------------------------------------------

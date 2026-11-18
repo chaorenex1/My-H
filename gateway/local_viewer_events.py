@@ -12,8 +12,11 @@ previous values; ``restore`` puts them back when the turn's ``run_conversation``
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import time
+import uuid
 
 from gateway import local_desktop_ui
 
@@ -21,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Attributes ``wire`` may overwrite on the cached agent for one local-viewer turn.
 _TURN_ATTRS = ("tool_gen_callback", "_print_fn", "thinking_callback", "reaction_callback", "reasoning_callback",
-               *local_desktop_ui.CALLBACK_ATTRS)
+               "transcript_notice_callback", "tool_result_metadata_callback", *local_desktop_ui.CALLBACK_ATTRS)
 # Private key in ``wire``'s return value: the desktop window bridge registration ``restore`` releases.
 _DESKTOP_UI_TOKEN = "__desktop_ui_token__"
 # MoA facade progress (agent/moa_loop._RELAY_EVENTS) -> the payload tui_gateway/tool_progress emits.
@@ -37,9 +40,36 @@ def wire(turn, agent) -> dict:
     publish = turn._publish_execution
     agent.tool_gen_callback = lambda name: publish("tool.generating", {"name": str(name or "")})
 
+    # ADR-10 D7: agent.print and status.update both describe the same lifecycle line. The gateway
+    # emits ONE deduped transcript.notice for it and keeps both legacy events for old clients.
+    last_notice: list = []
+    prefix = str(getattr(agent, "log_prefix", "") or "")
+
+    def notice(level: str, text: str, source: str) -> None:
+        now = time.monotonic()
+        if last_notice and last_notice[0] == (level, text) and now - last_notice[1] < 1.5:
+            return
+        last_notice[:] = [(level, text), now]
+        publish("transcript.notice", {"id": uuid.uuid4().hex, "level": level,
+                                      "text": text, "source": source})
+
     def print_fn(*args, **kwargs):
-        publish("agent.print", {"text": str(kwargs.get("sep", " ")).join(str(a) for a in args)})
+        text = str(kwargs.get("sep", " ")).join(str(a) for a in args)
+        publish("agent.print", {"text": text})
+        if getattr(agent, "_in_status_line", False):
+            return  # the status path emits this line's notice (with its real kind)
+        notice("info", text[len(prefix):] if prefix and text.startswith(prefix) else text, "agent")
     agent._print_fn = print_fn
+    agent._in_status_line = False
+
+    def transcript_notice(kind: str, message: str, *, origin: str = "") -> None:
+        level = "error" if "error" in kind.lower() else "warning" if "warn" in kind.lower() else "info"
+        notice(level, str(message), "agent")
+    agent.transcript_notice_callback = transcript_notice
+    # ADR-10 D5: the canonical turn computes the edit diff BEFORE the result row is appended, so
+    # resume and the live tool.complete event share one display-safe preview.
+    agent.tool_result_metadata_callback = lambda call_id, name, args, result: prepare_fields(
+        turn, call_id, name, args, result)
     # Kawaii spinner text ("" clears it) and hearts; neither changes what the provider is sent.
     agent.thinking_callback = lambda text: publish("thinking.delta", {"text": str(text or "")})
     agent.reaction_callback = lambda kind: publish("reaction", {"kind": str(kind or "")})
@@ -127,7 +157,39 @@ def _publish_subagent(turn, event_type, payload) -> None:
 
 
 def publish_progress(turn, event_type, name, preview, kwargs) -> None:
-    """``subagent.*``, ``reasoning.available`` and the MoA facade events from the agent's progress callback; a classic CLI renders MoA references whatever its reasoning display (main's ``_on_tool_progress``), while other viewers get them only with reasoning shown."""
+    """``subagent.*``, ``reasoning.available``, the MoA facade events and ADR-4 D14 eval frames.
+
+    A classic CLI renders MoA references whatever its reasoning display (main's
+    ``_on_tool_progress``), while other viewers get them only with reasoning shown.
+    """
+    if event_type == "tool.output":
+        # ADR-4 D14: a running eval cell's own output, not progress chrome — never gated on
+        # the viewer's reasoning/tool-progress switches and never appended twice.
+        text = kwargs.get("text")
+        if isinstance(text, str) and text:
+            turn._publish_execution("tool.output", {
+                "tool_id": str(kwargs.get("tool_call_id") or ""),
+                "name": str(name or ""),
+                "cell_index": int(kwargs.get("cell_index") or 0),
+                "stream": str(kwargs.get("stream") or "stdout"),
+                "text": text,
+            })
+        return
+    if event_type == "tool.complete" and kwargs.get("job_id"):
+        # A background eval job re-settles the card it started (same tool id + job id).
+        from gateway.session_tool_events import bounded_result
+        is_error = bool(kwargs.get("is_error"))
+        payload = {
+            "tool_id": str(kwargs.get("tool_call_id") or ""),
+            "name": str(name or ""),
+            "result": bounded_result(kwargs.get("result"), is_error),
+            "is_error": is_error,
+            "job_id": str(kwargs.get("job_id")),
+        }
+        if isinstance(kwargs.get("duration_s"), (int, float)):
+            payload["duration_s"] = float(kwargs["duration_s"])
+        turn._publish_execution("tool.complete", payload)
+        return
     if isinstance(event_type, str) and event_type.startswith("subagent."):
         if event_type == "subagent.text":
             return
@@ -185,6 +247,38 @@ def publish_control_if_changed(turn) -> None:
     turn._schedule(republish(), "session.control.update after a tool")
 
 
+def publish_ttsr_triggered(turn, rules) -> bool:
+    """ADR-6 D3: the one live frame a matched rule produces. Payloads carry only what the
+    ``TtsrNotificationComponent`` renders (name/description/content), never local rule paths."""
+    return turn._publish_execution("ttsr.triggered", {"rules": list(rules)})
+
+
+def publish_compaction_summary(publish, payload) -> bool:
+    """ADR-5 D4: one committed compaction boundary for a local viewer.
+
+    ``publish`` is ``TurnRunner._publish_execution`` for an in-turn commit, or a stream adapter
+    (``event_type, payload``) for the canonical ``session.mutate{compress}`` path.
+    """
+    return publish("compaction.summary", payload)
+
+
+def publish_message_rewind(turn) -> bool:
+    """ADR-6 D13: the live draft was discarded; the retry streams in a fresh segment.
+
+    Advances the turn's ``TurnSegments`` cursor first so the next delta carries the new segment
+    and cannot dedupe against the dead one. Only omp-ui local-viewer turns install a TTSR
+    coordinator, so this emitter never fires for other clients.
+    """
+    payload: dict = {"reason": "ttsr"}
+    owner = getattr(turn, "_approval_owner", None)
+    segments_for = getattr(turn, "_segments_for", None)
+    if owner is not None and callable(segments_for):
+        segments = segments_for(owner[2])
+        if segments is not None:
+            payload.update(segments.rewind())
+    return turn._publish_execution("message.rewind", payload)
+
+
 def note_tool_start(turn, call_id, tool_name=None, args=None) -> None:
     """Monotonic start time of one call (``tool.complete.duration_s``) and, for a write-capable
     tool, the before-state of its local files: the agent fires the start callback BEFORE the tool
@@ -204,6 +298,66 @@ def note_tool_start(turn, call_id, tool_name=None, args=None) -> None:
         turn.__dict__.setdefault("_local_edit_snapshots", {})[key] = snapshot
 
 
+def _render_edit_diff(tool_name, args, result, snapshot) -> str | None:
+    """The rendered edit diff main's CLI printed after a write, ``None`` when there is none."""
+    rendered: list[str] = []
+    try:
+        from agent.display import render_edit_diff_with_delta
+        render_edit_diff_with_delta(tool_name, result, function_args=args if isinstance(args, dict) else {},
+                                    snapshot=snapshot, print_fn=rendered.append)
+    except Exception:  # health: allow BLE001 -- display-only preview, as main's CLI _on_tool_complete
+        logger.debug("Edit diff preview failed for %s", tool_name, exc_info=True)
+        rendered = []
+    return "\n".join(rendered) if rendered else None
+
+
+def _session_id(turn) -> str:
+    owner = getattr(turn, "_approval_owner", None)
+    if isinstance(owner, (tuple, list)) and len(owner) > 1:
+        return str(owner[1])
+    return str(getattr(getattr(turn, "_ctx", None), "session_id", "") or "")
+
+
+def _eval_card_fields(turn, call_id, tool_name, args, result) -> dict:
+    """ADR-4 D11.1/D13: the eval card's display block and generated titles.
+
+    These are display-only and belong at the top level of ``display_metadata``: the durable
+    row ("``display_metadata.display``/``card_title``/``cell_titles``") and the live
+    ``tool.complete`` event both read them there.
+    """
+    body = None
+    if tool_name == "execute_code" and isinstance(result, str):
+        with contextlib.suppress(Exception):
+            body = json.loads(result)
+    cards: dict = {}
+    display = body.get("display") if isinstance(body, dict) else None
+    if isinstance(display, dict) and display:
+        cards["display"] = display
+    from tools.eval_card_metadata import card_titles
+    with contextlib.suppress(Exception):
+        titles = card_titles(_session_id(turn), call_id, tool_name, args, result=body)
+        for key in ("card_title", "cell_titles"):
+            if titles.get(key):
+                cards[key] = titles[key]
+    return cards
+
+
+def prepare_fields(turn, call_id, tool_name, args, result) -> dict:
+    """ADR-10 D5: result metadata computed BEFORE the tool row is appended.
+
+    The executor merges its own ``is_error`` verdict in; ``complete_fields`` reuses the diff and
+    the eval card fields so the live ``tool.complete`` event and the durable row agree and the
+    snapshot is popped once.
+    """
+    key = str(call_id or "")
+    snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
+    diff = _render_edit_diff(tool_name, args, result, snapshot)
+    turn.__dict__.setdefault("_local_tool_diffs", {})[key] = diff
+    cards = _eval_card_fields(turn, call_id, tool_name, args, result)
+    turn.__dict__.setdefault("_local_tool_cards", {})[key] = cards
+    return {"tool_result_metadata": {"inline_diff": diff} if diff else {}, **cards}
+
+
 def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is_error=False) -> dict:
     """``duration_s``, ``inline_diff`` (the rendered edit diff main's CLI printed after a write,
     ``None`` when there is none), ``image_path`` (the local image the call produced or looked at,
@@ -214,18 +368,20 @@ def complete_fields(turn, call_id, tool_name=None, args=None, result=None, *, is
     fields = {"duration_s": (time.monotonic() - started) if started is not None else None}
     if tool_name is None:
         return fields
-    snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
-    rendered: list[str] = []
-    try:
-        from agent.display import render_edit_diff_with_delta
-        render_edit_diff_with_delta(tool_name, result, function_args=args if isinstance(args, dict) else {},
-                                    snapshot=snapshot, print_fn=rendered.append)
-    except Exception:  # health: allow BLE001 -- display-only preview, as main's CLI _on_tool_complete
-        logger.debug("Edit diff preview failed for %s", tool_name, exc_info=True)
-        rendered = []
-    fields["inline_diff"] = "\n".join(rendered) if rendered else None
+    diffs = turn.__dict__.setdefault("_local_tool_diffs", {})
+    if key in diffs:
+        # prepare_fields already rendered it for the row; do not re-run the (popped) snapshot.
+        diff = diffs.pop(key)
+    else:
+        snapshot = turn.__dict__.setdefault("_local_edit_snapshots", {}).pop(key, None)
+        diff = _render_edit_diff(tool_name, args, result, snapshot)
+    fields["inline_diff"] = diff
     from agent.terminal_image import tool_image_path
     fields["image_path"] = tool_image_path(tool_name, args, result, is_error=is_error)
+    # ADR-4 D11.1/D13: the durable row and this live frame carry the same eval card fields.
+    cards = turn.__dict__.setdefault("_local_tool_cards", {}).pop(key, None)
+    if isinstance(cards, dict):
+        fields.update(cards)
     todo = todo_state(tool_name, result)
     if todo is not None:
         fields.update(todo)

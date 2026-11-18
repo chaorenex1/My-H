@@ -125,7 +125,7 @@ else:
     sys.path.insert(0, str(SRC))
     from run_agent import AIAgent
     from agent.system_prompt import build_system_prompt, build_system_prompt_parts
-    from agent.prompt_builder import build_context_files_prompt
+    from agent.prompts.project_context import render_project_context
     from agent.prompt_caching import build_prompt_cache_plan
 
     agent = AIAgent(
@@ -145,7 +145,7 @@ else:
     parts = build_system_prompt_parts(agent)
     full = build_system_prompt(agent)
     repeated = build_system_prompt(agent)
-    project = build_context_files_prompt(cwd=os.getcwd(), skip_soul=True)
+    project = render_project_context(provider=agent.provider, model=agent.model, cwd=os.getcwd())
     plan = build_prompt_cache_plan(
         [
             {"role": "system", "content": full},
@@ -177,7 +177,7 @@ else:
         "cwd_line_offset": full.index("Current working directory:"),
         "workspace_offset": full.find("Workspace (snapshot at session start"),
         "root_offset": full.find("- Root:"),
-        "project_context_offset": full.index("# Project Context"),
+        "project_context_offset": full.index("<project-context>"),
         "stable_has_cwd": os.getcwd() in parts["stable"],
         "stable_sha256": digest(parts["stable"]),
         "prompt_sha256": digest(full),

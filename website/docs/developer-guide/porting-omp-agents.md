@@ -44,29 +44,26 @@ are out of scope. Users can still drop equivalents into `~/.hermes/agents/`.
 | Need | `agent` | `delegate_task` |
 |---|---|---|
 | Stable persona name | Definition file on disk | Ad-hoc prompt per call |
-| Durable per-persona history | `sessions/<agent>/<session>.jsonl` | Isolated child per call |
+| Durable per-persona history | One JSONL per agent session in the parent bundle: `sessions/<project>/<timestamp>_<parent-id>/<topic>.jsonl`, plus `<topic>.md` / `<topic>_ast.json` at settle | Isolated child per call |
 | Definition-owned tools/model | Yes, after this design | Route per task via delegation backend |
 | Anonymous fan-out | Awkward | Native batch `tasks[]` |
 | Worktree isolation | Yes — `worktree: true` at call time or in the definition | Yes (`delegation` worktree config) |
 
 Use `agent` for a named reviewer/scout persona. Use `delegate_task` for one-off parallel work or
 structured `output_schema`. Both isolate worktrees now: `agent` builds one off the caller's
-project on request and reuses `tools/subagent_worktree.py` (inspect, prune, archive); the
-read-only definitions still omit the `agents` toolset, so no persona can fan out from inside its
-tree.
+project on request and reuses `tools/subagent_worktree.py` (inspect, prune, archive); a
+definition whose allowlist omits the `agents` toolset cannot fan out from inside its tree.
 
 ## Agent definition contract
 
-Today `tools/agent_tool.py` only stripped a leading YAML block and discarded it. The shipped
-contract lives in `tools/agent_definitions.py` (parsing, validation, merge) and is enforced by
-`agent_tool._validate` before any run or background dispatch:
+`tools/agent_definitions.py` parses, validates and merges the front matter; `agent_tool._validate`
+enforces the result before any run or background dispatch:
 
 ```markdown
 ---
 name: scout
 description: "Read-only codebase reconnaissance and fact gathering."
-toolsets: [file, search, web, session_search]
-read_only: true
+enable_tools: [read_file, judgrg, terminal, web_search]
 max_iterations: 100
 background: true
 skip_memory: true
@@ -85,14 +82,27 @@ Rules:
 
 - Reuse `agent.skill_utils.parse_frontmatter`; do not add a second YAML parser.
 - Unknown keys are ignored with one warning (forward compatibility).
-- Field types are validated. A malformed `toolsets`, `model`, `reasoning_effort` or
-  `max_iterations` is a tool error, never a silent fallback.
+- Field types are validated. A malformed `toolsets`, `enable_tools`, `model`, `reasoning_effort`
+  or `max_iterations` is a tool error, never a silent fallback.
 - `toolsets` must contain only names accepted by `toolsets.validate_toolset`. An unknown name
   fails the run; it must **never** degrade to "all tools".
-- `read_only` is enforced by `agent.agent_run.apply_read_only`, which drops
-  `write_file`, `patch`, `agent` and `skill_manage`. It is **not a sandbox**: `terminal` can still
+- `enable_tools` is an explicit allowlist of **registered tool names**. It replaces `toolsets`
+  entirely, and an unknown name fails the call. This is the successor to the old `read_only`
+  switch: list the read/search tools a persona may use instead of stripping mutators from a
+  broad surface. It is **not a sandbox**: a definition that also lists `terminal` can still
   mutate the workspace.
-- The body becomes the system prompt exactly as today; the frontmatter is never sent to the model.
+- The body becomes the system prompt; the frontmatter is never sent to the model.
+
+### Ported omp front-matter switches
+
+These omp definition fields are now part of the Hermes contract:
+
+| Field | Hermes behavior |
+|---|---|
+| `structured` | `false` suppresses the definition's `output` contract; `true`/omitted keeps it. An agent without `output` has no parent-session schema in Hermes. |
+| `autoloadSkills` | Loads the named skills from the parent session and injects them as hidden blocks before the first child prompt; unknown/disabled names are skipped with a warning. |
+| `advisor` | Opts the spawned named-agent session into the native advisor (`advisor.enabled` is still the global gate); accepts `true` or a model selector, and `@role:level` / `provider:model:level` carries the effort into the reviewer call. The Agent Hub's stored `agent_config.advisor` toggle overrides frontmatter. |
+| `read-summarize` / `readSummarize` | Per-run override of `read.summarize.enabled`; whole-file reads only. tree-sitter is primary, with Python `ast` / a declaration heuristic as fallback. Summaries stay in memory for the run and settle writes them into `<topic>_ast.json`, read back with `agent_out(mode="ast_summary")`. |
 
 ### Precedence
 
@@ -102,7 +112,7 @@ Per call, highest first:
 2. definition frontmatter
 3. host default
 
-`read_only`, `max_iterations` and `reasoning_effort` are **definition-owned** in v1 and are not
+`enable_tools`, `max_iterations` and `reasoning_effort` are **definition-owned** and are not
 added to the model-facing `agent` schema. This keeps the tool schema, and therefore the cached
 prompt prefix, unchanged.
 
@@ -147,8 +157,8 @@ explicit in the docs and visible in logs/payloads.
      means every tool.
    - `_flag`: default `None` for keys the definition may own.
 4. Validate metadata once in `_validate`, before any run or background dispatch.
-5. Pass `max_iterations` and `read_only` into `_params` and `agent_run.run` (both already exist
-   on the runner).
+5. Pass `max_iterations` and `enable_tools` into `_params` and `agent_run.run` (the run validates
+   unknown registered names and treats the allowlist as the exact surface).
 6. Add `reasoning_effort` to `agent_run.run`:
 
 ```python
@@ -163,10 +173,12 @@ if reasoning_effort:
 level must be applied after that resolution, so a definition's level wins over
 `config.yaml`, while a caller-pinned model still resolves its own route and credentials.
 
-7. Keep the `agent` tool schema fixed for the definition-owned knobs. `read_only`,
-   `max_iterations` and `reasoning_effort` stay out of the model-facing schema; the model cannot
-   silently weaken `read_only` or raise `max_iterations`. The one additive argument is
-   `worktree` (below), which a caller may request but cannot use to weaken a definition.
+7. Keep `max_iterations` and `reasoning_effort` definition-owned and out of the model-facing
+   schema, so the model cannot raise the budget or change effort. `enable_tools`/`tools` is
+   accepted from the caller *and* the definition: an explicit allowlist replaces the toolset
+   selection entirely and is validated against registered names, so it can narrow the surface but
+   never widen it to "all tools". The other additive argument is `worktree` (below), which a
+   caller may request but cannot use to weaken a definition.
 
 ### Worktree isolation (`agent`)
 
@@ -243,45 +255,48 @@ from tools rather than deleted.
 
 | omp construct | Hermes expression |
 |---|---|
-| `yield` | Named agents have no hidden completion tool. The final assistant message is the handoff; state that contract in the body. When the source declares a structured `output`, route the call through `delegate_task` with `output_schema` instead of inventing a `yield` call. |
-| `agent://<id>` | Named-agent output: `read_file` on its `<HERMES_HOME>/sessions/<agent>/<session>.jsonl`. `delegate_task` output arrives in the completion, not a URI. If only a session id is known, use `session_search(session_id=...)`. A follow-up goes to `agent(agent_name=<same>, user_prompts=...)` in the same parent session; there is no peer-messaging URI. |
-| `history://<id>` | Main conversations live in SessionDB: `session_search(session_id=...)`, optionally with `around_message_id`/`window` to scroll. Named `agent` runs have a JSONL transcript; read that with `read_file` only when the path is known. |
+| `yield` | Named runs get a **per-run** `yield` tool (`tools/agent_yield_tool.py`), injected through `extra_tools`; it never enters the global toolset. `final=true` ends the turn with `data` (validated against the definition `output` schema with one bounded retry), `final=false` records an incremental section, `error` ends with the error while keeping already-yielded data. A run that never yields keeps the final assistant message as the handoff. `agent_sessions.yield_tool: false` suppresses the tool as a rollout switch. |
+| `agent://<id>` | Read with `agent_out(agent_session_id=…\|name=…\|subject=…, mode="history"\|"artifact"\|"ast_summary"\|"inbox"\|"context_files")`; write with `agent_message(to=…, content=…, reply_to=…)`. A named session is addressed by its id, its profile-unique short `name`, or its unique `subject`. `delegate_task` output arrives in the completion, not a URI. There is no implicit continuation: a follow-up passes `continue_from=<agent_session_id>` to `agent`, which starts a new session seeded from that transcript. `agent://` itself is not a URI scheme. |
+| `history://<id>` | Main conversations live in SessionDB: `session_search(session_id=...)`, optionally with `around_message_id`/`window` to scroll. A named `agent` run's transcript is read with `agent_out(mode="history")`; `read_file` is only for a path the caller already holds. |
 | `proc://<id>` | `process_manage(action="poll"\|"log"\|"wait"\|"kill", session_id=...)`; start work with `terminal(background=true, notify_on_complete=true)`. A delegation is not a process: turn interrupts only reach foreground children, and only `/stop` ends background delegations. |
 | `local://<name>` | A project-relative path written with `write_file` and read with `read_file`; hand it to a child through `context_files` (or a path in `context`). |
-| `artifact://<id>` | Hermes has no artifact URI. Resolve the concrete file and `read_file` it; for session-scoped content use `session_search(session_id=...)`. Do not assume `sessions/<agent>/<session>.jsonl` is the universal path. |
+| `artifact://<id>` | Hermes has no artifact URI. `agent_out(mode="artifact")` reads the run's settle files: `kind=report` (`<topic>.md`, verbatim), `kind=tool` (`<topic>/<step>.<tool>.log` plus the `-original.log` when truncated) or `kind=all` (the file list); `ast_summary` reads `<topic>_ast.json`. The identity carries `bundle_dir`/`report_path`/`ast_summary_path`. Do not assume a `sessions/<agent>/<agent_session_id>.jsonl` path from an id. |
 | `task` batch JSON | `delegate_task(tasks=[{goal, context, group?}])`; `solutionSpace` has no field, so fold it into `goal`/`context` text. |
-| plan mode | A read-only definition (`read_only: true` plus read-only `toolsets`) and a two-phase prompt: investigate first, report before acting. Enforce with the tool surface, not prose. |
-| spawn controls (`spawns`, depth) | Grant the `agents` toolset for `agent(agent_name=...)` or the `delegation` toolset for `delegate_task`; recursion is capped at `MAX_DEPTH=3`. Rewrite omp's `spawns` frontmatter into the granted toolset, not a new frontmatter key. |
+| plan mode | An allowlist definition (read/search tools only) and a two-phase prompt: investigate first, report before acting. Enforce with the tool surface, not prose. |
+| spawn controls (`spawns`, depth) | `spawns` **is** a supported frontmatter key: `"*"`, a CSV, or a list of agent names; it caps nested `agent` calls (omitted: `*` only when the definition's own `toolsets` names `agents`/`delegation`). Recursion is additionally capped at `MAX_DEPTH=3`. Grant the `agents` toolset for `agent(...)` or the `delegation` toolset for `delegate_task`. |
 
 Additional rules:
 
 - Tool names: `read` → `read_file`, `write` → `write_file`, `edit` → `patch`,
-  `grep`/`glob`/`ls`/`find` → `search_files`, `bash` → `terminal`, `todo_write` → `todo_list`,
-  `web_search` stays. `ast_grep` has no direct Hermes tool: express the step as `search_files`
-  for locating plus `patch` for the edit, and document that exact AST semantics need an
-  extension rather than leaving the omp tool name in prose. `sonic` must not retain omp
-  mutation names (`write`, `edit`, `todo_write`).
+  `find` → `judgrg`, `bash`/`grep`/`glob`/`ast_grep`/`ast_edit` → `terminal`, `lsp` → `code_intel`,
+  `todo_write` → `todo_list`, `web_search` stays. `enable_tools` accepts registered tool names
+  only, so every search is declared as `terminal`; the **body** names the binary the agent runs —
+  `rg`, `rg --files` for the glob equivalent, and `ast-grep` for structural search. `search_files`
+  is the structured fallback (files-only, counts, paging), never a preset's declared surface.
+  `sonic` must not retain omp mutation names (`write`, `edit`, `todo_write`).
 - Never leave an omp URI or pseudo-tool in a definition. Replace it with the concrete tool call
-  (`read_file`, `write_file`, `search_files`, `session_search`, `process_manage`, `delegate_task`).
+  (`read_file`, `write_file`, `terminal` running `rg`, `session_search`, `process_manage`,
+  `delegate_task`).
 - State the output contract in the body: concise findings first, evidence as `path:line`,
   explicit uncertainty, no process replay. Background delivery truncates the notification at
   2000 characters and points at the transcript, so lead with the result.
-- Read-only definitions must not claim they can edit or run tests. The prompt and the toolset must
-  agree.
+- Read-only definitions must not claim they can edit or run tests. Their prompt carries the
+  constraint: `enable_tools` narrows what the agent may call, but `terminal` — present for
+  search — can still mutate, so a read-only persona says so in prose.
 - Where Hermes has no exact primitive, port the observable behavior by composition and document
   the fidelity gap; do not silently drop the instruction. `seance` is the worked example:
   `session_search` + `read_file` replace transcript forking and artifact scoping.
 
 ## Per-agent specifications
 
-| File | Toolsets | `read_only` | `max_iterations` | Spawning | Notes |
-|---|---|---|---:|---|---|
-| `skills/agent-presets/agents/init.md` | `file, search, terminal, delegation` | no | 200 | yes (`delegation`) | Surveys the repository, fans out four read-only `delegate_task` slices, and writes `AGENTS.md` at the project root. |
-| `skills/agent-presets/agents/scout.md` | `file, search, web, session_search` | yes | 100 | no | No terminal. `read_only` removes the mutating file tools; the remaining surface is read/search. |
-| `skills/agent-presets/agents/sonic.md` | `file, terminal, search, web` | no | 100 | no | Mechanical edits are allowed; no `agents` toolset, so it cannot fan out. |
-| `skills/agent-presets/agents/reviewer.md` | `file, terminal, search, web, session_search` | yes | 150 | no | `terminal` lets it run tests; `read_only` blocks `write_file`/`patch`, but terminal is trusted to follow the no-edit instruction. |
-| `skills/agent-presets/agents/security-reviewer.md` | `file, search, web, session_search` | yes | 150 | no | No terminal: findings are static-analysis evidence, never executed exploit code. |
-| `skills/agent-presets/agents/seance.md` | `file, search, session_search` | yes | 100 | no | Emulates transcript consultation with `session_search` + `read_file`; no context fork or source-artifact scope. |
+| File | Surface | Spawning | Notes |
+|---|---|---|---|
+| `skills/agent-presets/agents/init.md` | `toolsets: file, search, terminal, agents` | yes (`agents`) | Surveys the repository, fans out four read-only `delegate_task` slices, and writes `AGENTS.md` at the project root. |
+| `skills/agent-presets/agents/scout.md` | `enable_tools: read_file, judgrg, terminal, web_search` | no | No write tools; `terminal` exists for `rg`, and the prompt keeps the run read-only. |
+| `skills/agent-presets/agents/sonic.md` | default host toolsets | no | Mechanical edits are allowed; no `agents` toolset, so it cannot fan out. |
+| `skills/agent-presets/agents/reviewer.md` | `enable_tools: read_file, judgrg, terminal, code_intel, web_search` | `spawns: [scout]` | `terminal` lets it run tests; no `patch`/`write_file`, so edits stay out of reach. |
+| `skills/agent-presets/agents/security-reviewer.md` | `enable_tools: read_file, judgrg, terminal, code_intel` | no | No write tools; `terminal` runs `rg`/`ast-grep`, and findings are static-analysis evidence, never executed exploit code. |
+| `skills/agent-presets/agents/seance.md` | `enable_tools: read_file, terminal` | no | Emulates transcript consultation with `session_search` + `read_file`/`rg`; no context fork or source-artifact scope. |
 
 `init` is ported from omp's `agents/init.md` command prompt rather than its bundled agent set: it
 ships so a fresh repository can bootstrap its own `AGENTS.md`. It holds `delegation` for the
@@ -290,9 +305,9 @@ lands in the project instead of a branch.
 
 `seance` has no `sourceSession` argument. The caller supplies the source session id (or an
 `@session:<profile>/<id>` link) in `user_prompts` or `context`; the definition then calls
-`session_search(session_id=..., profile=...)` to read it. Use `read_file` only when the caller
-also supplies a concrete JSONL path; never construct `sessions/<agent>/<session>.jsonl` from an
-id and assume it exists.
+`session_search(session_id=..., profile=...)` to read it. Use `agent_out` when the caller has an
+`agent_session_id` or subject, and `read_file` only when it also supplies a concrete JSONL path;
+never construct a transcript path from an id and assume it exists — read the row's `transcript_path` or use `agent_out(mode="history")`.
 
 Suggested model policy: leave `model` empty in the shipped files so each profile uses its own
 route. Operators can pin a cheaper model for `sonic` or a stronger one for `security-reviewer` by
@@ -310,17 +325,17 @@ Suggested effort: `scout: low`, `sonic: low`, `reviewer: high`, `security-review
   semaphore. omp's `task.maxConcurrency: 32` is not reproduced; Hermes' global pool is the limit.
 - `max_iterations` in the definition replaces `agent_run.MAX_ITERATIONS` (10). Without it, a
   reviewer would stop far too early.
-- Recursion is capped by `agent_tool.MAX_DEPTH = 3`. Read-only definitions omit the `agents`
-  toolset, so recursion is impossible for them regardless.
+- Recursion is capped by `agent_tool.MAX_DEPTH = 3`. An `enable_tools` allowlist that omits
+  `agent` excludes nesting regardless of `spawns`.
 
 ## Security boundaries
 
-- `read_only` is a tool-surface policy, not a sandbox. Treat any definition that includes
+- `enable_tools` is a tool-surface policy, not a sandbox. Treat any definition that includes
   `terminal` as able to mutate the workspace. `security-reviewer` and `scout` therefore exclude
-  `terminal`.
-- `reviewer` includes `terminal` only to run tests; its prompt forbids edits and its file-mutating
-  tools are stripped. If a stricter guarantee is required, remove `terminal` and accept static
-  review only.
+  `terminal` from their allowlists.
+- `reviewer` includes `terminal` only to run tests; its prompt forbids edits and no
+  `patch`/`write_file` is in its allowlist. If a stricter guarantee is required, remove `terminal`
+  and accept static review only.
 - Definitions run with the caller's profile scope and credentials. They must not read secrets or
   write outside the project; the existing `context_files` root checks remain in force.
 - Invalid `toolsets` fail closed. An unknown name must not fall back to all tools.
@@ -342,8 +357,8 @@ Add to `tests/tools/`:
    - Invalid `toolsets`/`model`/`reasoning_effort` return `tool_error` and construct no agent.
 2. **Behavior through the registry**
    Use the existing `_FakeAgent` fixture and `registry.dispatch("agent", ...)`.
-   Assert `system_message`, `enabled_toolsets`, `max_iterations`, `read_only` and skip flags reach
-   `agent_run.run`. Do not assert prompt prose.
+   Assert `system_message`, `enabled_toolsets`, `max_iterations`, `enable_tools` and skip flags
+   reach `agent_run.run`. Do not assert prompt prose.
 3. **Definition trust**
    - A project definition containing a context-scope threat pattern is blocked and the next
      candidate wins; if none exists, the call returns `tool_error` naming the blocked file.
@@ -352,10 +367,12 @@ Add to `tests/tools/`:
      `system_prompt_source`.
 4. **Bundled definition validation**
    Discover `_install_roots()[1]/agent-presets/agents/*.md`; for each, parse the frontmatter
-   and assert: prompt body non-empty, every toolset validates, `read_only` definitions do not
-   include the `agents` toolset, and `max_iterations` is a positive integer.
+   and assert: prompt body non-empty, every allowlist entry is a registered tool, every toolset
+   validates, definitions without `agent` in their surface do not fan out, and any
+   `max_iterations` is a positive integer.
 5. **Packaging**
-   Assert `_install_roots()[1]/agent-presets/agents` exposes the six files, and that
+   Assert `_install_roots()[1]/agent-presets/agents` exposes the seven shipped definitions
+   (`task`, `init`, `scout`, `reviewer`, `security-reviewer`, `seance`, `sonic`), and that
    `_prompt_dirs` finds the pack through the one-level `skills/*/agents/` scan.
 
 Run:
@@ -381,15 +398,25 @@ HERMES_HOME="$(mktemp -d)" hermes -q \
    lowest risk). Smoke both.
 3. Ship `reviewer` and `sonic`.
 4. Add operator docs to `website/docs/user-guide/features/agent-tool.md`: frontmatter fields,
-   precedence, shadowing, and the `read_only`/terminal caveat.
+   precedence, shadowing, and the `enable_tools`/terminal caveat.
 5. Ship `seance` with its composed `session_search` + `read_file` workflow and an explicit note
    that transcript forking and source-artifact scoping are not reproduced.
+
+**As implemented (2026-11):** `scripts/build_bundled_agents.py` converts the `docs/bundled-agents`
+snapshots into `skills/agent-presets/agents/` (same-name override of the skill pack). Discovery
+order is project → profile → bundled (or `HERMES_BUNDLED_AGENTS`) → `skills/*/agents` → plugins;
+`init` stays in the skill pack. The shipped set is `task, init, scout, reviewer,
+security-reviewer, seance, sonic`. `yield`, `agent_message`, `spawn:@<name>` and
+`agent_out(mode="context_files")` are wired with the rollout switches described in
+`agent-tool.md`.
 
 ## Non-goals
 
 - No new delegation backend or `task` role.
-- No new hidden `yield` tool. The explicit-completion contract is the final assistant message;
-  structured payloads use `delegate_task` with `output_schema`.
+- `yield` is a **per-run** completion tool for named agents, not a global/core tool and not a new
+  delegation backend. A run without it keeps the final assistant message contract.
+- Peer messaging between named sessions is `agent_message` (inbox/steer/wake), not an IRC bus or
+  an `agent://` URI.
 - No multi-model fallback list in a definition; Hermes host fallback still applies.
 - Worktree isolation reuses `tools/subagent_worktree.py`; there is no second worktree
   implementation and no per-agent concurrency of its own.
@@ -402,7 +429,7 @@ HERMES_HOME="$(mktemp -d)" hermes -q \
 | Risk | Mitigation |
 |---|---|
 | Prompt still names omp tools | Rewrite every prompt against Hermes tool names; review each definition manually. |
-| `read_only` mistaken for a sandbox | Document the terminal caveat; exclude terminal from scout/security-reviewer. |
+| `enable_tools` mistaken for a sandbox | Document the terminal caveat; exclude terminal from scout/security-reviewer. |
 | Reviewer output truncated in notifications | Lead with findings; use `background: false` when full text is needed; transcript path is always available. |
 | Invalid toolset silently broadens access | Fail closed in `_validate`; add a regression test. |
 | A cloned repo shadows `security-reviewer` or `reviewer` | Scan definition bodies with `scope="context"`, block project findings, warn on shadowing, expose the winning source. Fixed names remain a convenience, not a trust boundary. |

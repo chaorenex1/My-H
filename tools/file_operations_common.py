@@ -51,6 +51,9 @@ class WriteResult:
     # LSP semantic diagnostics, kept separate from ``lint`` (syntax) so the model
     # reads the two as independent signals. None when LSP is off/inapplicable.
     lsp_diagnostics: Optional[str] = None
+    # Semgrep dangerous-pattern findings for the bytes this edit wrote (ADR-9 D8),
+    # also separate from ``lint`` and from ``lsp_diagnostics`` (the latter stays LSP-only).
+    semgrep_diagnostics: Optional[str] = None
     error: Optional[str] = None
     warning: Optional[str] = None
 
@@ -68,6 +71,7 @@ class PatchResult:
     files_deleted: list[str] = field(default_factory=list)
     lint: Optional[dict[str, Any]] = None
     lsp_diagnostics: Optional[str] = None  # see WriteResult.lsp_diagnostics
+    semgrep_diagnostics: Optional[str] = None  # see WriteResult.semgrep_diagnostics
     error: Optional[str] = None
     # Success-shaped no-op: the edit was already present, nothing written; ``note`` says why.
     no_change: bool = False
@@ -80,7 +84,7 @@ class PatchResult:
     # Emission order is part of the output contract.
     _DICT_FIELDS: ClassVar[tuple] = (
         "diff", "files_modified", "files_created", "files_deleted",
-        "lint", "lsp_diagnostics", "error",
+        "lint", "lsp_diagnostics", "semgrep_diagnostics", "error",
     )
 
     def to_dict(self) -> dict:
@@ -209,6 +213,20 @@ _FENCE_MARKER_RE = re.compile(r"'?\x07?__HERMES_FENCE_[A-Za-z0-9]+__\x07?'?")
 
 _CONFLICT_OPEN = re.compile(r"^\s*\d+\|<<<<<<< ", re.MULTILINE)
 _CONFLICT_CLOSE = re.compile(r"^\s*\d+\|>>>>>>> ", re.MULTILINE)
+_RAW_CONFLICT_OPEN = re.compile(r"^<<<<<<< ", re.MULTILINE)
+_RAW_CONFLICT_CLOSE = re.compile(r"^>>>>>>> ", re.MULTILINE)
+
+
+def count_raw_conflict_blocks(content: str) -> int:
+    """Unresolved conflict pairs in RAW file text (no ``LINE|`` prefix).
+
+    Used before a structural summary can elide the conflict region; the formatted-page
+    variant is :func:`count_conflict_blocks`.
+    """
+    if not content:
+        return 0
+    opens = len(_RAW_CONFLICT_OPEN.findall(content))
+    return min(opens, len(_RAW_CONFLICT_CLOSE.findall(content))) if opens else 0
 
 
 def count_conflict_blocks(formatted_content: str) -> int:

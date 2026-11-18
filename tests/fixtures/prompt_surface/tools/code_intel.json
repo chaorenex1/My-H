@@ -1,0 +1,124 @@
+{
+  "description": "Query the persistent code graph for this repository.",
+  "name": "code_intel",
+  "parameters": {
+    "properties": {
+      "action": {
+        "description": "Query to run.",
+        "enum": [
+          "status",
+          "find_symbols",
+          "get_symbol",
+          "get_definition",
+          "get_references",
+          "callers",
+          "callees",
+          "path",
+          "types",
+          "implementations",
+          "dependencies",
+          "cycles",
+          "impact",
+          "tests",
+          "coverage",
+          "diagnostics",
+          "changes",
+          "context"
+        ],
+        "type": "string"
+      },
+      "budget_tokens": {
+        "maximum": 100000,
+        "minimum": 200,
+        "type": "integer"
+      },
+      "depth": {
+        "maximum": 5,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "from_revision": {
+        "type": "string"
+      },
+      "include": {
+        "description": "Explicit impact categories.",
+        "items": {
+          "enum": [
+            "callers",
+            "references",
+            "dependencies",
+            "implementations",
+            "tests"
+          ],
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "kind": {
+        "description": "Symbol kind filter.",
+        "type": "string"
+      },
+      "language": {
+        "description": "Language id filter.",
+        "type": "string"
+      },
+      "limit": {
+        "maximum": 200,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "module_id": {
+        "description": "Module qualified name (or its CodeModule node id).",
+        "type": "string"
+      },
+      "name": {
+        "description": "Exact symbol name for find_symbols.",
+        "type": "string"
+      },
+      "path": {
+        "description": "File path filter for diagnostics.",
+        "type": "string"
+      },
+      "policy": {
+        "description": "Confidence policy; impact defaults to strict.",
+        "enum": [
+          "strict",
+          "balanced",
+          "exploratory"
+        ],
+        "type": "string"
+      },
+      "root": {
+        "description": "Repository path (default: cwd).",
+        "type": "string"
+      },
+      "rule": {
+        "description": "Diagnostic rule id filter.",
+        "type": "string"
+      },
+      "severity": {
+        "description": "Diagnostic severity filter.",
+        "type": "string"
+      },
+      "source_id": {
+        "description": "Path source symbol id.",
+        "type": "string"
+      },
+      "symbol_id": {
+        "description": "Symbol id (sym_...).",
+        "type": "string"
+      },
+      "target_id": {
+        "description": "Path target symbol id.",
+        "type": "string"
+      },
+      "to_revision": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "type": "object"
+  }
+}

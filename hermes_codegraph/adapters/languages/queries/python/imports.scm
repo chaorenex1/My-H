@@ -1,0 +1,7 @@
+(import_statement name: (dotted_name) @import.module)
+(import_statement name: (aliased_import name: (dotted_name) @import.module alias: (identifier) @import.alias))
+(import_from_statement module_name: (dotted_name) @import.module)
+(import_from_statement module_name: (relative_import) @import.module)
+(import_from_statement name: (dotted_name) @import.name)
+(import_from_statement name: (aliased_import name: (dotted_name) @import.name alias: (identifier) @import.alias))
+(import_from_statement (wildcard_import) @import.name)

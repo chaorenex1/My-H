@@ -29,7 +29,7 @@ def test_scan_runs_on_a_daemon_thread_with_the_1800s_deadline(monkeypatch):
 @pytest.fixture
 def _startup(monkeypatch, tmp_path):
     """Drive the real ``start_gateway`` with a fake runner; record the order of startup milestones."""
-    from agent import memory_provider
+    import hermes_threading
     from gateway import lifecycle_ledger as ledger
     from gateway import run_api, run_runtime
 
@@ -69,7 +69,7 @@ def _startup(monkeypatch, tmp_path):
                 self.session_store.close_all_db_handles()
                 self._session_db.close()
 
-    real_spawn = memory_provider.spawn_context_thread
+    real_spawn = hermes_threading.spawn_context_thread
 
     def spawn(target, *, name, **kwargs):
         if name == "state-db-integrity-check":
@@ -92,7 +92,7 @@ def _startup(monkeypatch, tmp_path):
     monkeypatch.setattr("gateway.run.GatewayRunner", _LiveRunner)
     monkeypatch.setattr(ledger, "record_startup", lambda: state["evidence"])
     monkeypatch.setattr(ledger, "run_deferred_integrity_check", scan)
-    monkeypatch.setattr(memory_provider, "spawn_context_thread", spawn)
+    monkeypatch.setattr(hermes_threading, "spawn_context_thread", spawn)
     monkeypatch.setattr(run_bootstrap, "_start_gateway_start_cron_and_housekeeping",
                         lambda runner: (threading.Event(), None, None, None))
     monkeypatch.setattr(run_bootstrap, "_start_gateway_shutdown_tail", AsyncMock(return_value=True))

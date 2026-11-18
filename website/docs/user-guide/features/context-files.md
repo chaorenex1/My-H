@@ -123,14 +123,15 @@ This means your existing Cursor conventions automatically apply when using Herme
 
 ### At startup (system prompt)
 
-Context files are loaded by `build_context_files_prompt()` in `agent/prompt_builder.py`:
+Context files are loaded by `render_project_context()` in `agent/prompts/project_context.py`, which shares the discovery walk with the legacy `build_context_files_prompt()`:
 
-1. **Scan working directory** — checks for `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules` (first match wins)
+1. **Scan working directory** — checks for `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules` (first match wins). `AGENTS.md` contributes one file per directory from the git root down to the working directory.
 2. **Content is read** — each file is read as UTF-8 text
-3. **Security scan** — content is checked for prompt injection patterns
-4. **Truncation** — files exceeding the character cap are head/tail truncated (70% head, 20% tail, with a marker in the middle). The cap is an explicit `context_file_max_chars` from config.yaml when set; otherwise it scales dynamically with the model's context window (floor 20,000 chars, ceiling 500,000)
-5. **Assembly** — all sections are combined under a `# Project Context` header
-6. **Injection** — the assembled content is added to the system prompt
+3. **Deduplication** — a file whose paragraphs are fully repeated by a nearer file is dropped
+4. **Security scan** — content is checked for prompt injection patterns
+5. **Truncation** — files exceeding the character cap are head/tail truncated (70% head, 20% tail, with a marker in the middle). The cap is an explicit `context_file_max_chars` from config.yaml when set; otherwise it scales dynamically with the model's context window (floor 20,000 chars, ceiling 500,000)
+6. **Assembly** — each file becomes a `<file path="…">` row inside `<repo-rules>`, wrapped by `<project-context>` next to the `<workstation>` block
+7. **Injection** — the assembled block is added to the system prompt's context tier
 
 ### During the session (progressive discovery)
 
@@ -143,25 +144,19 @@ Context files are loaded by `build_context_files_prompt()` in `agent/prompt_buil
 5. **Truncation** — capped at 32,000 characters per file (a fixed preview cap; `context_file_max_chars` and the model's context window do not change it). An oversized hint keeps its head/tail marker pointing at the full file and is logged, but does not raise the chat truncation warning that startup context files do
 6. **Injection** — appended to the tool result, so the model sees it in context naturally
 
-The final prompt section looks roughly like:
+A discovered hint is appended to the tool result, not to the system prompt:
 
 ```text
-# Project Context
-
-The following project context files have been loaded and should be followed:
-
 ## AGENTS.md
 
-[Your AGENTS.md content here]
+[The discovered file's content]
 
 ## .cursorrules
 
-[Your .cursorrules content here]
-
-[Your SOUL.md content here]
+[The discovered file's content]
 ```
 
-Notice that SOUL content is inserted directly, without extra wrapper text.
+SOUL.md is identity-owned: it appears at startup only, never in these per-turn hints.
 
 ## Security: Prompt Injection Protection
 

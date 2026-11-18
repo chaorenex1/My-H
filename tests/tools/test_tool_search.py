@@ -921,3 +921,194 @@ class TestDeferredCallSchemaProbe:
         }, calls)
 
         assert validate_deferred_call_args(name, {"payload": {"anything": True}}) is None
+
+
+# ---------------------------------------------------------------------------
+# Judgment rerank (ADR-18 D9)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchJudgment:
+
+    @staticmethod
+    def _entries(count: int):
+        from tools.tool_search_catalog import CatalogEntry
+
+        return [
+            CatalogEntry(name=f"tool_{index}", description=f"desc {index}",
+                         schema={}, source="mcp", source_name="mcp-test")
+            for index in range(count)
+        ]
+
+    def test_judge_path_returns_picks_and_keeps_threshold(self, monkeypatch):
+        from tools import tool_search
+
+        seen = {}
+
+        def fake_ask(queries, candidates, *, question_file, purpose, max_questions):
+            seen.update(queries=queries, candidates=list(candidates),
+                        question_file=question_file, purpose=purpose,
+                        max_questions=max_questions)
+            return {0: ["tool_2"]}
+
+        monkeypatch.setattr("agent.judgment.choice.judgment_route_available", lambda: True)
+        monkeypatch.setattr("agent.judgment.choice.ask_choices", fake_ask)
+        cfg = tool_search.ToolSearchConfig.from_raw({"judge": "auto"})
+
+        assert tool_search._judge_tool_hits(["q"], [self._entries(9)], cfg) == {0: ["tool_2"]}
+        assert seen["question_file"] == "tool-choice"
+        assert seen["purpose"] == "tool_choice"
+        assert seen["max_questions"] == 3
+        assert tool_search._judge_tool_hits(["q"], [self._entries(3)], cfg) == {}
+
+    def test_judge_off_or_failure_keeps_bm25(self, monkeypatch):
+        from tools import tool_search
+
+        monkeypatch.setattr("agent.judgment.choice.judgment_route_available", lambda: True)
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("judge down")
+
+        monkeypatch.setattr("agent.judgment.choice.ask_choices", fail)
+        off = tool_search.ToolSearchConfig.from_raw({"judge": "off"})
+        auto = tool_search.ToolSearchConfig.from_raw({"judge": "auto"})
+
+        assert tool_search._judge_tool_hits(["q"], [self._entries(9)], off) == {}
+        assert tool_search._judge_tool_hits(["q"], [self._entries(9)], auto) == {}
+
+    def test_dispatch_moves_judged_pick_to_front(self, monkeypatch):
+        from tools import tool_search
+        from tools.registry import registry
+
+        name_a = "judge_probe_alpha_tool"
+        name_b = "judge_probe_beta_tool"
+        def_a = _td(name_a, "Alpha beta capability")
+        def_b = _td(name_b, "Beta alpha capability")
+        registry.register(
+            name=name_a, handler=lambda args, **kw: "{}",
+            schema=def_a, toolset="mcp-judge-probe-alpha")
+        registry.register(
+            name=name_b, handler=lambda args, **kw: "{}",
+            schema=def_b, toolset="mcp-judge-probe-beta")
+        defs = [def_a, def_b]
+
+        monkeypatch.setattr(tool_search, "_judge_tool_hits",
+                            lambda *args, **kwargs: {0: [name_b]})
+        cfg = tool_search.ToolSearchConfig.from_raw(
+            {"judge": "auto", "judge_min_candidates": 2})
+        payload = json.loads(tool_search.dispatch_tool_search(
+            {"queries": ["alpha beta"]}, current_tool_defs=defs, config=cfg))
+
+        matches = payload["results"][0]["matches"]
+        assert matches[0] == name_b
+        assert set(matches) == {name_a, name_b}
+
+    def test_repeated_search_is_served_from_the_cache(self, monkeypatch):
+        from tools import tool_search
+        from tools.registry import registry
+
+        name = "cache_probe_alpha_tool"
+        schema = _td(name, "Alpha cache capability")
+        registry.register(name=name, handler=lambda args, **kw: "{}",
+                          schema=schema, toolset="mcp-cache-probe")
+        calls: list[int] = []
+        real = tool_search.search_catalog
+        monkeypatch.setattr(
+            tool_search, "search_catalog",
+            lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs))
+        cfg = tool_search.ToolSearchConfig.from_raw({"judge": "off"})
+        first = tool_search.dispatch_tool_search(
+            {"queries": ["alpha"]}, current_tool_defs=[schema], config=cfg)
+        second = tool_search.dispatch_tool_search(
+            {"queries": ["alpha"]}, current_tool_defs=[schema], config=cfg)
+
+        assert first == second
+        assert len(calls) == 1, "the second identical query must come from the cache"
+
+    def test_search_cache_is_bounded_lru(self, monkeypatch):
+        from hermes_cache import EvictionPolicy
+        from tools import tool_search
+
+        seen: dict = {}
+
+        class FakeNamespace:
+            pass
+
+        class FakeCache:
+            def namespace(self, name, **kwargs):
+                seen["name"] = name
+                seen.update(kwargs)
+                return FakeNamespace()
+
+        monkeypatch.setattr("hermes_cache.get_cache", lambda: FakeCache())
+        assert isinstance(tool_search._tool_search_cache(), FakeNamespace)
+        assert seen == {
+            "name": "tool_choice",
+            "default_ttl": tool_search._TOOL_SEARCH_TTL_S,
+            "max_entries": 10,
+            "eviction": EvictionPolicy.LRU,
+        }
+
+    def test_default_config_recalls_enough_candidates_for_judgment(self, monkeypatch):
+        """The shipped limit (5) is below judge_min_candidates (8), so retrieval must fetch
+        the larger pool or judgment would never run (ADR-18 D9)."""
+        from tools import tool_search
+        from tools.registry import registry
+
+        names, defs = [], []
+        for index in range(10):
+            name = f"judge_recall_tool_{index}"
+            schema = _td(name, f"Capability probe variant {index}")
+            registry.register(
+                name=name, handler=lambda args, **kw: "{}",
+                schema=schema, toolset=f"mcp-judge-recall-{index}")
+            names.append(name)
+            defs.append(schema)
+
+        seen = {}
+
+        def fake_ask(queries, candidates, **_kwargs):
+            seen["candidates"] = [candidate for candidate, _desc in candidates]
+            return {0: [names[7]]}
+
+        monkeypatch.setattr("agent.judgment.choice.judgment_route_available", lambda: True)
+        monkeypatch.setattr("agent.judgment.choice.ask_choices", fake_ask)
+        cfg = tool_search.ToolSearchConfig.from_raw({})
+        payload = json.loads(tool_search.dispatch_tool_search(
+            {"queries": ["capability probe"]}, current_tool_defs=defs, config=cfg))
+
+        assert names[7] in seen["candidates"]
+        matches = payload["results"][0]["matches"]
+        assert matches[0] == names[7]
+        assert len(matches) == cfg.search_default_limit
+
+    def test_cross_query_pick_is_merged_not_discarded(self, monkeypatch):
+        """A judged pick from the shared union pool may come from another query's recall
+        slice; ADR-18 D9 merges it instead of filtering to the query's own BM25 hits."""
+        from tools import tool_search
+        from tools.registry import registry
+
+        defs, alpha, beta = [], [], []
+        for group, prefix in ((alpha, "alpha"), (beta, "beta")):
+            for index in range(5):
+                name = f"judge_{prefix}_tool_{index}"
+                schema = _td(name, f"{prefix} capability variant {index}")
+                registry.register(
+                    name=name, handler=lambda args, **kw: "{}",
+                    schema=schema, toolset=f"mcp-judge-{prefix}-{index}")
+                group.append(name)
+                defs.append(schema)
+
+        def fake_ask(queries, candidates, **_kwargs):
+            assert len([candidate for candidate, _desc in candidates]) >= 8
+            return {0: [beta[0]], 1: [alpha[0]]}
+
+        monkeypatch.setattr("agent.judgment.choice.judgment_route_available", lambda: True)
+        monkeypatch.setattr("agent.judgment.choice.ask_choices", fake_ask)
+        cfg = tool_search.ToolSearchConfig.from_raw({})
+        payload = json.loads(tool_search.dispatch_tool_search(
+            {"queries": ["alpha capability", "beta capability"]},
+            current_tool_defs=defs, config=cfg))
+
+        assert payload["results"][0]["matches"][0] == beta[0]
+        assert payload["results"][1]["matches"][0] == alpha[0]

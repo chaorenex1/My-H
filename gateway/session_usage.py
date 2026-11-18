@@ -8,9 +8,13 @@ call and at turn end of a local-viewer turn, and returned by the ``session.stats
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 _COUNTERS = (("input_tokens", "session_input_tokens"), ("output_tokens", "session_output_tokens"),
              ("cache_read_tokens", "session_cache_read_tokens"),
@@ -200,6 +204,10 @@ def publish_usage(turn, agent, *, record: bool = False) -> None:
             captured = execution_result.get()
             if captured is not None:
                 captured["session_usage"] = stats
+                # ADR-2 D1: message.complete's per-step usage (last response of the turn).
+                from agent.turn_usage import step_usage
+
+                captured["step_usage"] = step_usage(agent)
 
 
 _STORED_COUNTERS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
@@ -227,8 +235,38 @@ def snapshot_usage(authority, ref, agent) -> dict | None:
     return tui_usage(_stored_stats(row)) if row else None
 
 
+def _db_counters(db, session_id: str) -> dict:
+    """The ``session.stats`` counters only the stored row carries: role counts, cost, routed models.
+
+    Each read is guarded on its own so one absent column or table leaves just that field ``None``
+    instead of blanking the others; a counter read never fails the verb."""
+    counters: dict = {}
+    try:
+        counts = db.message_role_counts(session_id)
+        counters.update(user_messages=counts.get('user'), assistant_messages=counts.get('assistant'),
+                        tool_results=counts.get('tool'), total_messages=sum(counts.values()))
+    except Exception:
+        logger.debug('session.stats role counts unavailable for %s', session_id, exc_info=True)
+    try:
+        row = db.get_session(session_id) or {}
+        calls = row.get('tool_call_count')
+        counters['tool_calls'] = int(calls) if isinstance(calls, int) else None
+        cost = row.get('actual_cost_usd')
+        if cost is None:  # actual wins; an estimate is the fallback (main's exit summary order)
+            cost = row.get('estimated_cost_usd')
+        counters['cost_usd'] = float(cost) if isinstance(cost, (int, float)) else None
+    except Exception:
+        logger.debug('session.stats session row unavailable for %s', session_id, exc_info=True)
+    try:
+        counters['routed_models'] = db.session_model_call_counts(session_id)
+    except Exception:
+        logger.debug('session.stats routed models unavailable for %s', session_id, exc_info=True)
+    return counters
+
+
 async def stats(connection, ref, params):
-    """``session.stats {session_id}``: the same dict ``session.usage`` carries."""
+    """``session.stats {session_id}``: the same dict ``session.usage`` carries, plus the session's
+    stored role counts, cost and routed models."""
     from hermes_state_runtime import RuntimeStoreError
     if set(params) - {"session_id", "profile"}:
         raise RuntimeStoreError("invalid_params")
@@ -236,4 +274,20 @@ async def stats(connection, ref, params):
     agent = connection.authority.agent(ref)
     result = usage_stats(agent)
     result["compression_count"] = carried_compression_count(connection.authority.sessions.get(ref.session_id), agent)
+    result["session_id"] = ref.session_id
+    result["tokens"] = {"input": result["input_tokens"], "output": result["output_tokens"],
+                        "reasoning": result["reasoning_tokens"], "cache_read": result["cache_read_tokens"],
+                        "cache_write": result["cache_write_tokens"], "total": result["total_tokens"]}
+    used, length = result["context_tokens"] or 0, result["context_length"] or 0
+    result["context_usage"] = {"tokens": used, "context_window": result["context_length"],
+                               "percent": max(0, min(100, round(100 * used / length))) if length else 0}
+    # The stored fields ride the wire as null until (or unless) their guarded read lands.
+    result.update(cost_usd=None, user_messages=None, assistant_messages=None, tool_calls=None,
+                  tool_results=None, total_messages=None, routed_models=None)
+    db = getattr(connection.authority, "db", None)
+    if db is not None:
+        try:
+            result.update(await asyncio.to_thread(_db_counters, db, ref.session_id))
+        except Exception:
+            logger.debug('session.stats counters unavailable for %s', ref.session_id, exc_info=True)
     return result

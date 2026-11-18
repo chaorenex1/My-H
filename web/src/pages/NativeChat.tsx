@@ -1,5 +1,5 @@
 /**
- * Native chat: renders the gateway transcript directly (no PTY), so adviser cards,
+ * Native chat: renders the gateway transcript directly (no PTY), so advisor cards,
  * tool rows and approvals are React components instead of terminal glyphs.
  *
  * The socket speaks the same JSON-RPC dialect as the TUI (`GatewayClient`); history
@@ -150,7 +150,7 @@ export function NativeChat({ onExit }: { onExit?: () => void }) {
         setBusy(false);
         dispatch({ type: "event", event });
       }),
-      gw.on("message.adviser", (event) => dispatch({ type: "event", event })),
+      gw.on("message.advisor", (event) => dispatch({ type: "event", event })),
       gw.on("reasoning.delta", (event) => dispatch({ type: "event", event })),
       gw.on("tool.start", (event) => dispatch({ type: "event", event })),
       gw.on("tool.complete", (event) => dispatch({ type: "event", event })),
@@ -276,12 +276,12 @@ export function NativeChat({ onExit }: { onExit?: () => void }) {
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-6">
         {rows.length === 0 && (
           <div className="mx-auto mt-10 max-w-lg text-center text-sm text-muted-foreground">
-            Ask anything. Adviser reviews appear inline as cards, tools as collapsible rows.
+            Ask anything. Advisor reviews appear inline as cards, tools as collapsible rows.
           </div>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {rows.map((row) => {
-            if (row.kind === "adviser") {
+            if (row.kind === "advisor") {
               return (
                 <div
                   key={row.id}
@@ -291,9 +291,9 @@ export function NativeChat({ onExit }: { onExit?: () => void }) {
                   )}
                 >
                   <div className="mb-1 text-[11px] uppercase tracking-wide opacity-80">
-                    adviser · {row.severity}
+                    advisor · {row.severity}
                   </div>
-                  <Markdown content={row.text.replace(/^\[adviser[^\n]*\]\s*/, "").replace(/\s*\[end adviser\]\s*$/, "")} />
+                  <Markdown content={row.text.replace(/^\[advisor[^\n]*\]\s*/, "").replace(/\s*\[end advisor\]\s*$/, "")} />
                 </div>
               );
             }

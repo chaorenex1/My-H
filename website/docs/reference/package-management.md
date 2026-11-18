@@ -226,10 +226,16 @@ requires trust in that plugin and its dependencies.
 
 ## Optional security tools
 
-PM owns the pinned `bws` and `iron-proxy` packages in
+PM owns the pinned `bws`, `gopass`, and `iron-proxy` packages in
 `pm/security_packages.py`. Their versions, artifact URLs, and SHA-256 hashes
 come from `pm/lock.json`. Downloads and publication use the shared tool store,
 not private installers under `$HERMES_HOME/bin`.
+
+`gopass` is the Go password-store CLI, installed on request with
+`hermes pm install gopass`. PM pins the binary only: its GPG/age backend and
+git history stay the host's tools, so it opens an existing store instead of
+becoming one. Upstream publishes no Android artifact; Termux installs gopass
+from its own repository.
 
 For iron-proxy, PM also acquires pinned signature files and checks that the
 release checksums cover the pinned archive. Package staging calls the
@@ -241,6 +247,41 @@ External executables remain outside PM's hash and signature guarantees.
 `bws` and iron-proxy honor an executable on `PATH` before checking PM selection.
 Lazy installation obeys PM policy. Explicit install commands check
 and repair managed entries, including requests with `--force`.
+
+## Optional code-intelligence tools
+
+`pm/code_intelligence_packages.py` owns four on-request tools: `ast-grep`,
+`tree-sitter`, `codeql`, and `semgrep`. They are optional, so a bare
+`hermes pm install` does not carry them; install the ones you use:
+
+```bash
+hermes pm install ast-grep tree-sitter semgrep codeql
+```
+
+`ast-grep` (AST search and rewrite) and `tree-sitter` (incremental multi-language
+parsing CLI) are pinned release archives in `pm/lock.json`. Both upstreams ship
+glibc Linux builds only, so musl userlands and Termux are declared gaps.
+
+`codeql` is GitHub's CLI bundle, whose tag carries the CLI version
+(`codeql-bundle-v2.27.3`). The download is large (~0.7 GB Linux/Windows,
+~1.3 GB macOS) and the bundle is x64 on Windows ARM64 and Apple Silicon, which
+run it through host emulation. Review GitHub's CodeQL license before commercial
+use. Only `codeql/codeql` is put on `PATH`; query packs ship inside the bundle.
+Because of its size it is marked `bundle = False` and is never copied into a
+native payload's tool store; ast-grep and tree-sitter do ship there.
+
+`semgrep` publishes no binary archive, so it is a
+`PythonToolPackage`: the lock pins the distribution version and PM builds
+`semgrep==<version>` in its own isolated environment under
+`HERMES_HOME/environments/semgrep`, the same machinery as pip-installed LSP
+servers. Its `PATH` entry appears in the composed environment while the
+environment is selected. Because the environment is built on the host, a
+cross-target `--target` stage is refused; run `hermes pm install semgrep` on the
+target. Upstream has no macOS x86_64 wheel, no Windows ARM64 wheel, and no
+Android/bionic wheel.
+
+The bundled `code-intelligence` skill routes tasks to these tools and ships one
+detailed reference per tool under its `references/` directory.
 
 ## Developer workflow {#developer-workflow}
 
@@ -602,7 +643,14 @@ hermes pm doctor
 hermes pm status
 hermes pm install
 hermes pm install chromium
+hermes pm install bun
+hermes pm install ast-grep tree-sitter semgrep codeql
 ```
+
+`bun` is an optional tool package: `hermes omp` uses PM's installed copy, then a Bun
+on `PATH`, then `~/.bun`, and otherwise installs it through PM on first launch.
+Termux has no bionic Bun build, so there `hermes omp` needs a Bun installed from
+another source.
 
 | Command | Effect |
 |---|---|

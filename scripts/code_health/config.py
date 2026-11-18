@@ -39,11 +39,43 @@ METRIC_FIX = {
 }
 
 PY_EXCLUDE = ("website/*", "*/node_modules/*", "node_modules/*")
-TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts")
+# tools/eval_js_parser.ts is the unmodified acorn 8.19.0 dist (MIT), shipped as package data so
+# the Bun JS kernel parses cells without node_modules; its size is upstream's, not ours.
+TS_EXCLUDE = PY_EXCLUDE + ("*.d.ts", "*/dist/*", "*/build/*", "*/generated/*", "*.generated.ts",
+                           "tools/eval_js_parser.ts")
+# omp-ui/src is a vendored third-party shell, maintained as a unit (omp-ui/src/VENDORED.md); its
+# dependency boundary is enforced by `omp-ui/scripts/check-imports.ts` and its type checks by
+# `bun run check`. The modules Hermes owns inside it — the entry, the gateway client/projection, the
+# session facade and the controllers written here — are listed in OMP_OWNED and are measured. The
+# upstream-derived remainder (settings registry, model resolver, image pipeline, render wiring) is
+# exempt: its size and complexity come from upstream, and splitting it is not a change-local edit.
+OMP_SNAPSHOT = ("omp-ui/src/*",)
+OMP_OWNED = (
+    "omp-ui/src/main.ts",
+    "omp-ui/src/modes/rpc/hermes-entry.ts",
+    "omp-ui/src/modes/rpc/gateway-session.ts",
+    "omp-ui/src/modes/rpc/gateway-session.test.ts",
+    "omp-ui/src/modes/rpc/gateway-models.ts",
+    "omp-ui/src/modes/rpc/gateway-models.test.ts",
+    "omp-ui/src/modes/rpc/gateway-appearance.ts",
+    "omp-ui/src/modes/rpc/gateway-appearance.test.ts",
+    "omp-ui/src/modes/rpc/gateway-live-client.ts",
+    "omp-ui/src/session/agent-session.ts",
+    "omp-ui/src/session/session-manager.ts",
+    "omp-ui/src/modes/controllers/command-controller.ts",
+    "omp-ui/src/modes/controllers/input-controller.ts",
+    "omp-ui/src/modes/controllers/event-controller.ts",
+    "omp-ui/src/modes/controllers/selector-controller.ts",
+    "omp-ui/src/modes/controllers/todo-command-controller.ts",
+    "omp-ui/src/modes/utils/ui-helpers.ts",
+)
 TESTS = ("tests/*", "*/tests/*", "tests-js/*", "*/conftest.py")
 # One-shot processes that serve a single profile (CI/release scripts, skill scripts run as a
 # child with a scoped env, installers): the profile-scope rules don't apply to them.
-SINGLE_PROFILE = TESTS + ("scripts/*", "skills/*", "optional-skills/*", "evals/*", "setup.py")
+SINGLE_PROFILE = TESTS + ("scripts/*", "skills/*", "optional-skills/*", "evals/*", "setup.py",
+                          # omp-ui's toolchain (snapshot refresh, import checker) is a dev-side
+                          # Bun workspace: it never serves a profile it would need to scope to.
+                          "omp-ui/scripts/*")
 
 
 @dataclass(frozen=True)
@@ -117,7 +149,7 @@ RULES: tuple[Rule, ...] = (
          " (`get_hermes_home()`, `load_config()`) or key the slot by `hermes_home_key()`;"
          " module constants hold the launch profile's value", "ast",
          exclude=SINGLE_PROFILE),
-    Rule("HX012", "raw threading.Thread", "`spawn_context_thread(...)` so the thread keeps"
+    Rule("HX012", "raw threading.Thread", "`hermes_threading.spawn_context_thread(...)` so the thread keeps"
          " the caller's profile scope (ContextVars do not cross a bare Thread)", "ast",
          blocking=WARN_UNTIL_REPLAYED,
          exclude=SINGLE_PROFILE),
@@ -168,10 +200,14 @@ def rule_applies(rule: Rule, path: str) -> bool:
     return not _matches(path, rule.exclude)
 
 
+def _vendored(path: str) -> bool:
+    return _matches(path, OMP_SNAPSHOT) and not _matches(path, OMP_OWNED)
+
+
 def in_scope(path: str) -> str | None:
     """Language of a tracked path the engine measures, or None."""
     if path.endswith(".py"):
-        return None if _matches(path, PY_EXCLUDE) else "py"
+        return None if _matches(path, PY_EXCLUDE) or _vendored(path) else "py"
     if path.endswith((".ts", ".tsx", ".mts", ".cts")):
-        return None if _matches(path, TS_EXCLUDE) else "ts"
+        return None if _matches(path, TS_EXCLUDE) or _vendored(path) else "ts"
     return None

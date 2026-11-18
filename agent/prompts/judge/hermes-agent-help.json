@@ -1,0 +1,9 @@
+{
+  "hermes_agent_help": {
+    "instructions": "The `message` in state is the user's first message in a new session. Answer true when it asks for help with Hermes Agent itself — installing, updating, configuring, running, extending, or troubleshooting Hermes, or understanding its own tools, skills, gateway platforms, or behavior. Answer false when it is about the user's own project, data, or any unrelated topic.",
+    "criteria": {
+      "true": "The message requests help with Hermes Agent itself or the agent's own capabilities, configuration, commands, or behavior.",
+      "false": "The message is about the user's own task, code, data, or an unrelated subject."
+    }
+  }
+}

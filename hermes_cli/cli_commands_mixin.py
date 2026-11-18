@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- ADR-12 D5 /prewalk: this facade gained only a four-line dispatch shim; the handler lives in hermes_cli/cli_prewalk_command.py
 """Slash-command handlers for the interactive CLI (``HermesCLI`` inherits ``CLICommandsMixin``).
 
 cli.py-internal symbols (``_cprint``/``_ACCENT``/``save_config_value``…) are imported LAZILY inside
@@ -31,7 +32,8 @@ from hermes_state_ids import new_session_id as mint_session_id
 from agent.i18n import t
 from agent.message_metadata import message_identity
 from agent.turn_context import extract_api_content_sidecar
-from hermes_cli.cli_agent_setup_mixin import _gateway_open, _retire_agent
+from hermes_cli.cli_agent_setup_mixin import (
+    _gateway_open, _restore_resume_target, _retire_agent, _without_session_meta)
 from hermes_cli.cli_commands_session_tools import (
     CLICommandsSessionToolsMixin, _TTYBuf, _accent, _accent_line, _command_arg, _cp, _dim,
     _dim_line, _gt, _lines, _pr, _probe, _rollback_kept, _save, _say_block, _shlex_args, _t, _tn)
@@ -178,10 +180,6 @@ def _cron_api(**kwargs) -> dict:
 
 
 # Session-switch plumbing (end, repoint) lives in ``hermes_cli/cli_session_switch.py``.
-
-
-def _without_session_meta(messages) -> list:
-    return [m for m in (messages or []) if m.get("role") != "session_meta"]
 
 
 def _db_unavailable_line() -> str:
@@ -824,7 +822,9 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         resolved = self._resolve_resume_target(target)
         if resolved is None:
             return
-        target_id, session_meta = resolved
+        target_id, session_meta, refusal = _restore_resume_target(self._session_db, *resolved)
+        if refusal:
+            return _cp(f"  {refusal}")
         # A Kanban worker transcript must not become this chat's write-capable continuation
         # (#68779): the resumed conversation would be a writer the Kanban board cannot
         # observe, and unblocking the card could dispatch a competing worker. Keep the
@@ -2092,6 +2092,12 @@ class CLICommandsMixin(CLICommandsSessionToolsMixin):
         saved = explicit_global and _save("agent.service_tier", saved_value)
         outcome = _scope_outcome(explicit_global, saved)
         _cp(_accent_line(_t("fast.set_to", feature=feature_name, value=saved_value.upper(), scope=outcome)))
+
+    # ---- /prewalk -------------------------------------------------------------------------
+    def _handle_prewalk_command(self, cmd: str):
+        """Handle /prewalk via its owner module (ADR-12 D5, local sessions only)."""
+        from hermes_cli.cli_prewalk_command import handle_prewalk_command
+        return handle_prewalk_command(self, cmd)
 
     # ---- /debug, /update, /voice, /wake ---------------------------------------------------
     def _handle_debug_command(self, cmd_original: str = ""):

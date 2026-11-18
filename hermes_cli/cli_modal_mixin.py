@@ -731,7 +731,7 @@ class CLIModalMixin:
                     current["phase"] = "failed"
                     self._paint_now()
 
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         spawn_context_thread(_run, name="hermes-connection-answer").start()
 
     def _connection_answer(self, *, approve: bool) -> None:

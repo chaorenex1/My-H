@@ -690,7 +690,7 @@ Always excluded, both profile types: `auth.json`, `.env` and the other credentia
 
 **The default profile** (`~/.hermes`) is exported through an allow-list — only known Hermes artifacts, so an unrelated file sitting in your home directory can't get swept in:
 
-`config.yaml`, `SOUL.md`, `MEMORY.md`, `USER.md`, `todo.json`, `system_prompt.md`, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `skills/`, `plugins/`, `cron/`, `scripts/`, `sessions/`, `memories/`, `knowledge/`, `preferences/`, and `desktop.json` when the desktop staged one.
+`config.yaml`, `SOUL.md`, `MEMORY.md`, `USER.md`, `todo.json`, `system_prompt.md`, `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `skills/`, `agents/`, `rules/`, `.agents/`, `plugins/`, `cron/`, `scripts/`, `sessions/`, `memories/`, `knowledge/`, `preferences/`, and `desktop.json` when the desktop staged one.
 
 **A named profile** (`~/.hermes/profiles/<name>`) copies the whole directory minus those credential stores, `home/` (the `HOME` of Hermes' tool subprocesses, where `git`, `ssh`, `gh`, `npm` and skill CLIs keep their credentials), and the recovery copies Hermes keeps of them (`backups/`, `state-snapshots/`, any `auth.json.*` or `.env.bak*`, and the `config.yaml.bak-<timestamp>` copies `hermes update` writes). A copy you name yourself, such as `config.yaml.bak-my-note`, is exported, with its secrets redacted like `config.yaml`'s. That's broader — if the profile has `state.db`, logs, or caches, they go in the archive too, and the file gets big.
 

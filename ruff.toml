@@ -30,6 +30,10 @@ exclude = [
     ".venv",
     ".vscode",
     "__pypackages__",
+    # omp-ui/src is a byte-identical snapshot of the upstream oh-my-pi shell (see
+    # omp-ui/src/VENDORED.md); its Python preludes are refreshed by
+    # omp-ui/scripts/sync-upstream.py, so a rewrite here is reverted on the next sync.
+    "omp-ui/src/**",
   ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.

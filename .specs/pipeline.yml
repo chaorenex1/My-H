@@ -1,0 +1,38 @@
+# .specs/pipeline.yml — spec-orchestrate role assignments and app launch recipe.
+# Unlike run records, this is a config file you SHOULD commit (it is not matched
+# by the run-record patterns in .specs/.gitignore). Reassign work by editing the
+# role values below — omp runs a role in-session with the `task` tool; setting a
+# role to `claude` or `codex` delegates it to that peer CLI via agent-delegate.
+
+roles:
+  spec_author: omp          # writes requirement / design / tasks / test.md
+  spec_reviewer: omp        # adversarial review of the generated spec
+  impl_ui: omp              # builds user-facing screens and components
+  impl_backend: omp         # builds APIs, business logic, data access
+  impl_test: omp            # writes test code and fixtures
+  e2e_runner: omp           # runs the acceptance test plan (spec-evaluate)
+
+# app: launch recipe for acceptance tests. Required ONLY when test.md has a
+# playwright case. Uncomment and fill in when you need it.
+# app:
+#   start: "npm run dev"          # command that starts the app
+#   url: "http://localhost:3000"  # base URL the evaluator drives
+#   ready_pattern: "ready in"     # log line that means the app is up
+#   stop: "auto"                  # auto = kill the launched process; else a stop command
+#   auth: none                    # none, or a references path describing the auth steps
+
+limits:
+  role_swap_max: 1          # max arbitration owner-swaps before landing a draft
+
+# review: fix_before milestone stages for the review gate; the FIRST stage is
+# the gate-blocking one. Uncomment only to rename the stages (defaults below).
+# review:
+#   fix_before_stages: [implementation, trial, required_check, follow_up]
+
+# improve: retrospective auto-improvement. Enable when you want the pipeline to
+# apply its own learnings; leave it unset and improvements degrade to filing an
+# Issue instead.
+# improve:
+#   skills_repo: "~/path/to/agent-skills"
+#   auto_apply: true
+#   line_budget: 300

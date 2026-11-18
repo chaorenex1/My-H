@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "Abbrechen"
     prompt_other: "✏️ Eigene Antwort"
     prompt_expired: ⌛ Diese Abfrage wartet nicht mehr auf eine Antwort. Senden Sie Ihre Antwort als normale Nachricht.
+workspace_dirs:
+  usage_add: "Verwendung: /add-dir <Pfad>"
+  usage_remove: "Verwendung: /remove-dir <Pfad>"
+  not_found: "Verzeichnis existiert nicht: {path}"
+  already_cwd: "Das Arbeitsverzeichnis ist bereits der primäre Workspace-Root dieser Sitzung."
+  already: "Bereits im Workspace: {path}"
+  added: "{path} hinzugefügt."
+  missing: "Kein Workspace-Verzeichnis: {path}"
+  removed: "{path} entfernt."
+  cwd_removal: "Das Arbeitsverzeichnis kann nicht entfernt werden; nutze /worktree oder eine neue Sitzung."
+  local_only: "Dieser Befehl verwaltet den Workspace einer lokalen Sitzung und ist auf dieser Plattform nicht verfügbar."
+  listing_header: "Workspace-Verzeichnisse:"
+  listing_cwd: "  {path} (Arbeitsverzeichnis)"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "Zu einem früheren Prompt zurückspulen, um ihn zu bearbeiten & erneut zu senden, oder von dort abzweigen (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "Aktuelle Sitzung verzweigen (neuer Thread auf Discord/Telegram/Slack/Matrix; --here bleibt hier)"
   worktree:
     description: "Isolierte Git-Worktrees anzeigen, auflisten, erstellen oder bereinigen"
+  add-dir:
+    description: "Fügt dieser Sitzung ein Workspace-Verzeichnis hinzu (Multi-Root)"
+  remove-dir:
+    description: "Entfernt ein Workspace-Verzeichnis aus dieser Sitzung"
+  dirs:
+    description: "Zeigt die Workspace-Verzeichnisse dieser Sitzung (cwd und zusätzliche Roots)"
   compress:
     description: "Konversationskontext komprimieren ('here [N]' anhängen, um die letzten N Züge zu behalten; --preview zeigt die Auswirkung)"
   rollback:

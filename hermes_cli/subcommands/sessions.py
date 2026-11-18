@@ -19,6 +19,44 @@ def cmd_sessions_lazy(args, **kwargs):
     return cmd_sessions(args, **kwargs)
 
 
+def _add_mirror_and_restore(sessions_subparsers) -> None:
+    mirror = sessions_subparsers.add_parser(
+        "mirror", help="Export sessions to cold JSONL bundles (and optionally prune the DB rows)",
+        description="Write a read-only cold mirror of state.db sessions under "
+                    "sessions/<project>/<timestamp>_<id>.jsonl plus an artifact directory. "
+                    "With --prune-source, a verified, ended mirror's message rows are deleted "
+                    "and the session is marked offloaded; `hermes sessions restore <id>` "
+                    "puts them back. Mirroring never participates in a live turn.")
+    selection = mirror.add_mutually_exclusive_group()
+    selection.add_argument("--all", action="store_true",
+                           help="Mirror every session (archived rows still need --include-archived)")
+    selection.add_argument("--session-id", help="Mirror one session id (or unique prefix)")
+    selection.add_argument("--since", metavar="TIME",
+                           help="Mirror sessions started at/after TIME (duration like '7d' or an ISO timestamp)")
+    _flag(mirror, "--include-archived", help="Also export archived sessions")
+    _flag(mirror, "--dry-run", help="Report what would be written/pruned; change nothing")
+    _flag(mirror, "--verify", help="Verify each written bundle's sha256/size")
+    _flag(mirror, "--update-paths",
+          help="Point agent_session.transcript_path at bundle transcripts that already exist")
+    _flag(mirror, "--prune-source",
+          help="After a verified mirror, delete eligible sessions' message rows (keeps metadata)")
+    mirror.add_argument("--older-than", metavar="DAYS", default=None,
+                        help="With --prune-source: minimum days since the last user message "
+                             "(default 180; 0 disables the age gate)")
+    _flag(mirror, "--force",
+          help="Run --prune-source even while another Hermes process holds state.db")
+    add_yes_flag(mirror, "Skip the prune confirmation")
+
+    restore = sessions_subparsers.add_parser(
+        "restore", help="Restore an offloaded session from its cold mirror",
+        description="Re-insert the message rows of a session pruned by `hermes sessions mirror "
+                    "--prune-source`, after verifying the bundle checksum. The metadata row "
+                    "(routing, profile, title) is kept.")
+    restore.add_argument("session_id", help="Session id (or unique prefix)")
+    _flag(restore, "--dry-run", help="Verify the mirror and report; write nothing")
+    add_json_flag(restore, "Machine-readable output")
+
+
 def _add_rename_and_discard(sessions_subparsers) -> None:
     sessions_rename = sessions_subparsers.add_parser(
         "rename", help="Set or change a session's title")
@@ -46,7 +84,7 @@ def _add_refresh_prompts(sessions_subparsers) -> None:
 def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     """Attach the ``sessions`` subcommand to ``subparsers``."""
     sessions_parser = subparsers.add_parser(
-        "sessions", help="Manage session history (list, rename, export, prune, delete)",
+        "sessions", help="Manage session history (list, rename, export, mirror, restore, prune, delete)",
         description="View and manage the SQLite session store")
     sessions_subparsers = sessions_parser.add_subparsers(dest="sessions_action")
 
@@ -269,6 +307,7 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     sessions_repair_prompts.add_argument("session_id", nargs="?", default=None,
         help="Destructive override: clear this session even when its stored prompt is healthy")
     _add_refresh_prompts(sessions_subparsers)
+    _add_mirror_and_restore(sessions_subparsers)
 
     sessions_recover = sessions_subparsers.add_parser(
         "recover", help="Rebuild canonical session data into a separate clean database",
@@ -340,7 +379,6 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         help="Which tool to import from (default: pick across both)")
     sessions_import.add_argument(
         "path", nargs="?", help="Path to a specific session JSONL file (skips the picker)")
-
 
     # cmd_sessions lives in hermes_cli/sessions_cmd.py; the parser is threaded
     # in because the fallthrough branch calls sessions_parser.print_help().

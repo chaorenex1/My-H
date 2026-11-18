@@ -48,9 +48,10 @@ has a `Params` + `Result` model, every server→client request a `Params` + `Res
 `Payload` — one Pydantic class each, `extra="forbid"` by default (`OpenModel` for producer-owned dicts).
 `register_method` refuses an undeclared name at import; the dispatcher rejects unknown param keys
 (`4000` + key path) and, under `HERMES_TEST_ISOLATION=1`, raises `ContractViolation` when a handler's
-result or an emitted payload does not match its model (production only logs). `apps/shared/src/
-gateway-contract.generated.ts` (`RpcMethods`, `ServerRequestMap`, `BackendGatewayEventMap` + every value
-shape) and `gateway-contract.openrpc.json` are rendered by `scripts/gen_gateway_contracts.py`;
+result or an emitted payload does not match its model (production only logs).
+`omp-ui/src/modes/rpc/gateway-contract.generated.ts` (`RpcMethods`, `ServerRequestMap`,
+`BackendGatewayEventMap` + every value shape) and `gateway-contract.openrpc.json` are rendered by
+`scripts/gen_gateway_contracts.py`;
 `tests/tui_gateway/contracts/test_generated.py` fails when they are stale, so the loop is: change the model →
 regenerate → `tsc` shows every consumer the field moved. `apps/shared/src/gateway-events.ts` only adds
 the client-local synthetic events and the `GatewayEvent` envelope on top.
@@ -85,7 +86,7 @@ right profile while credentials and `TERMINAL_*` policy still come from the laun
 Off-turn paths bind the same way: `session_lifecycle.py::_finalize_session` / `_teardown_session`
 enter `_session_profile_runtime_scope(session)` around `on_session_end`, the memory commit and
 `agent.close()` (their callers are unscoped reapers, Timers, atexit and pool threads); background
-threads start via `agent.memory_provider.spawn_context_thread`, never bare `threading.Thread`;
+threads start via `hermes_threading.spawn_context_thread`, never bare `threading.Thread`;
 children act for the served profile through `tools/environments/local.py::served_profile_child_env`
 (`hermes -p X` workers, `key_cmd` helpers, browser drivers), never `dict(os.environ)`. Grep for
 unscoped handlers before adding one: `rg -n "^(async )?def " tui_gateway/methods_*.py | rg -v
@@ -98,10 +99,10 @@ profile's does not, and that `os.environ` is unchanged afterwards.
 | Surface | Ink component | Gateway method / event |
 |---|---|---|
 | Chat streaming | `app.tsx` + `messageLine.tsx` | `prompt.submit` → `message.delta` / `message.complete` |
-| Tool activity | `thinking.tsx` | `tool.start` / `tool.generating` / `tool.complete` |
+| Tool activity | `thinking.tsx` | `tool.start` / `tool.generating` / `tool.output` / `tool.complete` |
 | Approvals | `prompts.tsx` | server→client request `approval` → response `{choice}` |
 | Clarify / sudo / secret | `prompts.tsx`, `maskedPrompt.tsx` | server→client requests `clarify` / `sudo` / `secret` (`server_requests.py`) |
-| Session picker | `sessionPicker.tsx` | `session.list` / `session.resume` |
+| Session picker | `sessionPicker.tsx` | `session.list` / `session.resume` (+ `session.transcript.list` / `session.transcript.read` for the ADR-16 bundle state) |
 | Slash commands | local handler + fallthrough | `slash.exec` → `_SlashWorker` (`slash_worker_client.py`); `command.dispatch` |
 | Completions | `useCompletion` hook | `complete.slash`, `complete.path` (under a non-local `terminal.backend`, `complete.path` lists the directory through the session's terminal backend — never the gateway host, whose same-named tree would look right and be wrong) |
 | Theming | `theme.ts` + `branding.tsx` | `gateway.ready` carries skin data |

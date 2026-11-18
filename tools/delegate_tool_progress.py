@@ -6,6 +6,7 @@ import logging
 import enum
 import os
 import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 from tools.delegate_tool_registry import _active_subagents, _active_subagents_lock
@@ -403,6 +404,7 @@ class _ChildProgressRelay:
                 if rec is not None:
                     rec["tool_count"] = self.tool_count
                     rec["last_tool"] = tool_name or ""
+                    rec["last_update"] = time.time()
         if self.spinner:
             from agent.display import get_tool_emoji
             line = f"{get_tool_emoji(tool_name or '')} {tool_name}"

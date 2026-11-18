@@ -5,13 +5,21 @@ docs of config.yaml.
 """
 
 from hermes_cli.config_defaults_agent_loop import _agent_loop
-from hermes_cli.config_defaults_auxiliary import _aux
+from hermes_cli.config_defaults_agent_sessions import _agent_sessions
+from hermes_cli.config_defaults_auxiliary import auxiliary_defaults
 from hermes_cli.config_defaults_code_execution import _code_execution
+from hermes_cli.config_defaults_consumers import (
+    agent_consumer_defaults,
+    top_level_consumer_defaults,
+)
+from hermes_cli.config_defaults_judgment import judgment_defaults
+from hermes_cli.config_defaults_lsp import lsp_defaults
+from hermes_cli.config_defaults_misc import misc_defaults
+from hermes_cli.config_defaults_ttsr import ttsr_defaults
+from hermes_cli.config_defaults_omp import OMP_CONFIG_SECTION
 
-#: Image every container terminal backend (docker/modal/daytona, the singularity plugin) uses unless the
-#: user pins one. LEGACY_SANDBOX_IMAGES are the plain defaults that preceded the desktop stack
-#: (the 3.14 pin shipped between the two without a migration); a saved config still holding one
-#: is the template copied, and the config migration unsets it, never a user's own pin.
+#: Image every container backend uses unless the user pins one. LEGACY_SANDBOX_IMAGES are the
+#: pre-desktop defaults; a saved config holding one is the template copied, and migration unsets it.
 DEFAULT_SANDBOX_IMAGE = "nousresearch/hermes-sandbox:desktop"
 LEGACY_SANDBOX_IMAGES = ("nikolaik/python-nodejs:python3.11-nodejs20", "nikolaik/python-nodejs:python3.14-nodejs22")
 LEGACY_SANDBOX_IMAGE = LEGACY_SANDBOX_IMAGES[0]
@@ -203,10 +211,9 @@ DEFAULT_CONFIG = {
         "verify_guidance": True,
         # Max consecutive `pre_verify` "continue" nudges per turn (hooks can't trap the loop).
         "max_verify_nudges": 3,
-        # Max consecutive plugin stop-gate continuations per turn
-        # (`hermes_cli.plugin_runtime.request_continuation`). Separate from the
-        # verify budget: an adviser acting on its own finding must not consume the
-        # coding-verification allowance.
+        "todo_reminders": True, "todo_reminders_max": 3,  # ADR-2 D11; interactive surfaces only
+        # Max consecutive plugin stop-gate continuations per turn (`hermes_cli.plugin_runtime.
+        # request_continuation`); separate from the verify budget: advisor work must not consume it.
         "max_plugin_continuations": 2,
         # Verification closure: after code edits in a workspace, refuse a final answer until fresh
         # verification evidence exists or the agent explains why it can't check (bounded loop,
@@ -286,7 +293,10 @@ DEFAULT_CONFIG = {
         # timeout_s <= 0 disables; poll_s = sampling interval. Invalid values (NaN, Inf,
         # non-positive poll) warn and fall back to defaults. See agent/turn_liveness.py.
         "turn_liveness": {"timeout_s": 600.0, "poll_s": 15.0},
+        **agent_consumer_defaults(),
     },
+
+    **top_level_consumer_defaults(),
 
     "terminal": {
         "backend": "local",
@@ -545,7 +555,23 @@ DEFAULT_CONFIG = {
     # Tool-output truncation. max_bytes: terminal_tool output cap in chars (head+tail kept; 50_000 ≈
     # 12-15K tokens). max_lines: max `limit` one read_file call may request before clamping.
     # max_line_length: per-line cap in read_file's line-numbered view (chars).
-    "tool_output": {"max_bytes": 50000, "max_lines": 2000, "max_line_length": 2000},
+    "tool_output": {
+        "max_bytes": 50000, "max_lines": 2000, "max_line_length": 2000,
+        # ADR-16 D3: per-session tool-output archive. ``exclude_tools`` are contract-shaped
+        # results that must not be truncated twice; redaction is mandatory before disk.
+        "artifacts": {
+            "enabled": True,
+            "redact": True,
+            "exclude_tools": ["read_file", "todo", "agent_out"],
+        },
+    },
+    # Whole-file read summaries (omp's read.summarize / read-summarize). Off by default in
+    # Hermes: summarization changes what the model sees, so it is opt-in. A named agent's
+    # ``read-summarize`` field overrides this per run. prose: also summarize .md/.txt;
+    # min_total_lines: shorter files always stay verbatim.
+    "read": {
+        "summarize": {"enabled": False, "prose": False, "min_total_lines": 100},
+    },
     # Tool loop guardrails nudge models that repeat failed/non-progressing tool calls. Soft warnings
     # are always on; hard stops are opt-in so interactive sessions keep flowing.
     "tool_loop_guardrails": {
@@ -717,95 +743,21 @@ DEFAULT_CONFIG = {
         },
     },
     "agent_loop": _agent_loop(),
-    # Auxiliary model config — provider/model per side task. provider "auto" = auto-detect;
-    # empty model = provider's default aux model; all tasks fall back to
-    # openrouter:google/gemini-3-flash-preview when the configured provider is unavailable.
-    # extra_body is forwarded verbatim as request body fields for that task, e.g. OpenRouter
-    # routing prefs / Pareto Code floor:
-    #   auxiliary:
-    #     compression:
-    #       extra_body:
-    #         provider: {order: [anthropic, google], sort: throughput}  # or price | latency
-    #         plugins: [{id: pareto-router, min_coding_score: 0.5}]
-    # Each task is independent — main-agent provider_routing and openrouter.min_coding_score
-    # do NOT propagate to aux calls by design.
-    "auxiliary": {
-        # Same-provider retries for a transient blip (reset/timeout/5xx/408) on ANY aux call before
-        # falling back; clamped [0,6]. Matters for pinned calls (MoA advisors) where provider
-        # fallback is not meaningful recovery.
-        "transient_retries": 2,
-        # When true, the auto-chain's OpenRouter step is skipped unless the fallback model ends in
-        # ":free" — a PAID lane is never used for background aux traffic even with
-        # OPENROUTER_API_KEY set.
-        "free_only": False,
-        # Override the auto-chain's OpenRouter fallback model (default google/gemini-3.6-flash,
-        # PAID). Pair e.g. "nvidia/nemotron-3-ultra-550b-a55b:free" with free_only: true. A one-time
-        # WARNING is logged whenever a non-":free" model is engaged.
-        "openrouter_model": "",
-        # Endpoints that reject NON-streaming chat (HTTP 400): aux calls are sent with stream=True
-        # and aggregated. Case-insensitive URL substrings; some vendor endpoints are always
-        # stream-only.
-        "stream_only_base_urls": [],
-        # Per-task blocks share one shape (_aux): provider "auto" = inherit the main model; base_url
-        # overrides provider; api_key falls back to OPENAI_API_KEY; reasoning_effort:
-        # none|minimal|low|medium|high|xhigh|max|ultra ("" = provider default); extra_body =
-        # OpenAI-compatible request fields. Vision: download_timeout = image HTTP download (s).
-        "vision": _aux(120, download_timeout=30),
-        # web_extract, session_search, skills_hub: no aux LLM any more, leftover blocks are ignored.
-        # Compression: raise timeout for local models. no_progress_timeout: seconds a streamed call
-        # goes without a substantive chunk before it fails fast into retry/fallback; None = built-in
-        # 60s default. Independent of "timeout" (the overall request budget). See #108104.
-        "compression": _aux(120, no_progress_timeout=None),
-        "approval": _aux(30),   # classifier — a fast/cheap model is recommended
-        # /review reviewer: a full subagent on the async delegation rail, credentials resolved like
-        # delegation.provider pins. "auto" + "" = main agent's model. api_mode forces transport:
-        # chat_completions | anthropic_messages | codex_responses.
-        "review": {"provider": "auto", "model": "", "base_url": "", "api_key": "", "api_mode": ""},
-        "mcp": _aux(30),
-        # prefer_fast_model opts in to the provider fast tier; auto otherwise = main model.
-        "title_generation": {
-            "enabled": True,
-            "model_upgrade_enabled": True,  # False = keep the instant derived title, never call a model
-            # session_search no longer uses an aux LLM (#27590); leftover auxiliary.session_search is ignored.
-            "provider": "auto",
-            "model": "",
-            "prefer_fast_model": False,
-            "base_url": "",
-            "api_key": "",
-            "timeout": 30,
-            "extra_body": {},
-            "reasoning_effort": "",
-            "language": "",
-        },
-        "memory_query_rewrite": _aux(8, reasoning_effort=False),
-        "tts_audio_tags": _aux(30),
-        "voice_chat": {**_aux(120), "reasoning_effort": "none"},  # agent/voice_turn_route.py; off = lowest valid
-        # Kanban: triage_specifier expands a Triage one-liner into a spec; kanban_decomposer a JSON graph.
-        "triage_specifier": _aux(120),
-        "kanban_decomposer": _aux(180),
-        "profile_describer": _aux(60),   # 1-2 sentence profile blurb; short, cheap
-        "goal_judge": _aux(60),          # /goal satisfaction + contract drafting; JSON calls
-        "group_router": _aux(20),        # Group Chat routing "auto": who answers; fast/cheap model OK
-        # Curator skill-usage review can take minutes on reasoning models (umbrellas over hundreds
-        # of skills); route cheaper via `hermes model` → auxiliary → Curator.
-        "curator": _aux(600),
-        "monitor": _aux(60),   # important-mail 0-10 scorer; high-volume, small model fine
-        # Post-turn self-improvement fork (save memory / patch skill). "auto" = main model replaying
-        # the full conversation (warm cache); other models replay a compact digest (~3-5x cheaper).
-        # enabled=false skips auto spawns (/refine still works). An explicit max_input_tokens caps
-        # the SUM of replayed input tokens over the review loop (iterations capped at 16); the loop
-        # stops before crossing it. When unset, the runtime derives a budget from the active model
-        # context window. <= 0 = unlimited.
-        # reasoning_effort is IGNORED while the review stays on the main model: the fork inherits the
-        # conversation's reasoning config verbatim so its request bytes keep the parent's warm
-        # prompt-cache prefix (#30532). Set provider/model below to route the review to another model
-        # if you want a different effort level; a one-time warning says so when the key is set.
-        "background_review": {"enabled": True, **_aux(120)},
-        # No reasoning_effort on MoA blocks by design — configured PER SLOT in the preset
-        # (moa.presets.<name>.reference_models[].reasoning_effort / aggregator.reasoning_effort).
-        "moa_reference": _aux(900, reasoning_effort=False),
-        "moa_aggregator": _aux(900, reasoning_effort=False),
+    # Resident named-agent sessions (ADR-15 D7): a settled background `agent` run keeps its live
+    # slot until the idle TTL parks it; wake/revive runs use this pool, never agent_loop.
+    "agent_sessions": _agent_sessions(),
+    # Rollout switch for the ``<agent_message ...>`` envelope on peer/inbox delivery.
+    # false delivers the escaped body alone (no from/reply_to attributes).
+    "agent_messages": {
+        "envelope": True,
     },
+    "auxiliary": auxiliary_defaults(),
+    "judgment": judgment_defaults(),
+    "ttsr": ttsr_defaults(),
+    # Named snapshots of the Models-hub role assignments (wire: model.presets.*). Each preset maps
+    # role id -> {provider, model, base_url, reasoning_effort, fallback_chain}; applying one writes
+    # it back through the same per-role writers model.roles.set uses.
+    "model_presets": {},
 
     "display": {
         "compact": False,
@@ -1319,6 +1271,15 @@ DEFAULT_CONFIG = {
     # Subagent delegation: `backend` = task-routing strategy ("default": keys below), `backends.<name>` = its settings.
     "delegation": {
         "backend": "default",
+        # Policy switches rendered into the tool-policy chapter (ADR-18). "bias" only shapes
+        # the prompt: "gated" = no subagents unless requested, "eager" = preferred.
+        "bias": "eager",
+        "eager_tasks": False,
+        "eager_tasks_always": False,
+        "inline_first": True,
+        # Rollout switch for the text shorthand ``agent(spawn="spawn:@<name>\n<body>")``.
+        # false keeps the structured ``agent_name`` + ``user_prompts`` form only.
+        "spawn_directive": True,
         "backends": {},
         "model": "",  # e.g. "google/gemini-3-flash-preview" (empty = inherit parent)
         "provider": "",  # e.g. "openrouter" (empty = inherit parent provider + credentials)
@@ -1481,6 +1442,9 @@ DEFAULT_CONFIG = {
         # through the unchanged-file dedup and, if still over, drops the oldest entries (0 = keep
         # the ledger append-only forever, the previous behaviour).
         "ledger_max_bytes": 5 * 1024 * 1024,
+        # Capability search for `skills_list(query=...)` (ADR-18 D9): "auto"/"on" rerank the
+        # lexical (rg) candidates with the judgment model when available; "off" is lexical only.
+        "search": {"enabled": "auto"},
     },
 
     # Curator — background maintenance of AGENT-CREATED skills (never hub-installed): marks
@@ -1986,6 +1950,14 @@ DEFAULT_CONFIG = {
             # Absolute cap on the embedded listing in tokens (chars/4), regardless of context size.
             # Range 200..60000.
             "listing_max_tokens": 4000,
+            # Judgment rerank of BM25 candidates (ADR-18 D9): "auto"/"on" ask the judgment
+            # model to pick the best tool when at least judge_min_candidates were retrieved;
+            # "off" keeps BM25 only. Any judge failure falls back to BM25 order.
+            "judge": "auto",
+            # Activate judgment only when the BM25 candidate pool reaches this size. Range 2..24.
+            "judge_min_candidates": 8,
+            # Choice questions per search; each carries up to 8 candidates. Range 1..3.
+            "max_questions": 3,
             # Tools replaced by the bridge by default. This list intentionally includes cold,
             # event-triggered built-ins; an explicit list replaces it wholesale and [] keeps every
             # tool eager. The runtime fallback in tools/tool_search.py derives from this value.
@@ -2043,11 +2015,6 @@ DEFAULT_CONFIG = {
         "url": "",  # empty = default https://models.dev/api.json
     },
 
-    "network": {
-        # Force IPv4. With broken/unreachable IPv6, Python tries AAAA first and hangs for the full
-        # TCP timeout before falling back. True skips IPv6 entirely.
-        "force_ipv4": False,
-    },
     # Gateway monitoring: service health + redacted operational diagnostics exported over OTLP to an
     # operator endpoint (OTEL Collector, DataDog, ...). Content-free by construction: no prompts,
     # messages, tool args/results, session history, usage analytics, audit logs, or trajectories.
@@ -2071,15 +2038,7 @@ DEFAULT_CONFIG = {
         # secret values); values are read from the environment at export time.
         "export": {"otlp": {"enabled": False, "endpoint": "", "headers_env": {}}},
     },
-    # Native hosted-room Discussion ceilings, shared by all members per discussion.
-    # Positive integers only (no unlimited/0). Read from the root owner's config at service
-    # startup for all hosted rooms; restart the owning service after changing them.
-    "hosted_rooms": {
-        "discussion": {
-            "max_rounds": 3,
-            "max_messages": 10,
-        },
-    },
+    **misc_defaults(),
     "gateway": {  # Gateway settings (messaging platforms: Telegram, Discord, Slack, ...).
         "unmanaged_idle_exit_seconds": 600,  # client-auto-started gateway only; 0 disables
         # Seconds a SIGTERM-interrupted agent unwinds before teardown (short: service stop budgets).
@@ -2315,10 +2274,6 @@ DEFAULT_CONFIG = {
         },
     },
 
-    "doctor": {
-        # Per-probe timeout (seconds) for `hermes doctor --live` real-call probes.
-        "live_probe_timeout": 10,
-    },
 
     "updates": {
         # Passive version/banner checks only; explicit `hermes update --check` remains enabled.
@@ -2355,55 +2310,41 @@ DEFAULT_CONFIG = {
         # e.g. on non-admin accounts where /Applications isn't writable.
         "refresh_cua_driver": True,
     },
-    # LSP diagnostics (pyright, gopls, rust-analyzer...) in the post-write lint check of
-    # write_file/patch. Runs only when the cwd or edited file is inside a git worktree; otherwise
-    # dormant and the in-process syntax check is the only tier.
-    "lsp": {
-        "enabled": True,  # False disables the whole subsystem: no servers, no event loop, no cost.
-        # document = wait up to wait_timeout seconds for the current file's diagnostics; full = also
-        # request workspace-wide diagnostics (slower).
-        "wait_mode": "document",
-        "wait_timeout": 5.0,
-        # Budget for the FIRST request against a workspace whose server is not running yet (spawn +
-        # initialize + the server's initial program build; tsserver on a large project can need a
-        # minute). Once the client is up, wait_timeout applies again. 0 = same as wait_timeout.
-        "warmup_timeout": 0.0,
-        # After a server fails (spawn error or outer timeout) its (server, workspace root) pair is
-        # skipped. 0 = for the process lifetime (until `hermes lsp restart`); N = retried after N
-        # seconds, so one transient stall does not silence a workspace forever.
-        "broken_retry_seconds": 0.0,
-        # Workspace roots (glob patterns, ~ expanded; a bare path also matches everything under
-        # it) where no language server runs at all, e.g. one huge monorepo whose server cannot
-        # finish in budget, while every other workspace keeps its diagnostics. Must be a list —
-        # any other shape logs a warning and skips LSP for every workspace until fixed.
-        "exclude_roots": [],
-        # Directories (~ expanded; everything under an entry counts) whose projects a language
-        # server may load code from: the project's own .venv/venv interpreter, node_modules
-        # TypeScript SDK, svelte.config.js, build files (cargo, Gradle, mix, ...). The worktree of
-        # the launch dir or the session's workspace (hermes -w, a Desktop project, terminal.cwd) is
-        # always trusted; in any other checkout (a clone the agent made) only servers that run no
-        # project code start, pinned to Hermes-side tools, and the npx tsc / rustfmt lint fallbacks
-        # are skipped.
-        "trusted_workspaces": [],
-        # Missing server binaries: auto = install via npm/go/pip into <HERMES_HOME>/lsp/bin/ on
-        # first use; manual = only binaries on PATH; off = alias for manual.
-        "install_strategy": "auto",
-        # Node package manager for the npm-recipe servers: npm | pnpm | yarn. Installs still land in
-        # <HERMES_HOME>/lsp/node_modules; a configured manager that is not installed, or an unknown
-        # value, skips the install (no silent fallback to npm) so a pnpm/yarn supply-chain policy is
-        # never bypassed.
-        "package_manager": "npm",
-        # Idle seconds before a server is shut down (respawned on demand), so long- running
-        # processes don't accumulate stale children (hundreds of MB + pipe FDs each) across
-        # worktrees. 0 = keep servers for process lifetime.
-        "idle_timeout": 600.0,
-        # Per-server overrides keyed by registry server_id (pyright, gopls...): disabled: true;
-        # command: ["path/to/server", "--stdio"] (bypasses auto- install); env: {...};
-        # initialization_options: {...} (merged into LSP initializationOptions).
-        # A key that is NOT a built-in id declares a custom server (matched before the built-ins):
-        # command: ["my-ls", "--stdio"]; extensions: [".ext"]; optional root_markers: [...],
-        # language_id: "..." (didOpen languageId), description: "...". Manual install only.
-        "servers": {},
+    # LSP diagnostics (see hermes_cli/config_defaults_lsp.py for every key and comment).
+    "lsp": lsp_defaults(),
+    # Code intelligence (ADR-8): a persistent symbol/evidence graph in this profile's graph
+    # database. The [codegraph] and [graph] extras are both required (they are independent).
+    # `hermes code index` is the only way to build the index; model tools appear only when the
+    # extras are installed.
+    "code_intel": {
+        # Master switch for the `code_intel` model tool (P4), post-turn refresh (P6),
+        # LSP semantic enrichment and Semgrep diagnostics. The CLI stays available.
+        "enabled": True,
+        # Expose `code_graph_update` (P5); evidence/hash checks still apply.
+        "update": True,
+        # Refresh files changed by a turn after the final answer (P6). Hash-diff only.
+        "auto_update": True,
+        # Install a missing grammar wheel through PM on first use (language extras).
+        # Set false to fail with the install hint instead of touching the environment.
+        "auto_install": True,
+        # Call agent/lsp during indexing (P4). Off by default: LSP may run project build scripts.
+        "semantic": False,
+        # Dangerous-pattern diagnostics. `mode: auto` uses Semgrep's registry rules
+        # (may fetch on first use); `custom_dir` reads only the profile's rules dir.
+        "semgrep": {
+            "enabled": False,
+            "mode": "auto",
+        },
+        # Extra language ids to enable; the four built-in languages (Python, TypeScript,
+        # Go, Rust) are always enabled once their grammar is installed.
+        "languages": [],
+        # Scan/index ceilings. Exceeding one fails with IndexLimitError, keeping indexed files.
+        "max_file_bytes": 1048576,
+        "max_files": 20000,
+        "max_total_bytes": 134217728,
+        "max_symbols": 1000000,
+        # Extra gitignore-style patterns to exclude (secrets and build dirs are always excluded).
+        "exclude": [],
     },
     # X (Twitter) Search via xAI's x_search Responses tool. Registers when xAI creds exist
     # (SuperGrok OAuth or XAI_API_KEY) AND the toolset is enabled in `hermes tools`.
@@ -2647,6 +2588,7 @@ DEFAULT_CONFIG = {
             "max_attempts": 2,  # Crash-loop breaker: max automatic re-runs of one interrupted turn.
         },
     },
+    **OMP_CONFIG_SECTION,
 
     "nous": {
         # Upper bound (seconds) on the Nous auth keepalive tick, which derives from the
@@ -2713,6 +2655,20 @@ OPTIONAL_ENV_VARS = OptionalEnvVars({
     "OPENROUTER_API_KEY": _env("OpenRouter API key (for vision, web scraping helpers, and MoA)",
         "OpenRouter API key", url="https://openrouter.ai/keys", password=True, tools=["vision_analyze"],
         category="provider", advanced=True),
+    # Judgment transports (ADR-11): TypeSafe/Cloudflare answer typed questions; they are not
+    # chat providers and never appear in the model picker.
+    "TYPESAFE_API_KEY": _prov(
+        "TypeSafe judgment API key (native System One decisions; used by the default "
+        "judgment chain when present)",
+        "TypeSafe API key", "https://typesafe.ai/"),
+    "TYPESAFE_BASE_URL": _base_url("TypeSafe"),
+    "CLOUDFLARE_API_TOKEN": _prov(
+        "Cloudflare API token for Workers AI judgment models (Clef; add a "
+        "workers-ai-systemone entry to judgment.models to use it)",
+        "Cloudflare API token", "https://dash.cloudflare.com/profile/api-tokens"),
+    "CLOUDFLARE_ACCOUNT_ID": _prov(
+        "Cloudflare account ID for Workers AI judgment endpoints",
+        "Cloudflare account ID", None, password=False),
     "GOOGLE_API_KEY": _prov("Google AI Studio API key (also recognized as GEMINI_API_KEY)",
         "Google AI Studio API key", "https://aistudio.google.com/app/apikey"),
     "GEMINI_API_KEY": _prov("Google AI Studio API key (alias for GOOGLE_API_KEY)", "Gemini API key",

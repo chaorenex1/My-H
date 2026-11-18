@@ -89,9 +89,9 @@ def test_late_diagnostics_reach_the_session(mock_workspace):
     assert result["success"] is True and "lsp_diagnostics" not in result, result
     assert elapsed < _WAIT / 2, f"write blocked {elapsed:.2f}s on a held language server"
     gate.touch()
-    (path, text), = wait_until(lambda: deferred.pop_notes("S-lsp"), timeout=_WAIT,
+    (path, note), = wait_until(lambda: deferred.pop_notes("S-lsp"), timeout=_WAIT,
                                what="the late verdict reaching the session")
-    assert path == str(target) and "MOCK001" in text and "earlier edit" in text
+    assert path == str(target) and "MOCK001" in note.text and "earlier edit" in note.text
 
 
 def test_late_verdict_reaches_the_model_before_the_turn_ends(mock_workspace, monkeypatch):
@@ -121,6 +121,54 @@ def test_late_verdict_reaches_the_model_before_the_turn_ends(mock_workspace, mon
     assert messages[-1]["role"] == "user" and "MOCK001" in messages[-1]["content"], messages[-1]
 
 
+def _display_config(monkeypatch, mode: str) -> None:
+    """Resolve ``lsp.display.lsp`` from a test config instead of the profile's file."""
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config_readonly",
+        lambda: {"lsp": {"display": {"lsp": {"mode": mode, "severities": ["error"]}}}})
+
+
+def test_display_off_skips_the_edit_check_entirely(mock_workspace, monkeypatch):
+    """mode=off: the write starts no check and produces neither inline output nor a late note."""
+    _display_config(monkeypatch, "off")
+    repo, _gate = mock_workspace("by_content")
+    target = repo / "off.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    result, _elapsed = _patch(target, "x = 1", "x = bad", session="S-off")
+    assert result["success"] is True and "lsp_diagnostics" not in result, result
+    with deferred._LOCK:  # no check was started, so nothing can land later either
+        assert not deferred._PENDING.get("S-off")
+    assert deferred.pop_notes("S-off") == []
+
+
+def test_display_inline_drops_a_timed_out_verdict(mock_workspace, monkeypatch):
+    """mode=inline: the user chose no late surface, so a verdict past the budget is discarded."""
+    _display_config(monkeypatch, "inline")
+    repo, gate = mock_workspace("by_content")  # held until gate.touch()
+    target = repo / "inline.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    result, _elapsed = _patch(target, "x = 1", "x = bad", session="S-inline")
+    assert result["success"] is True and "lsp_diagnostics" not in result, result
+    gate.touch()
+    wait_until(lambda: _settled("S-inline"), timeout=_WAIT, what="the discarded check settling")
+    assert deferred.pop_notes("S-inline") == []
+
+
+def test_display_late_moves_a_budget_verdict_out_of_the_tool_result(mock_workspace, monkeypatch):
+    """mode=late: even a fast verdict becomes the late row, never an inline field."""
+    _display_config(monkeypatch, "late")
+    repo, gate = mock_workspace("by_content")
+    gate.touch()  # the server answers at once
+    target = repo / "late.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    result, _elapsed = _patch(target, "x = 1", "x = bad", session="S-late")
+    assert result["success"] is True and "lsp_diagnostics" not in result, result
+    (path, note), = wait_until(lambda: deferred.pop_notes("S-late"), timeout=_WAIT,
+                               what="the budget-hit verdict reaching the late queue")
+    assert path == str(target) and "MOCK001" in note.text
+    assert note.files and "MOCK001" in note.files[0]["messages"][0]
+
+
 def test_diagnostics_stay_with_the_session_that_made_the_edit(mock_workspace):
     """Two sessions edit one file while the first check is still running: the error session A
     introduced is reported to A, and B (whose edit kept it, not introduced it) hears nothing."""
@@ -135,7 +183,7 @@ def test_diagnostics_stay_with_the_session_that_made_the_edit(mock_workspace):
     notes_b = deferred.pop_notes("S-B")
     notes_a = deferred.pop_notes("S-A")
     assert not notes_b, f"session B was told about session A's error: {notes_b}"
-    assert notes_a and "MOCK001" in notes_a[0][1], f"session A never heard about its own error: {notes_a}"
+    assert notes_a and "MOCK001" in notes_a[0][1].text, f"session A never heard about its own error: {notes_a}"
 
 
 def test_each_session_is_checked_on_the_bytes_it_wrote(mock_workspace):
@@ -167,5 +215,5 @@ def test_each_session_is_checked_on_the_bytes_it_wrote(mock_workspace):
     notes_a = deferred.pop_notes("S-A2")
     notes_b = deferred.pop_notes("S-B2")
     assert not notes_a and "lsp_diagnostics" not in result_a, f"A was told about B's error: {notes_a or result_a}"
-    told_b = " ".join(text for _path, text in notes_b) + str(result_b.get("lsp_diagnostics") or "")
+    told_b = " ".join(note.text for _path, note in notes_b) + str(result_b.get("lsp_diagnostics") or "")
     assert "MOCK001" in told_b, f"session B never heard about its own error: {notes_b}"

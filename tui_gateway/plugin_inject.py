@@ -54,7 +54,7 @@ def inject_tui_session_message(*, session_key: str, content: str, plugin_id: str
         queued = session.get("queued_prompt") or {}
         keep_transport = queued.get("transport") if isinstance(queued, dict) else None
         running = bool(session.get("running"))
-        _enqueue_prompt(session, content, keep_transport)
+        _enqueue_prompt(session, content, keep_transport, sid=sid)
         session["last_active"] = time.time()
         if running:
             return True

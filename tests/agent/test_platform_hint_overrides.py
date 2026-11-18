@@ -8,7 +8,11 @@ platforms). See HA Core ticket: configurable per-platform prompt hints.
 
 import types
 
-from agent.system_prompt import _resolve_platform_hint
+from agent.prompts.platforms import apply_override
+
+
+def _resolve_platform_hint(agent, platform, default):
+    return apply_override(getattr(agent, "_platform_hint_overrides", None), platform, default)
 
 
 def _agent(overrides):

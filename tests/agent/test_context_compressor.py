@@ -221,6 +221,12 @@ class TestSummarizeToolResultSkillTools:
 
         assert ok == f"[skills_list] category=devops 2 skills ({len(ok_content)} chars)"
         assert failed.startswith("[skills_list] FAILED: skills dir unreadable")
+
+    def test_skills_list_query_is_kept_in_the_stub(self):
+        args = json.dumps({"query": "deploy", "category": "devops"})
+        ok_content = json.dumps({"success": True, "skills": [{}, {}, {}], "count": 3})
+        stub = _summarize_tool_result("skills_list", args, ok_content)
+        assert stub == f"[skills_list] query=deploy category=devops 3 skills ({len(ok_content)} chars)"
         # Control: skill_view really has a top-level ``name`` and keeps its stub.
         assert _summarize_tool_result("skill_view", json.dumps({"name": "github"}), "x" * 100).startswith("[skill_view] name=github (100 chars)")
 

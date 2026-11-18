@@ -373,6 +373,19 @@ def _swap_developer_role(sanitized: list, model_lower: str) -> list:
     return sanitized
 
 
+def _normalize_developer_roles(sanitized: list, model_lower: str) -> list:
+    """ADR-10 D11: a model that does not take ``developer`` rows gets ``system`` instead.
+
+    The first system row is swapped to ``developer`` by :func:`_swap_developer_role` for the
+    models that support it; a custom row's mid-history ``developer`` must go the other way."""
+    if any(p in model_lower for p in DEVELOPER_ROLE_MODELS):
+        return sanitized
+    if not any(isinstance(m, dict) and m.get("role") == "developer" for m in sanitized):
+        return sanitized
+    return [{**m, "role": "system"} if isinstance(m, dict) and m.get("role") == "developer" else m
+            for m in sanitized]
+
+
 def _apply_max_tokens(api_kwargs: dict, model: str, reasoning_config: Any, params: dict, profile_max: Any = None) -> None:
     """Preserve internal task/recovery budgets and provider protocol exceptions."""
     max_tokens_fn = params.get("max_tokens_param_fn")
@@ -580,6 +593,7 @@ class ChatCompletionsTransport(ProviderTransport):
         if _profile:
             return self._build_kwargs_from_profile(_profile, model, sanitized, tools, params)
 
+        sanitized = _normalize_developer_roles(sanitized, params.get("model_lower", (model or "").lower()))
         sanitized = _swap_developer_role(sanitized, params.get("model_lower", (model or "").lower()))
         api_kwargs = _base_kwargs(model, sanitized, tools, params)
 
@@ -650,7 +664,8 @@ class ChatCompletionsTransport(ProviderTransport):
 
     def _build_kwargs_from_profile(self, profile, model, sanitized, tools, params):
         """Build API kwargs from a ProviderProfile — every quirk comes from the profile object."""
-        sanitized = _swap_developer_role(profile.prepare_messages(sanitized), (model or "").lower())
+        sanitized = _normalize_developer_roles(profile.prepare_messages(sanitized), (model or "").lower())
+        sanitized = _swap_developer_role(sanitized, (model or "").lower())
         api_kwargs = _base_kwargs(model, sanitized, tools, params, profile=profile)
 
         reasoning_config = _reasoning_config_for_model(model, params.get("reasoning_config"))

@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, TypeGuard
 
 from agent.message_sanitization import coerce_tool_name, deterministic_call_id
-from agent.prompt_builder import DEFAULT_AGENT_IDENTITY
 from hermes_cli.route_identity import normalize_route_base_url
 
 logger = logging.getLogger(__name__)
@@ -1061,7 +1060,8 @@ def _preflight_codex_api_kwargs(
     model = api_kwargs.get("model")
     if not _nonblank(model):
         raise ValueError("Codex Responses request 'model' must be a non-empty string.")
-    instructions = _str_or_empty(api_kwargs.get("instructions")).strip() or DEFAULT_AGENT_IDENTITY
+    from agent.prompts.renderer import render_identity
+    instructions = _str_or_empty(api_kwargs.get("instructions")).strip() or render_identity()
     if sanitize_harmony_tokens:
         instructions = _neutralize_harmony_tokens(instructions)
     input_items = _preflight_codex_input_items(

@@ -138,12 +138,12 @@ CASES = {
     # Cross-language contract JSON under apps/: the pytest that pins it against
     # the Python side must run even when nothing else in the PR is Python.
     "generated gateway contract → python + frontend": (
-        ["apps/shared/src/gateway-contract.generated.ts"],
-        _lanes(python=True, frontend=True, e2e_desktop_core=True),
+        ["omp-ui/src/modes/rpc/gateway-contract.generated.ts"],
+        _lanes(python=True, frontend=True),
     ),
     "gateway OpenRPC document → python + frontend": (
-        ["apps/shared/src/gateway-contract.openrpc.json"],
-        _lanes(python=True, frontend=True, e2e_desktop_core=True),
+        ["omp-ui/src/modes/rpc/gateway-contract.openrpc.json"],
+        _lanes(python=True, frontend=True),
     ),
     "control-socket vectors → python + frontend": (
         ["apps/shared/src/node/control-socket.vectors.json"],

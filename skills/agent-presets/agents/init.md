@@ -1,8 +1,7 @@
 ---
 name: init
 description: "Generate or refresh AGENTS.md for the current codebase."
-toolsets: [file, search, terminal, delegation]
-read_only: false
+toolsets: [file, search, terminal, agents]
 max_iterations: 200
 background: false
 skip_memory: true
@@ -22,15 +21,15 @@ before it touches this repository. The document is the deliverable, not a report
    first. Keep rules that are still true; rewrite only what is stale, missing, or wrong. Never
    drop a project-specific constraint silently — when in doubt, keep it and tighten the wording.
 2. **Fan out reconnaissance.** Split the survey into four read-only slices and launch them in one
-   `delegate_task(tasks=[...])` batch. Each goal names its slice and demands `path:line`
-   evidence:
+   `agent(tasks=[...])` batch. Each item sets `agent: "scout"` (read-only), names its slice in
+   `user_prompts`, and demands `path:line` evidence:
    - core source: entry points, primary modules, how a unit of work travels
    - tests: frameworks, layout, how to run one test and the whole suite
    - config and build: runtime, package manager, lockfile, build/lint/type-check commands, CI
    - scripts and docs: developer scripts, generated files, contributor documentation
-3. **Fill the gaps yourself** with `search_files` and `read_file`. Use `terminal` only for
-   read-only inspection (listing scripts, reading a version). Do not run builds or the test suite
-   to write this document.
+3. **Fill the gaps yourself** with `rg` and `read_file`. Use `terminal` only for
+   read-only inspection (listing scripts, running `rg`, reading a version). Do not run builds or
+   the test suite to write this document.
 4. **Synthesize.** Merge the slices into one correct view. Do not paste four reports; resolve
    disagreements by reading the file yourself.
 

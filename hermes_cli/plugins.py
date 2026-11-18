@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
-import json
 import logging
 import os
 import queue
@@ -900,6 +899,7 @@ def start_background_plugin_discovery() -> None:
     manager = get_plugin_manager()
     if manager._discovered:
         return
+    home = get_hermes_home()
     with _background_discovery_lock:
         if _background_discovery_thread is not None and _background_discovery_thread.is_alive():
             return
@@ -907,11 +907,15 @@ def start_background_plugin_discovery() -> None:
         def _run() -> None:
             try:
                 manager.discover_and_load()
-                _persist_plugin_toolset_keys()
+                _persist_plugin_toolset_keys(home)
             except Exception:
                 logger.warning("background plugin discovery failed", exc_info=True)
 
-        _background_discovery_thread = threading.Thread(target=_run, name="plugin-discovery", daemon=True)
+        from hermes_threading import spawn_context_thread
+
+        _background_discovery_thread = spawn_context_thread(
+            _run, name="plugin-discovery"
+        )
         _background_discovery_thread.start()
 
 
@@ -925,20 +929,20 @@ def _join_background_discovery(timeout: float = 30.0) -> bool:
     return t.is_alive()
 
 
-def _plugin_toolset_keys_cache_path() -> Path:
-    return get_hermes_home() / "cache" / "plugin_toolset_keys.json"
-
-
-def _persist_plugin_toolset_keys() -> None:
+def _persist_plugin_toolset_keys(home: Path | None = None) -> None:
     """Persist discovered plugin toolset keys + portable MCP names (best-effort)."""
     try:
-        from utils import atomic_json_write
+        from hermes_cache import get_cache
+
         keys = sorted({ts_key for ts_key, _, _ in get_plugin_toolsets()})
         try:
             portable = sorted(get_plugin_manager().get_portable_mcp_servers())
         except Exception:
             portable = []
-        atomic_json_write(_plugin_toolset_keys_cache_path(), {"toolset_keys": keys, "portable_mcp": portable}, indent=None, mode=0o600)
+        namespace = get_cache(home=home).namespace("cli.plugins")
+        namespace.set_many(
+            {"toolset_keys": keys, "portable_mcp": portable}
+        )
     except Exception:
         logger.debug("plugin toolset key persist failed", exc_info=True)
 
@@ -952,8 +956,9 @@ def _nowait_plugin_set(cache_field: str, live: Callable[[PluginManager], set[str
         return live(manager)
     if in_flight:
         with suppress(Exception):
-            blob = json.loads(_plugin_toolset_keys_cache_path().read_text(encoding="utf-8-sig"))
-            values = blob.get(cache_field) if isinstance(blob, dict) else None
+            from hermes_cache import get_cache
+
+            values = get_cache().namespace("cli.plugins").get(cache_field)
             if isinstance(values, list) and all(isinstance(v, str) for v in values):
                 return set(values)
     discover_plugins()

@@ -47,7 +47,12 @@ def test_local_viewer_gets_the_segment_boundary_as_null_delta():
     delta_cb = _delta_cb(_turn(Platform.LOCAL, published))
     delta_cb('hello')
     delta_cb(None)
-    assert published == [('message.delta', {'text': 'hello'}), ('message.delta', {'text': None})]
+    assert published == [
+        ('message.block_start', {'kind': 'text'}),
+        ('message.delta', {'text': 'hello'}),
+        ('message.block_end', {'kind': 'text', 'content_index': 0, 'content': 'hello'}),
+        ('message.delta', {'text': None}),
+    ]
 
 
 def test_messaging_route_never_publishes_the_boundary():
@@ -55,7 +60,11 @@ def test_messaging_route_never_publishes_the_boundary():
     delta_cb = _delta_cb(_turn(Platform.TELEGRAM, published))
     delta_cb('hello')
     delta_cb(None)
-    assert published == [('message.delta', {'text': 'hello'})]
+    assert published == [
+        ('message.block_start', {'kind': 'text'}),
+        ('message.delta', {'text': 'hello'}),
+        ('message.block_end', {'kind': 'text', 'content_index': 0, 'content': 'hello'}),
+    ]
 
 
 def test_turn_sinks_publish_and_restore_on_the_shared_agent():
@@ -67,10 +76,73 @@ def test_turn_sinks_publish_and_restore_on_the_shared_agent():
     previous = local_viewer_events.wire(turn, agent)
     agent.tool_gen_callback('terminal')
     agent._print_fn('  ✓ [1/2]', 'done')
-    assert published == [('tool.generating', {'name': 'terminal'}),
-                         ('agent.print', {'text': '  ✓ [1/2] done'})]
+    # ADR-10 D7: the one-shot line also reaches the client as a deduped transcript notice.
+    assert published[:2] == [('tool.generating', {'name': 'terminal'}),
+                             ('agent.print', {'text': '  ✓ [1/2] done'})]
+    assert published[2][0] == 'transcript.notice'
+    assert {key: value for key, value in published[2][1].items() if key != 'id'} == {
+        'level': 'info', 'text': '  ✓ [1/2] done', 'source': 'agent'}
     local_viewer_events.restore(agent, previous)
     assert agent.tool_gen_callback is sentinel and agent._print_fn is None
+
+
+def test_tool_start_carries_the_requesting_steps_usage():
+    """ADR-2 D1: the response that requested a tool carries its own ``step_usage`` (not the
+    session-cumulative ``usage``), so the client can label that assistant segment."""
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    agent = SimpleNamespace(
+        _last_step_usage={'input': 10, 'output': 2, 'total': 12, 'cache_read': 7, 'cache_write': 1},
+        _last_step_cost_usd=0.25,
+    )
+    turn._ctx.agent_holder = [agent]
+
+    turn.combined_tool_start_callback('c1', 'read_file', {'path': 'x'})
+
+    start = next(payload for kind, payload in published if kind == 'tool.start')
+    assert start['step_usage'] == {'input': 10, 'output': 2, 'total': 12, 'cache_read': 7,
+                                   'cache_write': 1, 'cost_usd': 0.25}
+    # ADR-4 D13: the card title rides tool.start and is repeated as its own display event.
+    assert start['title'] == 'x'
+    title = next(payload for kind, payload in published if kind == 'tool.title')
+    assert title == {'tool_id': 'c1', 'name': 'read_file', 'title': 'x'}
+
+
+def test_tool_start_without_a_step_usage_omits_the_field():
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    turn._ctx.agent_holder = [SimpleNamespace(_last_step_usage=None)]
+
+    turn.combined_tool_start_callback('c1', 'read_file', {'path': 'x'})
+
+    start = next(payload for kind, payload in published if kind == 'tool.start')
+    assert 'step_usage' not in start
+
+
+def test_prepared_edit_diff_is_reused_by_the_completion_event(monkeypatch):
+    """ADR-10 D5: ``prepare_fields`` pops the before-state snapshot; ``complete_fields`` must reuse
+    its diff, or the live ``tool.complete`` event silently loses ``inline_diff``."""
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    calls = []
+
+    def fake_render(name, result, *, function_args, snapshot, print_fn):
+        calls.append(snapshot)
+        print_fn("+1 line")
+        return True
+
+    monkeypatch.setattr("agent.display.render_edit_diff_with_delta", fake_render)
+    turn._local_edit_snapshots = {"c1": {"before": "x"}}
+    metadata = local_viewer_events.prepare_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
+    assert metadata["tool_result_metadata"] == {"inline_diff": "+1 line"}
+    # ADR-4 D13: the same preparation also names the card (display-only, top-level for the row).
+    assert metadata["card_title"]
+    assert turn._local_edit_snapshots == {}  # consumed exactly once
+    fields = local_viewer_events.complete_fields(turn, "c1", "write_file", {"path": "a"}, "ok")
+    assert fields["inline_diff"] == "+1 line"
+    assert calls == [{"before": "x"}]  # the renderer never ran a second time
 
 
 def test_status_lines_the_agent_prints_reach_the_viewer():
@@ -82,7 +154,10 @@ def test_status_lines_the_agent_prints_reach_the_viewer():
     agent._print_fn = None
     local_viewer_events.wire(_turn(Platform.LOCAL, published), agent)
     agent._safe_print('🗜️ compacted')
-    assert published == [('agent.print', {'text': '🗜️ compacted'})]
+    assert published[0] == ('agent.print', {'text': '🗜️ compacted'})
+    assert published[1][0] == 'transcript.notice'
+    assert {key: value for key, value in published[1][1].items() if key != 'id'} == {
+        'level': 'info', 'text': '🗜️ compacted', 'source': 'agent'}
 
 
 @pytest.mark.parametrize('platform', [Platform.LOCAL, Platform.TELEGRAM])
@@ -98,12 +173,64 @@ def test_tool_complete_carries_duration_only_for_local_viewers(platform):
         assert 'duration_s' not in complete
 
 
+def test_prepared_eval_card_fields_are_top_level_and_reused_by_the_live_frame():
+    """ADR-4 D11.1/D13: ``display``/``card_title``/``cell_titles`` must sit at the top level of
+    the metadata dict (that is what ``stamp_tool_result_metadata`` writes to the durable row), and
+    the live ``tool.complete`` frame must carry the same values."""
+    import json
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+    view = {"kind": "markdown", "text": "3"}
+    result = json.dumps({"status": "success", "output": "3",
+                         "display": {"views": [{"text": "3", "view": view}], "images": []}})
+
+    metadata = local_viewer_events.prepare_fields(
+        turn, "c1", "execute_code", {"code": "print(1 + 2)"}, result)
+
+    assert metadata["display"]["views"] == [{"text": "3", "view": view}]
+    assert metadata["card_title"]
+    assert metadata["cell_titles"] == [metadata["card_title"]]
+    assert "display" not in metadata["tool_result_metadata"]
+
+    fields = local_viewer_events.complete_fields(turn, "c1", "execute_code", {"code": "print(1 + 2)"}, result)
+    assert fields["display"] == metadata["display"]
+    assert fields["card_title"] == metadata["card_title"]
+    assert fields["cell_titles"] == metadata["cell_titles"]
+
+
+def test_eval_stream_frames_and_a_background_job_completion_reach_the_viewer():
+    """ADR-4 D14: cell output and the job's terminal ``tool.complete`` are not platform progress."""
+    from gateway import local_viewer_events
+
+    published = []
+    turn = _turn(Platform.LOCAL, published)
+
+    local_viewer_events.publish_progress(turn, "tool.output", "execute_code", None, {
+        "tool_call_id": "c1", "cell_index": 1, "stream": "stderr", "text": "boom\n"})
+    local_viewer_events.publish_progress(turn, "tool.complete", "execute_code", None, {
+        "tool_call_id": "c1", "job_id": "job-1", "is_error": False, "duration_s": 0.5,
+        "result": '{"status":"success","output":"ok"}'})
+
+    assert published[0] == ("tool.output", {
+        "tool_id": "c1", "name": "execute_code", "cell_index": 1, "stream": "stderr", "text": "boom\n"})
+    kind, payload = published[1]
+    assert kind == "tool.complete"
+    assert payload["job_id"] == "job-1" and payload["tool_id"] == "c1"
+    assert payload["duration_s"] == 0.5 and payload["is_error"] is False
+    assert '"status":"success"' in payload["result"]
+
+
 def test_wire_contract_accepts_the_boundary_frame():
     from tui_gateway.contracts.registry import EVENTS
     EVENTS['message.delta'].payload.model_validate({'text': None})
     EVENTS['tool.generating'].payload.model_validate({'name': 'terminal'})
     EVENTS['agent.print'].payload.model_validate({'text': 'line'})
     EVENTS['tool.complete'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'duration_s': 0.1})
+    EVENTS['tool.title'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'title': 'Read x', 'cell_index': 0})
+    EVENTS['tool.output'].payload.model_validate({'tool_id': 'c', 'name': 'n', 'cell_index': 0,
+                                                 'stream': 'stdout', 'text': 'x\n'})
 
 
 def test_thinking_and_reaction_publish_and_reasoning_waits_for_the_session_flag():

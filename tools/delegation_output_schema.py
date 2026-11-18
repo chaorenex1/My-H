@@ -84,6 +84,16 @@ def extract_json_candidate(text: str) -> str:
     return spans[0][1] if spans else raw
 
 
+def validation_available() -> bool:
+    """True when ``jsonschema`` is installed and the schema is actually enforced."""
+    from importlib.util import find_spec
+
+    try:
+        return find_spec("jsonschema") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def validate_output(text: str, schema: dict[str, Any]) -> tuple[bool, list[str]]:
     """``(True, [])`` or ``(False, errors)`` with strings suitable for the retry turn."""
     candidate = extract_json_candidate(text or "")

@@ -122,7 +122,8 @@ def test_live_tail_and_steer_share_exact_owner_and_end_with_child(runtime):
         server._sessions["ui-owner"] = owner
         _unregister_subagent("child")
         assert call("subagent.tail", subagent_id="child")["result"] == {
-            "subagent_id": "child", "available": False, "text": "", "truncated": False}
+            "subagent_id": "child", "available": False, "text": "", "truncated": False,
+            "session_file": None, "from_byte": 0, "next_byte": 0}
     finally:
         _unregister_subagent("child")
 

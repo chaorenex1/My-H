@@ -22,7 +22,7 @@ from agent.message_sanitization import (
 from agent.message_metadata import (
     TOOL_CALL_UIDS, merge_tool_call_uids, per_occurrence_tool_call_uids, record_absorbed_message)
 from agent.cache_bounds import publish_lru
-from agent.prompt_builder import ADVISER_DISPLAY_KIND, STEER_DISPLAY_KIND, steer_row
+from agent.prompt_builder import ADVISOR_DISPLAY_KIND, STEER_DISPLAY_KIND, steer_row
 from agent.plugin_events import notify_plugin_message
 from agent.tool_dispatch_helpers import _trajectory_normalize_msg, make_tool_result_message
 from agent.route_verdicts import ROUTE_VERDICT_FIELDS, reset_route_verdicts, reset_route_verdicts_if_moved
@@ -214,7 +214,7 @@ def _prepend_corruption_marker(tool_msg: dict, marker: str) -> None:
 
 def _find_tool_result(messages: list, start: int, tool_call: dict) -> Optional[dict]:
     """The tool result answering ``tool_call`` in the run starting at ``start``, if any."""
-    for candidate in messages[start:]:
+    for candidate in (c for c in messages[start:] if not (isinstance(c, dict) and c.get("role") == "custom")):  # ADR-10: injected rows are transparent
         if not isinstance(candidate, dict) or candidate.get("role") != "tool":
             return None
         if tool_result_id_variants(candidate.get("tool_call_id")) & tool_call_id_variants(tool_call):
@@ -636,7 +636,7 @@ def _prune_unanswered_tool_calls(messages: list[dict]) -> tuple[list[dict], int]
             pruned.append(msg)
             continue
         answered: set = set()
-        for follower in messages[i + 1:]:
+        for follower in (f for f in messages[i + 1:] if not (isinstance(f, dict) and f.get("role") == "custom")):  # ADR-10: custom rows are transparent
             if not (isinstance(follower, dict) and follower.get("role") == "tool"):
                 break
             tid = (follower.get("tool_call_id") or "").strip()
@@ -683,8 +683,8 @@ def _merge_consecutive_users(messages: list[dict]) -> tuple[list[dict], int]:
             and split_user_originated_turn(prev)[0] is None
             # A /steer row that ended the previous run is already persisted; merging the next
             # prompt into it would rewrite it in place and re-break replay parity. Same for an
-            # adviser row: it is user-shaped for the provider, but not the user speaking.
-            and prev.get("display_kind") not in (STEER_DISPLAY_KIND, ADVISER_DISPLAY_KIND)
+            # advisor row: it is user-shaped for the provider, but not the user speaking.
+            and prev.get("display_kind") not in (STEER_DISPLAY_KIND, ADVISOR_DISPLAY_KIND)
             # Only merge plain-text content; leave multimodal (list or undecodable sentinel) content alone.
             and _plain_text(prev.get("content", "")) and _plain_text(msg.get("content", ""))
         ):

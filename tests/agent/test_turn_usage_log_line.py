@@ -80,3 +80,30 @@ def test_long_decode_context_buckets_use_the_first_hop(tmp_path, monkeypatch, ca
         a.close()
     assert " in=32968 " in line  # the log line keeps the billed sum
     assert (seen["prompt_tokens"], seen["input_tokens"], seen["cache_read_tokens"]) == (100, 60, 40)
+
+
+def test_step_usage_is_one_response_and_clears_when_usage_is_missing(tmp_path, monkeypatch, caplog):
+    """ADR-2 D1: ``_last_step_usage`` is this response's own buckets, never the session cumulative;
+    a usage-less response clears it so the previous step cannot label the next one."""
+    from agent.turn_usage import record_response_usage, step_usage
+
+    a = _agent(tmp_path, monkeypatch)
+    try:
+        _line(a, caplog, SimpleNamespace(usage=_usage(34_283, 28_604, 62_889), id=None,
+                                         model="anthropic/claude-fable-5.1"))
+        step = step_usage(a)
+        assert step is not None
+        assert (step["input"], step["output"], step["prompt"], step["completion"], step["total"]) == (
+            62_889 - 34_283 - 28_604, 7, 62_889, 7, 62_896)
+        assert (step["cache_read"], step["cache_write"], step["calls"]) == (34_283, 28_604, 1)
+        assert a._last_step_cost_usd == step.get("cost_usd")
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="agent.turn_usage"):
+            record_response_usage(a, SimpleNamespace(usage=None), messages=[{"role": "user", "content": "hi"}],
+                                  api_call_count=2, api_duration=0.1, compression_attempts=0,
+                                  max_compression_attempts=3)
+        assert step_usage(a) is None
+        assert a._last_step_cost_usd is None
+    finally:
+        a.close()

@@ -40,6 +40,7 @@ _EPHEMERAL_SCAFFOLDING_FLAGS = (
     "_verification_stop_synthetic",  # verify-on-stop nudge; the assistant candidate itself is NOT synthetic
     "_pre_verify_synthetic",
     "_kanban_stop_synthetic",  # kanban worker stop-guard
+    "_unexpected_stop_synthetic",  # smart unexpected-stop retry (ADR-17 P5)
     "_dropped_toolcall_nudge",  # internal retry instruction; must not replay as user context
 )
 
@@ -250,6 +251,10 @@ def _db_flush_row(agent, msg: dict, is_current_turn_user: bool) -> dict[str, Any
         "_compressed_summary": bool(msg.get(COMPRESSED_SUMMARY_METADATA_KEY)),
         "timestamp": timestamp, "api_content": api_content,
         "display_kind": _summary_display_kind(msg), "display_metadata": msg.get("display_metadata"),
+        # ADR-10 D1: custom rows have no columns; the writer carries these into the storage
+        # envelope (`agent.custom_messages.storage_metadata`) so resume can rebuild the block.
+        **{key: msg.get(key) for key in ("custom_type", "display", "display_only", "details",
+                                         "attribution", "legacy_role") if msg.get(key) is not None},
         # Load-bearing for restart drain-window recovery dedup.
         "platform_message_id": msg.get("platform_message_id") or msg.get("message_id"),
         "observed": bool(msg.get("observed")),
@@ -262,6 +267,22 @@ def _db_flush_row(agent, msg: dict, is_current_turn_user: bool) -> dict[str, Any
     if isinstance(msg.get(DB_ROW_SNAPSHOT), str):
         row[DB_ROW_SNAPSHOT] = msg[DB_ROW_SNAPSHOT]
     return row
+
+
+def record_persisted_path_for_stub(agent, tool_call_id: str, function_result) -> None:
+    """Record the spillover file path so a later result-reference stub can't dangle (best-effort)."""
+    try:
+        from tools.tool_result_storage import extract_persisted_path
+
+        candidates = [function_result] if isinstance(function_result, str) else [
+            function_result.get("text_summary"),
+            *(p.get("text") for p in function_result.get("content") or [] if isinstance(p, dict)),
+        ] if _is_multimodal_tool_result(function_result) else []
+        path = next((p for p in map(extract_persisted_path, candidates) if p), None)
+        if path:
+            agent._tool_guardrails.record_persisted_result(tool_call_id, path)
+    except Exception as exc:  # health: allow BLE001 -- result stubbing is best-effort
+        logging.getLogger("run_agent").debug("persisted-path record for result stub failed: %s", exc)
 
 
 def sync_rewritten_tool_rows(agent, batch: list[dict], contents_before: list[Any]) -> int:

@@ -1189,9 +1189,13 @@ def _repair_prompts_lacks_skill_safety(row) -> bool:
     # skills are installed, but the guidance is emitted whenever skill_manage is. A prompt stored before the
     # Skill Safety Rule moved to compaction carries that heading, under whichever opening line it was built with.
     from agent.context_compressor_tail import SKILL_SAFETY_HEADING
-    from agent.prompt_builder import SKILLS_GUIDANCE
+    # The skills block's skill_manage line under either corpus (pre-ADR-19 constant, post-ADR-19 template).
+    markers = (
+        "When you work out a non-trivial workflow, record it with skill_manage for future reuse.",
+        "After a non-trivial workflow, record it with `skill_manage` for reuse.",
+    )
     prompt = (row.get("system_prompt") or "").strip()
-    return bool(prompt and SKILLS_GUIDANCE not in prompt and SKILL_SAFETY_HEADING not in prompt)
+    return bool(prompt and SKILL_SAFETY_HEADING not in prompt and not any(m in prompt for m in markers))
 
 
 def _cmd_repair_prompts(db, args):
@@ -1372,6 +1376,16 @@ def _cmd_adopt(args):
     return cmd_adopt(args)
 
 
+def _cmd_mirror(db, args):
+    from hermes_cli.sessions_mirror import cmd_mirror
+    return cmd_mirror(db, args)
+
+
+def _cmd_restore(db, args):
+    from hermes_cli.sessions_mirror import cmd_restore
+    return cmd_restore(db, args)
+
+
 _PRE_DB_HANDLERS = {
     "repair": _cmd_repair, "recover": _cmd_recover, "import": _cmd_import,
     "repair-profiles": _cmd_repair_profiles,  # opens every profile's store itself
@@ -1387,7 +1401,7 @@ _DB_HANDLERS = {
     "retitle-skills": _cmd_retitle_skills, "browse": _cmd_browse, "optimize": _cmd_optimize,
     "clean-markers": _cmd_clean_markers, "optimize-storage": _cmd_optimize_storage,
     "repair-routing": _cmd_repair_routing, "repair-prompts": _cmd_repair_prompts, "stats": _cmd_stats,
-    "refresh-prompts": _cmd_refresh_prompts,
+    "refresh-prompts": _cmd_refresh_prompts, "mirror": _cmd_mirror, "restore": _cmd_restore,
 }
 
 
@@ -1403,7 +1417,12 @@ def _print_empty_store(action: str, args) -> None:
 
 # VACUUM, the FTS-layout rebuild and bulk deletes rewrite the store; underneath a live gateway/Desktop/cron
 # writer that is the second-writer class behind the retired-WAL refusal (#110054). `--force` is the override.
-_HELD_STORE_ACTIONS = frozenset({"optimize", "optimize-storage", "prune"})
+_HELD_STORE_ACTIONS = frozenset({"optimize", "optimize-storage", "prune", "mirror"})
+
+
+def _mirror_needs_held_gate(args) -> bool:
+    """Only ``--prune-source`` deletes rows; a plain mirror is a read+file write."""
+    return bool(getattr(args, "prune_source", False))
 
 
 def cmd_sessions(args, sessions_parser=None):
@@ -1428,6 +1447,9 @@ def cmd_sessions(args, sessions_parser=None):
         observational = args.owner_endpoint is not None
     # A served-profile process has no single default home: pass the store path explicitly.
     path = get_hermes_home() / "state.db"
+    if action in {"mirror", "restore"} and not path.exists():
+        # Opening a writer would create an empty store; a fresh profile simply has nothing to mirror.
+        return _print_empty_store(action, args) or (0 if action == "mirror" else 1)
     try:
         db = SessionDB(db_path=path, read_only=observational)
     except Exception as e:
@@ -1443,8 +1465,10 @@ def cmd_sessions(args, sessions_parser=None):
         if handler is None:
             sessions_parser.print_help()
             return
-        if (action in _HELD_STORE_ACTIONS and not getattr(args, "dry_run", False) and not getattr(args, "force", False)
-                and getattr(args, "owner_endpoint", None) is None):
+        if (action in _HELD_STORE_ACTIONS and not getattr(args, "dry_run", False)
+                and not getattr(args, "force", False)
+                and getattr(args, "owner_endpoint", None) is None
+                and (action != "mirror" or _mirror_needs_held_gate(args))):
             from hermes_state_holders import held_store_refusal
             # Same path the SessionDB above opened, so the scan never depends on the db object.
             refusal = held_store_refusal(path, command=action)

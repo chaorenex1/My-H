@@ -64,7 +64,7 @@ describe("NativeChat", () => {
     container.remove();
   });
 
-  it("hydrates a live session and renders an adviser event as a card", async () => {
+  it("hydrates a live session and renders an advisor event as a card", async () => {
     await act(async () => {
       root.render(<NativeChat onExit={() => undefined} />);
     });
@@ -75,17 +75,17 @@ describe("NativeChat", () => {
     expect(harness.requests.some((call) => call.method === "session.create")).toBe(true);
 
     await act(async () => {
-      emit("message.adviser", {
+      emit("message.advisor", {
         id: "ad-1",
-        text: "[adviser] check the migration before deploy",
+        text: "[advisor] check the migration before deploy",
         severity: "blocker",
-        label: "adviser · blocker",
-        display_kind: "adviser",
+        label: "advisor · blocker",
+        display_kind: "advisor",
       });
     });
 
     expect(container.textContent).toContain("check the migration before deploy");
-    expect(container.textContent).toContain("adviser · blocker");
+    expect(container.textContent).toContain("advisor · blocker");
     expect(container.textContent).toContain("Terminal");
   });
 });

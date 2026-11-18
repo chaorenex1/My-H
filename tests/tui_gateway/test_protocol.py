@@ -1770,8 +1770,6 @@ def test_command_dispatch_queue_sends_message(server):
     assert result["message"] == "tell me about quantum computing"
 
 
-
-
 # ── dispatch(): pool routing for long handlers (#12546) ──────────────
 
 

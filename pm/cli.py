@@ -14,7 +14,7 @@ from pathlib import Path
 from pm import termux_libs
 from pm.install import _facts, _lockfile, _reclaim_set_aside, _store, ensure, stage_only
 from pm.operations import lock_project
-from pm.package import InstallError
+from pm.package import InstallError, PythonToolPackage
 from pm.paths import repo_root
 from pm.registry import get_package, source_install_packages, tool_roots
 from pm.store import ALL_TARGETS, current_target, hash_url
@@ -102,6 +102,13 @@ def _pin_tool(args) -> int:
     Target-independent urls collapse to one "any" artifact."""
     lockfile = _lockfile()
     package = get_package(args.name)
+    if not package.has_artifacts:
+        # The artifact is a Python resolution, not pinned bytes: keep the version
+        # and an empty table, and let `hermes pm install <name>` build it.
+        lockfile.set_pin(args.name, args.version, {})
+        lockfile.save()
+        print(f"pinned {args.name} {args.version} (version-only package)")
+        return _regenerate_bootstrap_pins(lockfile)
     artifacts: dict[str, object] = {}
 
     def pin(url: str) -> dict:
@@ -462,6 +469,14 @@ def cmd_doctor(args) -> int:
         reason = package.missing_reason(target)
         if reason is not None:
             print(f"- {name}: n/a on {target} ({reason})")
+            continue
+        if isinstance(package, PythonToolPackage):
+            # No store entry: the selected isolated environment is the state.
+            if package.tool_is_current():
+                print(f"✓ {name} {lockfile.version(name)}")
+            else:
+                print(f"{'?' if package.optional else '✗'} {name}: not installed or outdated")
+                bad += 0 if package.optional else 1
             continue
         facts, store = _installed_location(package, lockfile, target) or (_facts(), _store())
         fact = facts.get(name)
@@ -840,6 +855,8 @@ def _termux_pass(*, check: bool) -> int:
 @reuse_index_responses()
 def _pin_artifacts(package, decision, current: dict) -> dict:
     """Retain unresolved targets and reuse hashes for unchanged artifact URLs."""
+    if not package.has_artifacts:
+        return dict(current)
     per_target = decision.per_target or {t: decision.version for t in ALL_TARGETS}
     artifacts = dict(current)
     hashes: dict[str, str] = {}

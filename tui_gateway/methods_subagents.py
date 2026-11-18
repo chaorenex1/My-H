@@ -4,16 +4,56 @@ Async projection adapted from JoaoMarcos44's PR #70899; controls reuse the
 existing subagent.steer RPC rather than introducing a second steering runtime.
 """
 
+import os
+from pathlib import Path
+
 from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
 method = _registry.method
 
-_SUBAGENT_SNAPSHOT_FIELDS = (
-    "subagent_id", "parent_id", "depth", "goal", "delegation_id", "model",
-    "started_at", "status", "tool_count", "last_tool", "accepting_steer",
-)
+# Wire name → live registry record key. ``progress`` is assembled from the record's counters in
+# ``_snapshot_row``; ``agent`` is the derived role, never the record's live ``agent`` object. Keep in
+# sync with gateway/session_ancillary.py::_SUBAGENT_SNAPSHOT_FIELDS (the authority twin).
+_SUBAGENT_SNAPSHOT_FIELDS = {
+    "subagent_id": "subagent_id", "parent_id": "parent_id", "depth": "depth", "goal": "goal",
+    "delegation_id": "delegation_id", "model": "model", "started_at": "started_at",
+    "status": "status", "tool_count": "tool_count", "last_tool": "last_tool",
+    "accepting_steer": "accepting_steer",
+    "index": "task_index", "agent": "agent_role", "description": "goal", "task": "goal",
+    "assignment": "goal", "session_file": "session_file", "last_update": "last_update",
+    "parent_tool_call_id": "parent_tool_call_id",
+}
+_SUBAGENT_PROGRESS_FIELDS = ("tool_count", "last_tool", "status")
 _SUBAGENT_TAIL_BYTES = 16384
+
+
+def _snapshot_row(record):
+    """One ``subagent.list`` row. Absent keys stay ``None``: ``session_file`` until a helper maps a
+    child's session id to a transcript path, ``parent_tool_call_id`` until a child carries one."""
+    row = {name: record.get(key) for name, key in _SUBAGENT_SNAPSHOT_FIELDS.items()}
+    counters = {key: record.get(key) for key in _SUBAGENT_PROGRESS_FIELDS if record.get(key) is not None}
+    row["progress"] = counters or None
+    return row
+
+
+def _tail_result(path):
+    """The last ``_SUBAGENT_TAIL_BYTES`` of one live transcript, with the byte range that was read."""
+    result = {"available": False, "text": "", "truncated": False, "session_file": None,
+              "from_byte": 0, "next_byte": 0}
+    if not path:
+        return result
+    try:
+        with open(path, "rb") as stream:
+            size = stream.seek(0, 2)
+            from_byte = max(0, size - _SUBAGENT_TAIL_BYTES)
+            stream.seek(from_byte)
+            text = stream.read(_SUBAGENT_TAIL_BYTES).decode("utf-8", errors="ignore")
+    except OSError:
+        # Creation/cleanup races are normal while a child starts or ends; the path is still real.
+        return {**result, "session_file": str(path)}
+    return {**result, "available": True, "text": text, "truncated": size > _SUBAGENT_TAIL_BYTES,
+            "session_file": str(path), "from_byte": from_byte, "next_byte": size}
 
 
 def _owned_subagent_records(session_id, transport, owner):
@@ -58,9 +98,9 @@ def _(rid, params):
         return _err(rid, 4001, "session not found or not owned by this transport")
     live = _visible_subagent_records(session_id, transport, owner)
     return _ok(rid, {
-        "subagents": [{**{key: r.get(key) for key in _SUBAGENT_SNAPSHOT_FIELDS},
-                       "child_session_id": _child_session_id(r)} for r in live],
+        "subagents": [{**_snapshot_row(r), "child_session_id": _child_session_id(r)} for r in live],
         "delegations": _failed_delegations(session_id, owner),
+        "agents": _agent_definitions(owner),
     })
 
 
@@ -145,6 +185,32 @@ def _(rid, params):
     return _ok(rid, {"sessions": [{"session_id": sid, **c} for sid, c in counts.items()]})
 
 
+def _agent_definitions(owner):
+    """Static scoped agent definitions + their dynamic config for Agent Hub.
+
+    The sidecar's shared DB is the LAUNCH profile's ``state.db``; a routed session in another
+    profile must not read it. Bind the session's own home for the scan and drop the dynamic rows
+    when the homes differ (the authority serves that profile's rows).
+    """
+    from gateway.agent_roster import list_agent_definitions
+    from tui_gateway.methods_tools import _session_home_scope
+
+    profile_home = str(owner.get("profile_home") or "")
+    same_home = not profile_home or Path(profile_home).resolve() == Path(_launch_home()).resolve()
+    try:
+        db = _get_db() if same_home and callable(globals().get("_get_db")) else None
+    except Exception:
+        logger.debug("subagent.list: shared session db unavailable", exc_info=True)
+        db = None
+    try:
+        with _session_home_scope(owner):
+            cwd = str(owner.get("cwd") or os.getcwd())
+            return list_agent_definitions(cwd, db)
+    except Exception:
+        logger.debug("subagent.list: agent roster read failed", exc_info=True)
+        return []
+
+
 def _failed_delegations(session_id, owner):
     """Recently failed async delegation tasks for this session from the durable store (the live
     roster forgets ended children and dies with a renderer reload, #97202). Read under the session's
@@ -181,7 +247,7 @@ def _(rid, params):
             found = bool(request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"))
         except Exception:
             logger.debug("subagent interrupt failed", exc_info=True)
-    return _ok(rid, {"found": found, "subagent_id": subagent_id})
+    return _ok(rid, {"found": found, "subagent_id": subagent_id, "cancelled": found})
 
 
 @method("subagent.tail")
@@ -193,21 +259,13 @@ def _(rid, params):
     transport, owner = _current_session_steer_authority(session_id)
     if transport is None or owner is None:
         return _err(rid, 4001, "session not found or not owned by this transport")
-    result = {"subagent_id": subagent_id, "available": False, "text": "", "truncated": False}
+    result = {"subagent_id": subagent_id, **_tail_result(None)}
     record = next((r for r in _owned_subagent_records(session_id, transport, owner)
                    if r.get("subagent_id") == subagent_id), None)
     path = getattr(record.get("agent"), "_live_transcript_path", None) if record else None
     if not path:
         return _ok(rid, result)
-    try:
-        with open(path, "rb") as stream:
-            size = stream.seek(0, 2)
-            stream.seek(max(0, size - _SUBAGENT_TAIL_BYTES))
-            text = stream.read(_SUBAGENT_TAIL_BYTES).decode("utf-8", errors="ignore")
-    except OSError:
-        # Creation/cleanup races are normal while a child starts or ends.
-        return _ok(rid, result)
-    return _ok(rid, {**result, "available": True, "text": text, "truncated": size > _SUBAGENT_TAIL_BYTES})
+    return _ok(rid, {"subagent_id": subagent_id, **_tail_result(path)})
 
 
 def register(server):

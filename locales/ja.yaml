@@ -1480,6 +1480,20 @@ platform:
     confirm_cancel: "キャンセル"
     prompt_other: "✏️ その他（回答を入力）"
     prompt_expired: ⌛ このプロンプトはもう回答を待っていません。通常のメッセージとして返信を送ってください。
+workspace_dirs:
+  usage_add: "使用法: /add-dir <パス>"
+  usage_remove: "使用法: /remove-dir <パス>"
+  not_found: "ディレクトリが存在しません: {path}"
+  already_cwd: "作業ディレクトリはすでにこのセッションの主要ワークスペースルートです。"
+  already: "すでにワークスペースに含まれています: {path}"
+  added: "{path} を追加しました。"
+  missing: "ワークスペースディレクトリではありません: {path}"
+  removed: "{path} を削除しました。"
+  cwd_removal: "作業ディレクトリは削除できません。/worktree か新しいセッションで変更してください。"
+  local_only: "このコマンドはローカルセッションのワークスペースを管理するため、このプラットフォームでは使用できません。"
+  listing_header: "ワークスペースディレクトリ:"
+  listing_cwd: "  {path}（作業ディレクトリ）"
+  listing_root: "  {path}"
 slash:
   rewind:
     description: "以前のプロンプトまで巻き戻して編集・再送信、またはそこから分岐 (Esc Esc)"
@@ -1543,6 +1557,12 @@ slash:
     description: "現在のセッションを分岐（Discord/Telegram/Slack/Matrix では新しいスレッド。--here でここに留まる）"
   worktree:
     description: "分離された git worktree の表示、一覧、作成、または削除"
+  add-dir:
+    description: "このセッションにワークスペースディレクトリを追加します（マルチルート）"
+  remove-dir:
+    description: "このセッションからワークスペースディレクトリを削除します"
+  dirs:
+    description: "このセッションのワークスペースディレクトリ（現在のディレクトリと追加ルート）を表示します"
   compress:
     description: "会話コンテキストを圧縮（'here [N]' を付けると直近 N ターンを保持。--preview で結果を事前確認）"
   rollback:

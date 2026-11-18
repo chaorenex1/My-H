@@ -126,7 +126,7 @@ served_profile_child_env(target_home=, inherit_credentials=)`: launch-profile `.
 target's own secrets overlaid. `os.environ.copy()` / `dict(os.environ)` pins the launch profile;
 contextvars do not cross process boundaries, so resolve before `Popen`. A child's
 `UnscopedSecretError` is a spawn-site bug, never a reason to add environ fallthrough. New threads
-from scoped code use `agent.memory_provider.spawn_context_thread` (a bare `threading.Thread`
+from scoped code use `hermes_threading.spawn_context_thread` (a bare `threading.Thread`
 drops the scope). **MCP trust is a per-profile record:** `mcp_tool_registration.py::
 _record_scope_trust` keys trust on the home; a secondary never adopts the launch profile's trust
 for a same-named server, and `mcp_tool_handlers.py::_trust_gate_check` consults the calling
@@ -142,6 +142,14 @@ a browser's zygote mid-shutdown turns exit 0 into a SIGTRAP core dump. `_stop_sy
 teardown, kills the worker cgroup) runs only after that PID kill in `kill()`, or on a parent already
 proven dead/recycled (`session.exited`, `_signal_kill` recycled-PID path, checkpoint recovery) —
 it is never the first signal a live parent receives.
+
+## Named agents (`tools/agent_tool.py`, `tools/agent_out_tool.py`)
+
+`agents` toolset. One `agent` call = one agent session: the tool mints `agent_session_id` and a
+unique `subject`, returns only those, and writes `<parent bundle>/<topic>.jsonl`. No implicit
+continuation (`continue_from` seeds it). The `agent_session` row is inserted pre-dispatch and
+settled by the finishing thread; `agent_out` reads history / artifact / ast_summary / inbox (no
+`final_response`).
 
 ## Delegation (`tools/delegate_tool.py`)
 

@@ -68,7 +68,7 @@ class _Pool:
         call.add_done_callback(self.release)
         if spawn:
             # Daemon: a call stuck on its model must not hold up interpreter exit (it writes no state).
-            from agent.memory_provider import spawn_context_thread
+            from hermes_threading import spawn_context_thread
             try:
                 spawn_context_thread(self.drain, name='hermes-oneshot').start()
             except RuntimeError:
@@ -255,7 +255,7 @@ async def oneshot(connection, ref, params):
             return {'text': run_oneshot(
                 instructions=params.get('instructions') or '', user_input=params.get('input') or '',
                 template=(params.get('template') or '').strip() or None, variables=params.get('variables') or {},
-                task=(params.get('task') or '').strip() or 'title_generation',
+                task=(params.get('task') or '').strip() or None,
                 max_tokens=int(params.get('max_tokens') or 1024),
                 temperature=0.3 if params.get('temperature') is None else float(params['temperature']),
                 main_runtime=runtime())}

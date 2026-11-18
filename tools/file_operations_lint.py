@@ -322,6 +322,17 @@ class LintMixin:
         False so the shell linter still runs."""
         return bool(self._lsp_call("enabled_for", path, False))
 
+    def _write_abs_path(self, path: str) -> str:
+        """Absolute path of a write for the late-diagnostics identity (ADR-9 P3).
+
+        A gateway session runs in its own workdir, which need not be the process cwd; resolving a
+        relative tool argument with ``os.path.abspath`` could name a different file than the write
+        just touched. The backend cwd is the authority the write itself used."""
+        if os.path.isabs(path):
+            return os.path.abspath(path)
+        base = getattr(self.env, "cwd", None) or getattr(self, "cwd", None) or os.getcwd()
+        return os.path.abspath(os.path.join(base, path))
+
     def _maybe_lsp_diagnostics(self, path: str, *, pre_content: Optional[str] = None,
                                post_content: Optional[str] = None, started: Optional[float] = None) -> str:
         """Formatted LSP diagnostics this edit introduced, or "" when LSP is unavailable/disabled/clean
@@ -332,19 +343,22 @@ class LintMixin:
         left of the write's latency budget; ``started`` = ``time.monotonic()`` at write entry); a slower
         verdict reaches the model with a later tool result of the same session (``agent.lsp.deferred``)."""
         svc = self._lsp_service()
-        if svc is None or not self._lsp_will_handle(path):
+        abs_path = self._write_abs_path(path)
+        if svc is None or not self._lsp_will_handle(abs_path):
+            return ""
+        source = _lsp_display()
+        if source.off:
             return ""
         try:
             from agent.lsp import deferred
             from agent.lsp.edit_check import inline_wait
-            abs_path = os.path.abspath(path)
             owner = deferred.current_owner()
             # This session's undelivered verdict for the file: the new check takes it over (diffs
             # against its baseline) and hands it back in ``result.carry`` only if it gets no verdict.
             older = deferred.take(owner, abs_path)
             carry = (older,) if older is not None else ()
-            future = svc.start_edit_check(path, pre_text=pre_content, post_text=post_content, owner=owner,
-                                          carry=carry)
+            future = svc.start_edit_check(abs_path, pre_text=pre_content, post_text=post_content,
+                                          owner=owner, carry=carry)
         except Exception:
             return ""
         if future is None:
@@ -356,7 +370,11 @@ class LintMixin:
         except concurrent.futures.TimeoutError:
             if owner:
                 token = deferred.track_pending(owner)
-                future.add_done_callback(lambda f: _post_deferred(owner, abs_path, f, carry, token))
+                if source.late:
+                    future.add_done_callback(
+                        lambda f: _post_deferred(owner, abs_path, f, carry, token, source))
+                else:  # mode=inline: the verdict is outside the chosen surface; drop it
+                    future.add_done_callback(lambda _f: deferred.settled(owner, token))
             return ""
         except Exception:  # LSP never breaks a write
             logger.debug("LSP edit check failed for %s", path, exc_info=True)
@@ -367,34 +385,211 @@ class LintMixin:
         if result.diagnostics is None:
             deferred.restore(owner, abs_path, result.carry)
             return ""
-        return _format_lsp_block(path, result.diagnostics, "LSP diagnostics introduced by this edit:\n")
+        if source.mode == "late":
+            # A budget-hit verdict is surfaced only as the late row (ADR-9 D12 mode=late). No owner
+            # (a one-shot caller) means nobody to deliver to: the inline result stays empty.
+            if owner:
+                _queue_late_verdict(owner, abs_path, _resolved_future(result), carry, source, budget_hit=True)
+            return ""
+        return _format_lsp_block(path, result.diagnostics, "LSP diagnostics introduced by this edit:\n",
+                                 severities=source.lsp_severity_ids)
+
+    def _begin_semgrep(self, path: str, digest: Optional[str] = None):
+        """Start the Semgrep scan of this write beside the LSP check (ADR-9 D8), before either waits.
+
+        Returns an opaque handle for ``_finish_semgrep``, or None when Semgrep cannot run.  Starting
+        first matters: both sources share ``WRITE_BUDGET``, so the scan must run *inside* the window
+        the LSP check is about to spend rather than after it.  ``digest`` is the sha256 of the bytes
+        this write persisted; both the scan and the verdict require the file to still hold them.
+        """
+        if not self._lsp_local_only():
+            return None
+        try:
+            from agent.lsp import deferred, semgrep_check
+            abs_path = self._write_abs_path(path)
+            owner = deferred.current_owner()
+            # Drop the previous scan's findings first: this write replaced the bytes they describe.
+            token = deferred.begin_semgrep(owner, abs_path)
+            source = _semgrep_display()
+            future = None if source.off else semgrep_check.start_scan(abs_path, digest)
+        except Exception:  # Semgrep never breaks a write
+            logger.debug("Semgrep edit check failed for %s", path, exc_info=True)
+            return None
+        if future is None:
+            deferred.finish_semgrep(owner, abs_path, token)
+            return None
+        return abs_path, owner, token, source, future, digest
+
+    def _finish_semgrep(self, handle, *, started: Optional[float] = None) -> str:
+        """Formatted Semgrep findings this edit introduced, or "" when off / not ready / clean.
+
+        A verdict inside the shared write budget goes into the tool result; a slower one is queued
+        in ``agent.lsp.deferred`` under the same ``(owner, path)`` as the LSP verdict, and the next
+        delivery point merges both slots into one row.
+        """
+        if handle is None:
+            return ""
+        from agent.lsp import deferred, semgrep_check
+        from agent.lsp.edit_check import inline_wait
+        abs_path, owner, token, source, future, digest = handle
+        import concurrent.futures
+        try:
+            result = future.result(timeout=inline_wait(started))
+        except concurrent.futures.TimeoutError:
+            if owner:
+                pending = deferred.track_pending(owner)
+                future.add_done_callback(
+                    lambda f: _post_semgrep_deferred(owner, abs_path, f, token, source, pending, digest))
+            else:  # nobody to deliver to: retire the token, drop the verdict
+                deferred.finish_semgrep(owner, abs_path, token)
+            return ""
+        except Exception:  # Semgrep never breaks a write
+            logger.debug("Semgrep edit check failed for %s", abs_path, exc_info=True)
+            deferred.finish_semgrep(owner, abs_path, token)
+            return ""
+        if not semgrep_check.bytes_match(abs_path, digest):
+            # Another writer replaced the bytes between this write and the scan: not this edit's
+            # finding (ADR-9 D8). The stale token is retired like a failed scan.
+            deferred.finish_semgrep(owner, abs_path, token)
+            return ""
+        diagnostics = semgrep_check.diagnostics_from_scan(
+            abs_path, result, severities=source.lsp_severity_ids)
+        if source.mode == "late":
+            # A budget-hit verdict is surfaced only as the late row (ADR-9 D12 mode=late).
+            if owner:
+                files = _late_files(abs_path, diagnostics, source.lsp_severity_ids)
+                text = _format_semgrep_block(
+                    abs_path, diagnostics,
+                    f"Semgrep diagnostics introduced by your edit of {abs_path}:\n",
+                    source.lsp_severity_ids)
+                deferred.post_semgrep(owner, abs_path, token, text if files else "", files)
+            else:
+                deferred.finish_semgrep(owner, abs_path, token)
+            return ""
+        deferred.finish_semgrep(owner, abs_path, token)
+        if not diagnostics:
+            return ""
+        return _format_semgrep_block(
+            abs_path, diagnostics, "Semgrep diagnostics introduced by this edit:\n", source.lsp_severity_ids)
 
 
-def _format_lsp_block(path: str, diagnostics, header: str) -> str:
+def _lsp_display():
+    """The ``lsp.display.lsp`` policy; defaults when the config cannot be read."""
+    try:
+        from agent.lsp.display import display_policy
+
+        return display_policy().lsp
+    except Exception:  # health: allow BLE001 -- a policy read must never fail a write
+        from agent.lsp.display import SourceDisplay
+
+        logger.debug("lsp.display policy read failed; using defaults", exc_info=True)
+        return SourceDisplay()
+
+
+def _resolved_future(result):
+    """A completed future carrying ``result`` so the shared late path takes one input shape."""
+    import concurrent.futures
+
+    future = concurrent.futures.Future()
+    future.set_result(result)
+    return future
+
+
+def _semgrep_display():
+    """The ``lsp.display.semgrep`` policy; defaults when the config cannot be read."""
+    try:
+        from agent.lsp.display import display_policy
+
+        return display_policy().semgrep
+    except Exception:  # health: allow BLE001 -- a policy read must never fail a write
+        from agent.lsp.display import DEFAULT_SEMGREP_SEVERITIES, SourceDisplay
+
+        logger.debug("lsp.display policy read failed; using defaults", exc_info=True)
+        return SourceDisplay(severities=DEFAULT_SEMGREP_SEVERITIES)
+
+
+def _format_semgrep_block(path: str, diagnostics, header: str,
+                          severities: frozenset = frozenset({1, 2})) -> str:
+    """The model block for Semgrep findings (ADR-9 D8): one
+    ``path:line:col [severity] [semgrep] message (rule)`` line per finding, the same line format the
+    client renders, so ``source``/``rule`` survive into the tool result.  ``""`` when filtered clean.
+    """
+    if not diagnostics:
+        return ""
+    try:
+        from agent.lsp.reporter import file_entry, truncate
+
+        entry = file_entry(path, diagnostics, severities=severities)
+        if entry is None:
+            return ""
+        return truncate(header + "\n".join(entry["messages"]))
+    except Exception:  # Semgrep never breaks a write
+        logger.debug("formatting Semgrep diagnostics for %s failed", path, exc_info=True)
+        return ""
+
+
+def _post_semgrep_deferred(owner: str, abs_path: str, future, token, source, pending,
+                           digest: Optional[str] = None) -> None:
+    """Done-callback (scan thread): queue the Semgrep verdict and release a waiting turn end."""
+    from agent.lsp import deferred
+    try:
+        _queue_semgrep_verdict(owner, abs_path, future, token, source, digest)
+    finally:
+        deferred.settled(owner, pending)
+
+
+def _queue_semgrep_verdict(owner: str, abs_path: str, future, token, source,
+                           digest: Optional[str] = None) -> None:
+    """Queue one late Semgrep verdict.  ``post_semgrep`` also retires ``token``, so a scan superseded
+    by a newer write drops its findings instead of attaching them to the current bytes.  A file that
+    no longer holds this write's bytes (another session rewrote it while the scan queued) is equally
+    superseded: the finding describes bytes this edit never produced."""
+    from agent.lsp import deferred, semgrep_check
+    try:
+        result = None if future.cancelled() else future.result()
+    except Exception:  # a failed scan reports nothing
+        logger.debug("deferred Semgrep scan failed for %s", abs_path, exc_info=True)
+        deferred.finish_semgrep(owner, abs_path, token)
+        return
+    if not semgrep_check.bytes_match(abs_path, digest):
+        deferred.finish_semgrep(owner, abs_path, token)
+        return
+    diagnostics = semgrep_check.diagnostics_from_scan(abs_path, result, severities=source.lsp_severity_ids)
+    header = (f"Semgrep diagnostics introduced by your earlier edit of {abs_path} "
+              "(the scan answered after that tool result returned):\n")
+    text = _format_semgrep_block(abs_path, diagnostics, header, source.lsp_severity_ids)
+    files = _late_files(abs_path, diagnostics, source.lsp_severity_ids)
+    deferred.post_semgrep(owner, abs_path, token, text if files else "", files)
+
+
+def _format_lsp_block(path: str, diagnostics, header: str,
+                      severities: frozenset = frozenset({1})) -> str:
     if not diagnostics:
         return ""
     try:
         from agent.lsp.reporter import report_for_file, truncate
-        block = report_for_file(path, diagnostics)
+        block = report_for_file(path, diagnostics, severities=severities)
         return truncate(header + block) if block else ""
     except Exception:  # LSP never breaks a write
         logger.debug("formatting LSP diagnostics for %s failed", path, exc_info=True)
         return ""
 
 
-def _post_deferred(owner: str, abs_path: str, future, carry, token) -> None:
+def _post_deferred(owner: str, abs_path: str, future, carry, token, source) -> None:
     """Done-callback (LSP loop thread): queue a late verdict for the session that made the edit, then
     release a turn end waiting on it (``agent.lsp.deferred.settle_for_agent``)."""
     from agent.lsp import deferred
     try:
-        _queue_late_verdict(owner, abs_path, future, carry)
+        _queue_late_verdict(owner, abs_path, future, carry, source)
     finally:
         deferred.settled(owner, token)
 
 
-def _queue_late_verdict(owner: str, abs_path: str, future, carry) -> None:
+def _queue_late_verdict(owner: str, abs_path: str, future, carry, source, *, budget_hit: bool = False) -> None:
     """A superseded check posts nothing: the newer check owns its verdict AND the notes it carried.
-    No verdict hands back only what the check still holds (``result.carry``), never the caller's copy."""
+    No verdict hands back only what the check still holds (``result.carry``), never the caller's copy.
+    ``budget_hit`` (mode=late) means the server answered in time and the policy moved the verdict to
+    the late surface, so the note must not claim it arrived after the tool result."""
     from agent.lsp import deferred
     try:
         result = None if future.cancelled() else future.result()
@@ -410,8 +605,25 @@ def _queue_late_verdict(owner: str, abs_path: str, future, carry) -> None:
     if result.diagnostics is None:
         deferred.restore(owner, abs_path, result.carry)
         return
-    text = _format_lsp_block(abs_path, result.diagnostics, (
-        f"LSP diagnostics introduced by your earlier edit of {abs_path} "
-        "(the language server answered after that tool result returned):\n"))
-    if text:
-        deferred.post(owner, abs_path, text, result.baseline_text)
+    severities = source.lsp_severity_ids
+    header = (f"LSP diagnostics introduced by your edit of {abs_path}:\n" if budget_hit else
+              f"LSP diagnostics introduced by your earlier edit of {abs_path} "
+              "(the language server answered after that tool result returned):\n")
+    text = _format_lsp_block(abs_path, result.diagnostics, header, severities=severities)
+    if not text:
+        # Filtered clean for this surface: the new verdict supersedes the old note.
+        return
+    files = _late_files(abs_path, result.diagnostics, severities)
+    deferred.post(owner, abs_path, text, result.baseline_text, files)
+
+
+def _late_files(abs_path: str, diagnostics, severities: frozenset) -> list:
+    """The structured ``details.files`` entry for one verdict; ``[]`` when nothing is displayed."""
+    try:
+        from agent.lsp.reporter import file_entry
+
+        entry = file_entry(abs_path, diagnostics, severities=severities)
+        return [entry] if entry is not None else []
+    except Exception:  # presentation must never break the model-facing path
+        logger.debug("building late-diagnostic files for %s failed", abs_path, exc_info=True)
+        return []

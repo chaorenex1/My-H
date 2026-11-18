@@ -121,7 +121,9 @@ def test_edit_preview_is_durable_before_emission_and_display_only(
             projected_tool = next(row for row in projected if row["role"] == "tool")
             assert projected_tool["tool_call_id"] == call_id
             assert projected_tool["content"] == row["content"]
-            assert projected_tool.get("display_metadata") == row.get("display_metadata")
+            # ADR-10 P5: the durable display metadata stays internal; the wire carries its verdict.
+            assert "display_metadata" not in projected_tool
+            assert projected_tool["is_error"] is bool(raw.get("error"))
             assert projected_tool["timestamp"] == row["timestamp"]
 
             # Preparation never modifies provider bytes or the cached prefix.

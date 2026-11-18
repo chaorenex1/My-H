@@ -1,4 +1,4 @@
-import type { AdviserDisplay, ChatMessage } from '@/lib/chat-messages'
+import type { AdvisorDisplay, ChatMessage } from '@/lib/chat-messages'
 
 import { persistedTurnsEquivalent } from './pending-turn-identity'
 
@@ -29,9 +29,9 @@ const COMPARED_FIELDS = [
   'recovered',
   'asyncResult',
   'asyncResultKind',
-  // Plugin adviser card content; a rehydrated label/body must repaint.
-  'adviser',
-  // Stable id of an injected adviser row; the live event and the hydrate must agree on it.
+  // Plugin advisor card content; a rehydrated label/body must repaint.
+  'advisor',
+  // Stable id of an injected advisor row; the live event and the hydrate must agree on it.
   'pluginMessageId',
   'id',
   'role',
@@ -162,7 +162,7 @@ export function chatReactionsEquivalent(a: ChatMessage['reactions'], b: ChatMess
   )
 }
 
-function adviserEquivalent(a: AdviserDisplay | undefined, b: AdviserDisplay | undefined): boolean {
+function advisorEquivalent(a: AdvisorDisplay | undefined, b: AdvisorDisplay | undefined): boolean {
   if (a === b) {
     return true
   }
@@ -211,7 +211,7 @@ export function chatMessagesEquivalent(a: ChatMessage, b: ChatMessage): boolean 
     a.branchGroupId !== b.branchGroupId ||
     a.timestamp !== b.timestamp ||
     a.completedAt !== b.completedAt ||
-    !adviserEquivalent(a.adviser, b.adviser) ||
+    !advisorEquivalent(a.advisor, b.advisor) ||
     flagsDiffer(a, b) ||
     !chatReactionsEquivalent(a.reactions, b.reactions)
   ) {

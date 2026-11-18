@@ -883,14 +883,14 @@ prompt_caching:
   cache_ttl: "5m" # use "1h" for long sessions with pauses between turns
 
 # =============================================================================
-# Adviser (native second-model reviewer)
+# Advisor (native second-model reviewer)
 # =============================================================================
 # A second model shadows each turn, reads the incremental transcript, and may
 # deliver `nit` / `concern` / `blocker` notes into the same session. The roster
-# and per-adviser overrides live in WATCHDOG.yml ($HERMES_HOME or any project
+# and per-advisor overrides live in WATCHDOG.yml ($HERMES_HOME or any project
 # directory up to the git root); this block is the global default.
 # Off by default: it costs one extra completion per reviewed turn.
-adviser:
+advisor:
   enabled: false
   # Empty = inherit the primary agent's provider/model for every review.
   # provider: openrouter
@@ -1918,6 +1918,16 @@ code_execution:
 # The delegate_task tool spawns child agents with isolated context.
 # Supports single tasks and batch mode (default 3 parallel, configurable).
 delegation:
+  # Prompt-policy switches rendered into the tool-policy chapter (ADR-18). They shape the
+  # prompt only; they never block a spawn. `bias: "gated"` means no subagents unless the
+  # user/AGENTS.md/skill asks; `"eager"` means delegation is preferred.
+  # bias: "eager"
+  # eager_tasks: false                        # Render "delegation preferred" for substantial work
+  # eager_tasks_always: false                 # Render "delegation default" except tiny single-file edits,
+                                              # direct answers, and explicit commands
+  # inline_first: true                        # Fan out only for 2+ independent slices or a context flood
+  # spawn_directive: true                     # Allow agent(spawn="spawn:@<name>\n<body>"). false keeps the
+                                              # structured agent_name + user_prompts form only.
   # backend: "default"                        # Strategy routing each delegate_task task: "default" = the keys below,
                                               # else the parent's route. model_map / profile_routes come from the
                                               # advanced-delegation plugin; a backend that is missing, disabled or

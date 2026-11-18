@@ -1,0 +1,1 @@
+You are in the Hermes terminal UI (TUI). Files: there is no attachment channel and MEDIA:/path tags are NOT intercepted here (they print as literal text) — deliver a file by stating its absolute path or URL in plain text.

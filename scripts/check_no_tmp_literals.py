@@ -71,7 +71,14 @@ SKIP_DIRS = {
 # Pruned only directly under the repo root.
 ROOT_SKIP_DIRS = {".github"}
 # Pruned as repo-relative paths.
-SKIP_REL_DIRS = {Path("website/i18n"), Path("website/build"), Path("website/node_modules")}
+SKIP_REL_DIRS = {
+    Path("website/i18n"),
+    Path("website/build"),
+    Path("website/node_modules"),
+    # omp-ui/src/vendor is the vendored upstream oh-my-pi dependency closure (omp-ui/src/VENDORED.md):
+    # its `/tmp` defaults are upstream's. The shell around it is Hermes-maintained and stays checked.
+    Path("omp-ui/src/vendor"),
+}
 
 SKIP_FILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock"}
 SKIP_FILE_PATTERNS = (

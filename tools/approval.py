@@ -365,11 +365,29 @@ def clear_session(session_key: str) -> None:
     # Session-persistent code kernels (local and remote) share this owner key and die at the same boundary so a
     # finished conversation cannot leak a live interpreter.
     for module, shutdown in (("tools.code_kernel", "shutdown_kernels_for_owner"),
-                             ("tools.code_kernel_remote", "shutdown_remote_kernels_for_owner")):
+                             ("tools.code_kernel_remote", "shutdown_remote_kernels_for_owner"),
+                             ("tools.eval_js_kernel", "shutdown_js_kernels_for_owner")):
         try:
             getattr(importlib.import_module(module), shutdown)(session_key)
-        except Exception:
-            pass
+        except Exception:  # health: allow BLE001 -- teardown is best effort after the state is cleared
+            logger.debug("kernel teardown failed for %s", module, exc_info=True)
+    # ADR-4 D10/D11/D14: handles, workpools, completions, background eval jobs and speculated
+    # reads die with the session.
+    try:
+        from tools.eval_host_ops import clear_session_state
+        clear_session_state(session_key)
+    except Exception:  # health: allow BLE001 -- teardown is best effort after the state is cleared
+        logger.debug("eval host state teardown failed", exc_info=True)
+    try:
+        from tools.eval_jobs import clear_session_jobs
+        clear_session_jobs(session_key)
+    except Exception:  # health: allow BLE001 -- teardown is best effort after the state is cleared
+        logger.debug("eval job teardown failed", exc_info=True)
+    try:
+        from tools.eval_speculation import invalidate_owner
+        invalidate_owner(session_key)
+    except Exception:  # health: allow BLE001 -- teardown is best effort after the state is cleared
+        logger.debug("speculation teardown failed", exc_info=True)
 
 
 def is_session_yolo_enabled(session_key: str) -> bool:
@@ -1342,12 +1360,15 @@ def _is_local_viewer_turn() -> bool:
             and _gateway_notify_cb(get_current_session_key()) is not None)
 
 
-def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = False) -> dict:
-    """Approve an execute_code script before its child process is spawned.
+def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = False,
+                             language: str = "py") -> dict:
+    """Approve an execute_code cell before its child process is spawned.
 
-    The script can call ``subprocess``/``os.system``/``ctypes`` directly, none of which pass
-    through ``terminal()`` / ``DANGEROUS_PATTERNS``; in gateway/ask contexts we fail closed by
-    approving the script as a whole. Same dict contract as ``check_all_command_guards``.
+    The script can call ``subprocess``/``os.system``/``ctypes``/``Bun.spawn`` directly, none of
+    which pass through ``terminal()`` / ``DANGEROUS_PATTERNS``; in gateway/ask contexts we fail
+    closed by approving the script as a whole. ``language`` only selects the display heredoc
+    (``<<'PY'``/``<<'JS'``) and fence — the decision matrix is identical for Python and JS.
+    Same dict contract as ``check_all_command_guards``.
     Documented limitation: a purely local non-interactive non-gateway session returns approved
     (the terminal auto-approve contract); the hardline floor still blocks catastrophic
     ``terminal()`` commands the script issues.
@@ -1359,6 +1380,9 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
     """
     pattern_key = "execute_code"
     description = _EXECUTE_CODE_DESCRIPTION
+    is_js = str(language or "").strip().lower() in ("js", "javascript")
+    heredoc = "JS" if is_js else "PY"
+    fence = "js" if is_js else "python"
 
     # Isolated backends already sandbox the child. vercel_sandbox has no host-bind concept so it stays always-skipped.
     if env_type == "vercel_sandbox":
@@ -1395,7 +1419,7 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
 
     session_key = get_current_session_key()
     # Built only past the early-return gates so common paths don't copy a potentially-large script into this string.
-    command = f"execute_code <<'PY'\n{code}\nPY"
+    command = f"execute_code <<'{heredoc}'\n{code}\n{heredoc}"
 
     # Without this, "Approve session" / "Always" choices are stored but never
     # consulted, so every execute_code call re-prompts (#39275).
@@ -1411,7 +1435,7 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
         pattern_keys=[pattern_key], session_key=session_key,
         approval_callback=approval_callback, is_cli=is_cli, is_gateway=is_gateway, is_ask=is_ask,
         smart=approval_mode == "smart",
-        pending_body=lambda: f"**Code:**\n```python\n{redact_approval_display(code)}\n```",
+        pending_body=lambda: f"**Code:**\n```{fence}\n{redact_approval_display(code)}\n```",
     )
 
 

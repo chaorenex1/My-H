@@ -4953,11 +4953,19 @@ export interface RuntimeDescribeResult {
   authority_epoch: number
   capabilities: string[]
   session_create: SessionCreateDescriptor
+  panels: Record<string, PanelCapability>
   skin?: SkinPayload | null
 }
 export interface SessionCreateDescriptor {
   sources: string[]
   parameters: string[]
+}
+/** One client panel's readiness (``gateway/panel_inventory.py``). ``status`` is the panel-level verdict the client renders; ``methods`` is what it may call TODAY (authority-served only), so a pending panel never sends a request that answers ``-32601``. The full planned matrix lives in ``docs/omp-ui-panels.json``. */
+export interface PanelCapability {
+  supported: boolean
+  status: 'ready' | 'client' | 'pending' | 'partial' | 'unsupported'
+  methods: string[]
+  reason?: string | null
 }
 /** ``tui_gateway/change_watcher.py::resolve_skin`` — the resolved active skin (``HermesSkin``). ``{}`` when the skin engine failed to load. Colour maps are token → colour string. */
 export interface SkinPayload {
@@ -5895,8 +5903,8 @@ export interface MessageInterimPayload {
   turn_id?: string | null
   segment?: number | null
 }
-/** ``agent_callbacks.plugin_message_callback``: one injected adviser row. */
-export interface MessageAdviserPayload {
+/** ``agent_callbacks.plugin_message_callback``: one injected advisor row. */
+export interface MessageAdvisorPayload {
   id: string
   text: string
   severity: string
@@ -7317,8 +7325,8 @@ export interface BackendGatewayEventMap {
   'free_tier.challenge': FreeTierChallengePayload
   /** First frame of a connection: the resolved skin, the change-event capability and the replay epoch. */
   'gateway.ready': GatewayReadyPayload
-  /** Plugin adviser advice injected into the live transcript; render as an adviser card. */
-  'message.adviser': MessageAdviserPayload
+  /** Plugin advisor advice injected into the live transcript; render as an advisor card. */
+  'message.advisor': MessageAdvisorPayload
   /** The turn ended: final text, usage and outcome. */
   'message.complete': MessageCompletePayload
   /** One streamed chunk of the assistant reply (null text: segment boundary). */
@@ -7460,7 +7468,7 @@ export const GATEWAY_EVENT_TYPES = [
   'error',
   'free_tier.challenge',
   'gateway.ready',
-  'message.adviser',
+  'message.advisor',
   'message.complete',
   'message.delta',
   'message.interim',

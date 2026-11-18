@@ -296,13 +296,13 @@ def _run_bg_seed(monkeypatch, agent, *, warm):
     """
     import threading
 
-    from agent import memory_provider
+    import hermes_threading
     from hermes_cli import nous_account
     from agent import credits_tracker
 
     release_worker = threading.Event()
     spawned: list[threading.Thread] = []
-    real_spawn = memory_provider.spawn_context_thread
+    real_spawn = hermes_threading.spawn_context_thread
 
     def _gated_warm():
         release_worker.wait()
@@ -315,7 +315,7 @@ def _run_bg_seed(monkeypatch, agent, *, warm):
 
     monkeypatch.delenv("HERMES_DEV_CREDITS", raising=False)  # fixtures would take the sync path
     monkeypatch.setattr(credits_tracker, "_warm_nous_pricing_cache", _gated_warm)
-    monkeypatch.setattr(memory_provider, "spawn_context_thread", _capture_spawn)
+    monkeypatch.setattr(hermes_threading, "spawn_context_thread", _capture_spawn)
     monkeypatch.setattr(nous_account, "get_nous_portal_account_info", lambda *a, **kw: _DepletedAccount())
     result = credits_tracker.seed_credits_at_session_start(agent)
     try:

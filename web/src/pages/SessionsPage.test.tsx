@@ -317,22 +317,22 @@ describe("SessionsPage header slots across navigation", () => {
   });
 });
 
-describe("adviser transcript rows", () => {
-  it("labels plugin adviser guidance as adviser, never as a user turn", async () => {
+describe("advisor transcript rows", () => {
+  it("labels plugin advisor guidance as advisor, never as a user turn", async () => {
     apiMocks.getSessionMessages.mockResolvedValue({
-      session_id: "sid-adviser",
+      session_id: "sid-advisor",
       messages: [
         { role: "user", content: "run the migration" },
         {
           role: "user",
-          display_kind: "adviser",
+          display_kind: "advisor",
           content:
-            "[adviser — advisory only]\n- [blocker · reviewer] Stop: the migration drops the index. (1 turn ago)\n[end adviser]",
+            "[advisor — advisory only]\n- [blocker · reviewer] Stop: the migration drops the index. (1 turn ago)\n[end advisor]",
         },
       ],
     });
     await renderSessionsPage([
-      { id: "sid-adviser", profile: "default", source: "cli", model: null, title: "Advised", started_at: 1,
+      { id: "sid-advisor", profile: "default", source: "cli", model: null, title: "Advised", started_at: 1,
         ended_at: null, last_active: 1, is_active: false, message_count: 2, tool_call_count: 0,
         input_tokens: 1, output_tokens: 1, preview: "run" },
     ]);
@@ -340,14 +340,14 @@ describe("adviser transcript rows", () => {
     await waitFor(() => (document.body.textContent ?? "").includes("drops the index"));
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("adviser · blocker · reviewer");
-    expect(text).toContain("adviser · blocker · reviewer · 1 turn ago");
+    expect(text).toContain("advisor · blocker · reviewer");
+    expect(text).toContain("advisor · blocker · reviewer · 1 turn ago");
     expect(text).toContain("Stop: the migration drops the index.");
-    expect(text).not.toContain("[adviser — advisory only]");
-    expect(text).not.toContain("[end adviser]");
+    expect(text).not.toContain("[advisor — advisory only]");
+    expect(text).not.toContain("[end advisor]");
     // The severity drives the card color, the same way the TUI/Desktop cards read.
     const cardLabel = Array.from(document.querySelectorAll("span")).find(
-      (span) => span.textContent?.trim() === "adviser · blocker · reviewer · 1 turn ago",
+      (span) => span.textContent?.trim() === "advisor · blocker · reviewer · 1 turn ago",
     );
     expect(cardLabel).toBeTruthy();
     expect(cardLabel!.closest('[class*="bg-destructive"]')).not.toBeNull();
@@ -360,18 +360,18 @@ describe("adviser transcript rows", () => {
 
   it("gives each advice row its own severity in a mixed block", async () => {
     apiMocks.getSessionMessages.mockResolvedValue({
-      session_id: "sid-adviser-mixed",
+      session_id: "sid-advisor-mixed",
       messages: [
         {
           role: "user",
-          display_kind: "adviser",
+          display_kind: "advisor",
           content:
-            "[adviser — advisory only]\n- [concern · reviewer] read the import first\n- [blocker · reviewer] the test never ran\n[end adviser]",
+            "[advisor — advisory only]\n- [concern · reviewer] read the import first\n- [blocker · reviewer] the test never ran\n[end advisor]",
         },
       ],
     });
     await renderSessionsPage([
-      { id: "sid-adviser-mixed", profile: "default", source: "cli", model: null, title: "Mixed", started_at: 1,
+      { id: "sid-advisor-mixed", profile: "default", source: "cli", model: null, title: "Mixed", started_at: 1,
         ended_at: null, last_active: 1, is_active: false, message_count: 1, tool_call_count: 0,
         input_tokens: 1, output_tokens: 1, preview: "advice" },
     ]);

@@ -70,6 +70,12 @@ def _bytes_to_tokens(size: Optional[int]) -> Optional[int]:
     return None if size is None else (int(size) + 3) // CHARS_PER_TOKEN
 
 
+def _int_attr(obj: Any, name: str) -> int:
+    """Integer attribute or 0; a mock/absent/None compressor never coerces by accident."""
+    value = getattr(obj, name, 0)
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
 def _skills_block(stable: str) -> str:
     """The live ``<available_skills>`` block inside the stable tier, or ''."""
     m = _SKILLS_BLOCK_RE.search(stable)
@@ -165,11 +171,82 @@ def _categories(system_prompt: str, skills: str, tools: Sequence[dict], messages
     }
 
 
+# Per-role projection of the conversation estimate for clients that split the transcript
+# (the omp context viewer). Wire ids; clients own the labels. Same per-message estimates
+# the ``conversation`` category sums — never a second estimator.
+_MESSAGE_PART_LABELS = {
+    "user_messages": "User / developer messages",
+    "assistant_messages": "Assistant messages",
+    "assistant_thinking": "Assistant thinking",
+    "tool_calls": "Tool calls",
+    "tool_output": "Tool output",
+}
+
+
+def message_token_parts(
+    messages: list[dict],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split the conversation estimate by message role, plus per-tool output rows.
+
+    Each message contributes exactly what ``estimate_messages_tokens_rough`` charges it, so
+    the five parts always sum to the ``conversation`` category. Assistant sub-parts
+    (thinking / tool calls) are clamped inside their own message's total; thinking counts
+    the wire-relevant key only (``reasoning_content`` displaces ``reasoning``). Known blind
+    spot: codex/responses routes carry thinking as ``codex_reasoning_items`` /
+    ``encrypted_content``, which the wire shadow blanks, so ``assistant_thinking`` reads 0
+    there even when the provider bills reasoning.
+    """
+    from agent.model_metadata import estimate_messages_tokens_rough, estimate_tokens_rough
+
+    totals = {part_id: 0 for part_id in _MESSAGE_PART_LABELS}
+    call_names: dict[str, str] = {}
+    tool_totals: dict[str, int] = {}
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "")
+        full = estimate_messages_tokens_rough([msg])
+        if role == "assistant":
+            rc = msg.get("reasoning_content")
+            thinking_text = rc if isinstance(rc, str) and rc.strip() else msg.get("reasoning")
+            thinking = min(estimate_tokens_rough(thinking_text), full) if isinstance(thinking_text, str) else 0
+            calls = msg.get("tool_calls")
+            calls = calls if isinstance(calls, list) else []
+            call_tokens = min(sum(estimate_tokens_rough(str(call)) for call in calls), full - thinking) if calls else 0
+            totals["assistant_thinking"] += thinking
+            totals["tool_calls"] += call_tokens
+            totals["assistant_messages"] += max(0, full - thinking - call_tokens)
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function")
+                name = str(fn.get("name") or "") if isinstance(fn, dict) else ""
+                call_id = str(call.get("id") or "")
+                if call_id and name:  # nameless calls must not collide on the empty id
+                    call_names[call_id] = name
+        elif role == "tool":
+            totals["tool_output"] += full
+            name = str(msg.get("name") or "") or call_names.get(str(msg.get("tool_call_id") or ""), "") or "tool"
+            tool_totals[name] = tool_totals.get(name, 0) + full
+        else:  # user / developer rows; a system row in history is user-facing context
+            totals["user_messages"] += full
+    parts = [{"id": part_id, "label": label, "tokens": totals[part_id]}
+             for part_id, label in _MESSAGE_PART_LABELS.items()]
+    outputs = [{"name": name, "tokens": tokens}
+               for name, tokens in sorted(tool_totals.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return parts, outputs
+
+
 def stored_context_breakdown(system_prompt: str, tools: Sequence[dict], messages: list[dict]) -> dict[str, Any]:
     """Categories and estimated total from a frozen system prompt and tool schemas, without an agent. Only an
     agent re-renders the prompt's tiers apart, so ``rules`` and ``memory`` count inside ``system_prompt``."""
     skills_index = _skills_block(system_prompt)
-    return _categories(_strip_blocks(system_prompt, skills_index), skills_index, tools, messages)
+    parts, tool_outputs = message_token_parts(messages)
+    return {
+        **_categories(_strip_blocks(system_prompt, skills_index), skills_index, tools, messages),
+        "message_parts": parts,
+        "tool_outputs": tool_outputs,
+    }
 
 
 def compute_session_context_breakdown(agent: Any, messages: Optional[list[dict]] = None) -> dict[str, Any]:
@@ -187,6 +264,7 @@ def compute_session_context_breakdown(agent: Any, messages: Optional[list[dict]]
     )
     breakdown = _categories(system_prompt_text, skills_index, list(getattr(agent, "tools", None) or []), messages,
                             rules=parts.get("context", "") or "", memory=_join(memory_block, user_block))
+    message_parts, tool_outputs = message_token_parts(messages)
     estimated_total = breakdown["estimated_total"]
 
     comp = getattr(agent, "context_compressor", None)
@@ -215,11 +293,25 @@ def compute_session_context_breakdown(agent: Any, messages: Optional[list[dict]]
     if context_max:
         context_used = min(context_used, context_max)
 
+    # Window budget rows for clients that draw the whole window (omp context viewer): the
+    # auto-compact buffer is everything between the compaction threshold and the ceiling;
+    # free space is what neither the prompt nor that buffer claims.
+    threshold = _int_attr(comp, "threshold_tokens")
+    if not (0 < threshold <= context_max):
+        threshold = 0
+    buffer = context_max - threshold if threshold else 0
+    free = max(0, context_max - context_used - buffer) if context_max else 0
+
     return {
         **breakdown,
+        "message_parts": message_parts,
+        "tool_outputs": tool_outputs,
         "context_max": context_max,
         "context_percent": max(0, min(100, round(context_used / context_max * 100))) if context_max else 0,
         "context_used": context_used,
+        "context_threshold": threshold,
+        "auto_compact_buffer": buffer,
+        "free_tokens": free,
         "context_source": source,
         "context_estimated": source != "provider_usage",
         "model": getattr(agent, "model", "") or "",
@@ -296,7 +388,10 @@ def render_context_category_lines(payload: dict[str, Any]) -> list[str]:
         lines.append(t("gateway.context.category_row", glyph=_glyph(cat), label=f"{label:<{width}}",
                        tokens=f"{tokens:>9,}", pct=f"{tokens / denom * 100 if denom else 0.0:>5.1f}"))
     if context_max > 0:
-        free = max(0, context_max - estimated_total)
+        # Prefer the wire field (provider-anchored used + compaction buffer) so /context text and
+        # clients agree; the local-estimate fallback covers payloads that predate it.
+        free = payload.get("free_tokens")
+        free = max(0, context_max - estimated_total) if free is None else max(0, int(free))
         lines.append(t("gateway.context.category_row", glyph=_FREE_GLYPH, label=f"{free_label:<{width}}",
                        tokens=f"{free:>9,}", pct=f"{free / context_max * 100:>5.1f}"))
     return lines

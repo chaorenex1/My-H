@@ -69,7 +69,7 @@ AUTOMATION_INTERRUPTED_NOTICE = (
 )
 # Durable tail roles a failed turn leaves open: its accepted ``user`` row, or the ``tool`` row of a
 # call that ran before the failure. An ``assistant`` tail is already closed (a reply or a boundary).
-OPEN_TURN_TAIL_ROLES = frozenset({"user", "tool"})
+OPEN_TURN_TAIL_ROLES = frozenset({"user", "tool", "custom"})
 # ``messages.display_kind`` of that row: display-only (stripped before every provider request),
 # so renderers show a Hermes notice and room pollers never read it as the model's reply.
 FAILED_TURN_DISPLAY_KIND = "failed_turn"

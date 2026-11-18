@@ -75,6 +75,14 @@ def _settle_progress_send(st, result) -> None:
         st.flood_pending = False
 
 
+def _card_titles(call_id, tool_name, args, result=None) -> dict:
+    """ADR-4 D13 deterministic display titles; never raises (a card renders without one)."""
+    with suppress(Exception):
+        from tools.eval_card_metadata import card_titles
+        return card_titles("", call_id, str(tool_name or "tool"), args, result=result)
+    return {}
+
+
 def _tool_lifecycle_payload(call_id, tool_name, args) -> dict:
     """The ``ToolStartPayload`` contract every client reads (``tool_id``/``name``/``context``),
     plus the ``tool_call_id``/``tool_name`` the gateway's own consumers were built on."""
@@ -86,6 +94,12 @@ def _tool_lifecycle_payload(call_id, tool_name, args) -> dict:
                "tool_call_id": str(call_id or ""), "tool_name": name, "args": bounded_args(args)}
     if labels := [label.as_payload() for label in tool_labels_for_call(name, args)]:
         payload["labels"] = labels
+    # ADR-4 D13: title the card at construction (tool.title repeats it for late updates).
+    titles = _card_titles(call_id, name, args)
+    if titles.get("card_title"):
+        payload["title"] = titles["card_title"]
+    if titles.get("cell_titles"):
+        payload["cell_titles"] = titles["cell_titles"]
     return payload
 
 
@@ -188,6 +202,10 @@ class GatewayTurnProgressMixin:
             except Exception:
                 # Best-effort: a viewer frame never blocks the failure notice below, but a lost one is logged.
                 logger.debug("Local viewer progress publish failed for %s", event_type, exc_info=True)
+        # ADR-4 D14: eval cell output and a background job's terminal frame are card data, not
+        # platform progress text; they have no progress-queue/subagent path below.
+        if event_type == "tool.output" or (event_type == "tool.complete" and kwargs.get("job_id")):
+            return
         # Failed subagent → one clean user-facing notice, handled FIRST, before every progress-queue
         # gate: platforms with tool_progress off must still hear about a dead delegation.
         if event_type == "subagent.complete":
@@ -927,11 +945,35 @@ class GatewayTurnProgressMixin:
         })
 
     def combined_tool_start_callback(self, call_id, tool_name, args):
-        """Compose the voice ack + native task-card start consumers."""
+        """Compose the voice ack + native task-card start consumers.
+
+        TTSR tool matching moved to ``run_tool_round`` (ADR-6 D10): this callback runs after
+        persistence/execution and cannot prevent side effects.
+        """
+        holder = getattr(self._ctx, "agent_holder", None)
         if local_viewer_turn(self):
             from gateway import local_viewer_events
             local_viewer_events.note_tool_start(self, call_id, tool_name, args)
-        self._publish_execution("tool.start", _tool_lifecycle_payload(call_id, tool_name, args))
+        start_payload = _tool_lifecycle_payload(call_id, tool_name, args)
+        # ADR-2 D1: the provider response that requested this call carries its own usage.
+        from agent.turn_usage import step_usage
+
+        if (step := step_usage(holder[0] if holder else None)) is not None:
+            start_payload["step_usage"] = step
+        self._publish_execution("tool.start", start_payload)
+        # ADR-4 D13: repeat the generated titles as one event per cell (or one per call), so a
+        # client that already mounted the card updates its label without re-reading args.
+        cell_titles = start_payload.get("cell_titles")
+        if isinstance(cell_titles, list) and cell_titles:
+            for index, title in enumerate(cell_titles):
+                if title:
+                    self._publish_execution("tool.title", {
+                        "tool_id": start_payload["tool_id"], "name": start_payload["name"],
+                        "title": title, "cell_index": index})
+        elif start_payload.get("title"):
+            self._publish_execution("tool.title", {
+                "tool_id": start_payload["tool_id"], "name": start_payload["name"],
+                "title": start_payload["title"]})
         self._publish_api_tool("tool.start", call_id, tool_name, args)
         if self._ctx._voice_ack_guild[0] is not None:
             self.voice_ack_callback(call_id, tool_name, args)
@@ -1067,6 +1109,10 @@ class GatewayTurnProgressMixin:
         from gateway.run import _prepare_gateway_status_message, _redact_gateway_user_facing_secrets, _send_or_update_status_coro
         from gateway.warning_notifications import is_warning_status, render_notification
         ctx = self._ctx
+        # ADR-5 D4: a real commit's block is published before the two status-suppression gates
+        # below; platform noise rules may hide the status line but must not swallow the event.
+        if event_type == "compacted" and local_viewer_turn(self):
+            self._publish_compaction_summary()
         if ctx.mute_notification_reply or not self._status_live():
             return
         # Lifecycle diagnostics (including provider fallback notices) are UI affordances for a
@@ -1096,6 +1142,23 @@ class GatewayTurnProgressMixin:
                 fut.add_done_callback(self._track_future_cleanup_id)
         render_notification(present, platform=ctx.source.platform, user_config=ctx.user_config,
                             diagnostic=is_warning_status(event_type, message))
+
+    def _publish_compaction_summary(self) -> None:
+        """ADR-5 D4: publish the single record ``_commit_compaction`` left for this commit.
+
+        The slot is cleared on read and reset at every attempt start, so the abort path's
+        ``compacted`` terminal edge publishes nothing. Returns silently when the commit had no
+        Hermes carrier row (plugin/native compression).
+        """
+        holder = self._ctx.agent_holder
+        agent = holder[0] if holder else None
+        payload = getattr(agent, "_last_compaction_display", None) if agent is not None else None
+        if not isinstance(payload, dict):
+            return
+        agent._last_compaction_display = None
+        from gateway.local_viewer_events import publish_compaction_summary
+
+        publish_compaction_summary(self._publish_execution, payload)
 
 
 def local_viewer_turn(runner) -> bool:

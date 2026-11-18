@@ -36,7 +36,8 @@ class RelayChatAccumulator:
         self._reasoning: list[str] = []
         self._refusal: list[str] = []  # OpenAI ``delta.refusal`` — a refusal is content, not an empty stream
         self._reasoning_details: list[Any] = []  # opaque provider records (signed blocks); order preserved verbatim
-        self._tool_calls = _ToolCallAccumulator()
+        from tools.eval_speculation import observe_partial
+        self._tool_calls = _ToolCallAccumulator(on_delta=observe_partial)
         self._model = self._usage = self._finish_reason = None
         self._role = "assistant"
 

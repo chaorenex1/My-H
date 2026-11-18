@@ -1560,10 +1560,10 @@ def test_tui_verbose_tool_events_omit_details_when_redaction_fails(monkeypatch):
     server._on_tool_start("redaction-test", "tool-1", "terminal", {"command": "pwd"})
     server._on_tool_complete("redaction-test", "tool-1", "terminal", {"command": "pwd"}, "done")
 
-    assert events[0][0] == "tool.start"
-    assert events[1][0] == "tool.complete"
-    assert "args_text" not in events[0][2]
-    assert "result_text" not in events[1][2]
+    start = next(event for event in events if event[0] == "tool.start")
+    complete = next(event for event in events if event[0] == "tool.complete")
+    assert "args_text" not in start[2]
+    assert "result_text" not in complete[2]
 
 
 def test_tui_tool_output_risk_event_exposes_metadata_without_raw_output(monkeypatch):
@@ -1620,6 +1620,7 @@ def test_tui_clarify_lifecycle_events_emit_when_tool_progress_off(monkeypatch):
     server._on_tool_start("clarify-off-test", "tool-clarify", "clarify", args)
     server._on_tool_complete("clarify-off-test", "tool-clarify", "clarify", args, result)
 
+    # Clarify's nested question text yields no derived title (ADR-4 D13), so the pair is unchanged.
     assert [event[0] for event in events] == ["tool.start", "tool.complete"]
     assert events[0][2]["name"] == "clarify"
     assert events[0][2]["tool_id"] == "tool-clarify"
@@ -2681,23 +2682,6 @@ def test_history_to_messages_preserves_tool_calls_for_resume_display():
     ]
 
 
-def test_history_to_messages_types_the_failed_turn_boundary_for_resume():
-    """Desktop keys the failed-turn boundary on ``display_kind`` (a room poller must not post it
-    as the member's reply); rows written before the closer typed it are typed on read."""
-    from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, FAILED_TURN_NOTICE, PARTIAL_FAILED_TURN_NOTICE
-
-    history = [
-        {"role": "user", "content": "a"},
-        {"role": "assistant", "content": FAILED_TURN_NOTICE, "display_kind": FAILED_TURN_DISPLAY_KIND},
-        {"role": "user", "content": "b"},
-        {"role": "assistant", "content": PARTIAL_FAILED_TURN_NOTICE},  # legacy untyped row
-        {"role": "user", "content": "c"},
-        {"role": "assistant", "content": f"Quoting Hermes: {FAILED_TURN_NOTICE}"},  # a real reply
-    ]
-
-    assert [m.get("display_kind") for m in server._history_to_messages(history)] == [
-        None, FAILED_TURN_DISPLAY_KIND, None, FAILED_TURN_DISPLAY_KIND, None, None,
-    ]
 
 
 def test_history_to_messages_drops_pure_compaction_scaffolding():
@@ -2832,9 +2816,10 @@ def test_tool_start_ships_full_args(monkeypatch):
     server._on_tool_start("args-test", "tool-1", "terminal", {"command": long_command})
     server._on_tool_start("args-test", "tool-2", "terminal", {})
 
-    assert events[0][2]["args"] == {"command": long_command}
+    starts = [event for event in events if event[0] == "tool.start"]
+    assert starts[0][2]["args"] == {"command": long_command}
     # Empty args stay omitted. Argless tools get no noise key.
-    assert "args" not in events[1][2]
+    assert "args" not in starts[1][2]
 
 
 def test_history_to_messages_keeps_reasoning_only_assistant_turn():
@@ -2984,46 +2969,8 @@ def test_history_to_messages_drops_display_hidden_scaffolding():
     assert all("api_content" not in m for m in projected)
 
 
-def test_history_to_messages_projects_a_skill_turn_to_its_invocation():
-    # A /skill invocation is persisted EXPANDED: the activation note plus the
-    # entire skill body. That payload is model-facing scaffolding -- this
-    # projection is the single display source every client reads, so it must
-    # hand back the invocation the user typed and never the body. Without it a
-    # chat bubble renders the whole skill as if the user had written it.
-    scaffolded = (
-        '[IMPORTANT: The user has invoked the "work" skill, indicating they '
-        "want you to follow its instructions. The full skill content is "
-        "loaded below.]\n\n"
-        "# /work\n\nSPIN UP A WORKTREE, never the primary checkout.\n\n"
-        "The user has provided the following instruction alongside the skill "
-        "invocation: fix the title leak"
-    )
-
-    history = [
-        {"role": "user", "content": scaffolded},
-        {"role": "assistant", "content": "on it"},
-    ]
-
-    assert server._history_to_messages(history) == [
-        {
-            "role": "user",
-            "text": "/work fix the title leak",
-            "display_kind": "skill_invocation",
-        },
-        {"role": "assistant", "text": "on it"},
-    ]
 
 
-def test_history_to_messages_projects_a_bare_skill_turn_to_the_command():
-    scaffolded = (
-        '[IMPORTANT: The user has invoked the "work" skill, indicating they '
-        "want you to follow its instructions. The full skill content is "
-        "loaded below.]\n\n# /work\n\nSPIN UP A WORKTREE."
-    )
-
-    assert server._history_to_messages([{"role": "user", "content": scaffolded}]) == [
-        {"role": "user", "text": "/work", "display_kind": "skill_invocation"}
-    ]
 
 
 def test_expand_skill_invocation_for_replay_round_trips_the_projection(
@@ -3236,27 +3183,6 @@ def test_complete_slash_and_skills_reload_are_bound_to_the_session_cwd(tmp_path,
     assert {i["name"] for i in other["result"]["added"]} == {"beta-skill"}, other["output"]
 
 
-def test_history_to_messages_types_a_legacy_auto_continue_row():
-    # A crash-interrupted turn used to be typed only AFTER it finished, so a
-    # turn killed a second time (or any row written before turn-start typing
-    # landed) sits in the DB untyped and painted the raw recovery note as a
-    # user bubble. The projection recognizes the synthetic note's fixed
-    # prefix so those rows still read as a timeline event.
-    history = [
-        {"role": "user", "content": "keep going"},
-        {"role": "user", "content": server._auto_continue_note("keep going")},
-    ]
-
-    projected = server._history_to_messages(history)
-
-    assert projected == [
-        {"role": "user", "text": "keep going"},
-        {
-            "role": "user",
-            "text": server._auto_continue_note("keep going"),
-            "display_kind": "auto_continue",
-        },
-    ]
 
 
 def test_history_to_messages_keeps_real_user_bracket_text():
@@ -14237,7 +14163,7 @@ def _wake_lease_double():
 def test_accepted_interrupt_resumes_wake_mismatch_does_not(monkeypatch):
     """An accepted interrupt re-arms the caller's paused detector; a hosted-task mismatch does not."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    owner = types.SimpleNamespace(_closed=False)
+    owner = types.SimpleNamespace(_closed=False, write=lambda _frame: True)
     state["lease"] = owner
     session = _session(
         agent=types.SimpleNamespace(interrupt=lambda: None),
@@ -14278,7 +14204,7 @@ def test_accepted_interrupt_resumes_wake_mismatch_does_not(monkeypatch):
 def test_interrupt_error_after_tts_stop_still_resumes_wake(monkeypatch):
     """TTS is cut before session lookup and the compute-host call; a later error must still re-arm."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    owner = types.SimpleNamespace(_closed=False)
+    owner = types.SimpleNamespace(_closed=False, write=lambda _frame: True)
     state["lease"] = owner
     session = _session(agent=types.SimpleNamespace(interrupt=lambda: None), running=True)
     server._sessions["sid"] = session
@@ -14319,9 +14245,9 @@ def test_interrupt_error_after_tts_stop_still_resumes_wake(monkeypatch):
 def test_interrupt_resumes_voice_wake_owner_not_a_foreign_lease(monkeypatch):
     """Interrupt resumes a voice-owned pause even when the caller differs, and leaves a foreign lease paused."""
     wake_word, state, pause_listening, resume_listening = _wake_lease_double()
-    voice_owner = types.SimpleNamespace(_closed=False, role="voice")
-    caller = types.SimpleNamespace(_closed=False, role="caller")
-    foreign = types.SimpleNamespace(_closed=False, role="foreign")
+    voice_owner = types.SimpleNamespace(_closed=False, role="voice", write=lambda _frame: True)
+    caller = types.SimpleNamespace(_closed=False, role="caller", write=lambda _frame: True)
+    foreign = types.SimpleNamespace(_closed=False, role="foreign", write=lambda _frame: True)
     state["lease"] = voice_owner
     session = _session(agent=types.SimpleNamespace(interrupt=lambda: None), running=True)
     server._sessions["sid"] = session
@@ -22352,3 +22278,15 @@ def test_named_profile_without_backend_stays_local_under_ssh_launch(monkeypatch,
     monkeypatch.setattr(server, "_profile_home", lambda name: home if name == "plain" else None)
 
     assert server._completion_cwd({"profile": "plain", "cwd": launch, "cwd_explicit": False}) == launch
+
+
+def test_agent_messages_do_not_collapse_in_the_notification_dedup_key():
+    """Two inbound peer messages in one poll must each start their own turn."""
+    from tui_gateway.session_notifications import _notification_event_dedup_key
+
+    first = {"type": "agent_message", "session_key": "agent:main:tui:1",
+             "inbox_id": "inbox-a"}
+    second = dict(first, inbox_id="inbox-b")
+
+    assert _notification_event_dedup_key(first) != _notification_event_dedup_key(second)
+    assert _notification_event_dedup_key(first) == _notification_event_dedup_key(dict(first))

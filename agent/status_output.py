@@ -89,11 +89,20 @@ class StatusOutputMixin:
     def _emit_status_kind(self, kind: str, message: str, *, origin: str) -> None:
         """Print to the CLI (``_vprint(force=True)``) and forward to ``status_callback(kind, message)``. Never raises."""
         from gateway.warning_notifications import is_warning_status
+        presented = True
         try:
-            if not is_warning_status(kind, message) or self._warning_presentation_enabled():
-                self._vprint(f"{self.log_prefix}{message}", force=True)
+            presented = not is_warning_status(kind, message) or self._warning_presentation_enabled()
+            if presented:
+                # The print sink must not also emit ``transcript.notice`` for this line.
+                self._in_status_line = True
+                try:
+                    self._vprint(f"{self.log_prefix}{message}", force=True)
+                finally:
+                    self._in_status_line = False
         except Exception:
-            pass
+            self._in_status_line = False
+        if presented:
+            self._call_callback("transcript_notice_callback", kind, message, origin=origin)
         self._call_callback("status_callback", kind, message, origin=origin)
 
     def _warning_presentation_enabled(self) -> bool:

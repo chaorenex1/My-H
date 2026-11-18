@@ -203,6 +203,53 @@ def _catalog_skills(cat: _Catalog, skills: dict[str, dict], module_loader) -> st
     return "; ".join(filter(None, map(collision_note, names)))
 
 
+def _catalog_entries(cat: _Catalog, skills: dict[str, dict], commands_module) -> list[dict]:
+    """Flat per-command rows for ``entries``: one per display pair, keyed by name without ``/``.
+
+    Source wins by row family (plugin → quick → skill → builtin), aliases come from the reverse
+    canonical map plus the registry ``CommandDef.aliases``, and hint/mode/subcommands are the same
+    values ``sub`` / ``commands`` carry for the pair key. A duplicate name keeps its first pair."""
+    category_of: dict[str, str] = {}
+    for category, rows in cat.cat_map.items():
+        for key, _desc in rows:
+            category_of.setdefault(key, category)
+    aliases_of: dict[str, list[str]] = {}
+    for alias_key, canonical in cat.canon.items():
+        canonical_name = canonical.lower().lstrip("/")
+        alias_name = alias_key.lower().lstrip("/")
+        if alias_name != canonical_name:
+            aliases_of.setdefault(canonical_name, []).append(alias_name)
+    resolve = getattr(commands_module, "resolve_command", None)
+    subcommands = getattr(commands_module, "SUBCOMMANDS", {}) or {}
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for key, desc in cat.pairs:
+        name = key.lstrip("/")
+        if name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        category = category_of.get(key, "")
+        if category == "Plugin commands":
+            source = "plugin"
+        elif category == "User commands":
+            source = "quick"
+        elif key in skills:
+            source = "skill"
+        else:
+            source = "builtin"
+        cmd = resolve(name) if resolve is not None else None
+        aliases = list(aliases_of.get(name.lower(), []))
+        if cmd is not None:
+            aliases.extend(a.lower() for a in cmd.aliases if a.lower() not in aliases)
+        meta = cat.commands.get(key) or {}
+        entries.append({
+            "name": name, "description": desc, "aliases": aliases, "source": source,
+            "argument_mode": meta.get("argument_mode"),
+            "hint": cmd.args_hint if source == "builtin" and cmd is not None and cmd.args_hint else None,
+            "subcommands": list(subcommands.get(key) or [])})
+    return entries
+
+
 def command_catalog(load_cfg=None, module_loader=import_module, scope=None) -> dict:
     """Registry-backed slash metadata, categorized, no aliases. Discovery failures land in ``warning``
     (skills' message wins, then quick commands', then plugins'); only with no failure does it carry
@@ -241,13 +288,15 @@ def command_catalog(load_cfg=None, module_loader=import_module, scope=None) -> d
         except Exception as e:
             logger.debug("skill discovery failed", exc_info=True)
             warning = f"skill discovery unavailable: {e}"
+    commands_module = module_loader("hermes_cli.commands")
     return {
-        "pairs": cat.pairs, "sub": {k: v[:] for k, v in module_loader("hermes_cli.commands").SUBCOMMANDS.items()},
+        "pairs": cat.pairs, "sub": {k: v[:] for k, v in commands_module.SUBCOMMANDS.items()},
         "canon": cat.canon,
         "commands": cat.commands,
         "categories": [{"name": c, "pairs": rows} for c, rows in cat.cat_map.items()],
         "skills": skills, "skill_count": len(skills), "warning": warning, "plugin_discovery_error": plugin_error,
-        "plugin_commands": cat.plugin_commands}
+        "plugin_commands": cat.plugin_commands,
+        "entries": _catalog_entries(cat, skills, commands_module)}
 
 
 def slash_completions(text: str = "", scope=None) -> dict:

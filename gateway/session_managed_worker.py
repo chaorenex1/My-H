@@ -222,7 +222,7 @@ class ManagedWorker:
     def drain_stderr(self, path):
         """Route the child's stderr (its tracebacks and redirected prints) into the profile's
         bounded, redacted, private log instead of discarding it."""
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
         from gateway.session_managed_worker_log import drain_worker_stderr
         self.stderr_drain = spawn_context_thread(drain_worker_stderr, name='managed-stderr-drain',
                                                  args=(self.process.stderr, path, self.process.pid, lambda: self.secrets))
@@ -252,7 +252,7 @@ class ManagedWorker:
         silent one, instead of leaving the turn started behind it."""
         if self.reader is None:
             self._arrived = asyncio.Event()
-            from agent.memory_provider import spawn_context_thread
+            from hermes_threading import spawn_context_thread
             self.reader = spawn_context_thread(self._read_frames, name='managed-frame-reader',
                                                args=(asyncio.get_running_loop(),))
             self.reader.start()
@@ -700,6 +700,11 @@ async def execute_managed(authority, ref, row, policy):
                 raise RuntimeStoreError('managed_worker_failed')
             kind = frame.get('type')
             if kind == 'ready' and set(frame) == {'type', 'pid'} and frame['pid'] == scope['pid']:
+                # ADR-1: after bootstrap the worker owns a pause gate; a freeze engaged meanwhile
+                # is delivered now, and every later toggle rides the same control frame.
+                from gateway.session_freeze import bind_freeze_sender
+                bind_freeze_sender(authority, ref.session_id, row['generation'],
+                                   lambda paused: worker.control({'type': 'pause', 'paused': bool(paused)}))
                 continue
             if kind == 'delta' and set(frame) == {'type', 'text'} and isinstance(frame['text'], str):
                 authority.publish_execution(ref.session_id, row['generation'], 'message.delta', {'text': frame['text']})
@@ -755,4 +760,6 @@ async def execute_managed(authority, ref, row, policy):
         raise ManagedExecutionUnknown('managed_worker_unknown') from exc
     finally:
         workers.pop(ref.session_id, None)
+        from gateway.session_freeze import unbind_freeze_sender
+        unbind_freeze_sender(authority, ref.session_id)
         await asyncio.to_thread(worker.close)

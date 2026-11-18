@@ -48,6 +48,8 @@ PERSISTENCE_ONLY_MESSAGE_FIELDS = frozenset(
     # to sweep underscore keys, but turn_context.py pops this set from every outgoing copy and a strict
     # backend 400s on any key it does not know.
     {"timestamp", "display_kind", "display_metadata", "_row_id", "_submit_row_session_id",
+     # ADR-10 D1: custom transcript fields are display/persistence state, never provider keys.
+     "custom_type", "display", "display_only", "details", "attribution", "legacy_role",
      MERGED_TURN_PREFIX, MESSAGE_UID, ABSORBED_MESSAGE_UIDS, TOOL_CALL_UIDS, TOOL_CALL_UID,
      # The alternation repair's row counts: an in-place compaction reads them off the live dict.
      MERGED_DURABLE_ROWS, UNNAMED_DURABLE_ROWS, RETIRED_DURABLE_ROWS}
@@ -56,6 +58,29 @@ PERSISTENCE_ONLY_MESSAGE_FIELDS = frozenset(
 
 # Connector data-use requirement on a tool message; persisted inside ``display_metadata``, never sent to a model.
 DATA_USE = "data_use"
+# ADR-10 D5: the executor's verdict rides the durable display metadata (one copy); the wire
+# projection reads it into ``TranscriptMessage.is_error``.
+TOOL_RESULT_METADATA = "tool_result_metadata"
+# ADR-16 D3: the host-side archive files for one tool call (step, artifact paths, truncated).
+# Display/audit metadata only — never the model's recovery path (that stays ``cache/spillover``).
+TOOL_OUTPUT_ARTIFACTS = "tool_output_artifacts"
+
+
+def stamp_tool_result_metadata(message: MutableMapping[str, Any], metadata: Any, *, is_error: bool) -> None:
+    """Merge the result-metadata callback's payload with the executor's error verdict.
+
+    Never rewrites the whole ``display_metadata`` key: a concurrent writer's other keys survive,
+    and ``tool_result_metadata`` keeps the callback's ``inline_diff`` beside ``is_error``.
+    """
+    current = message.get("display_metadata")
+    merged = dict(current) if isinstance(current, dict) else {}
+    if isinstance(metadata, dict):
+        merged.update(metadata)
+    tool_meta = merged.get(TOOL_RESULT_METADATA)
+    tool_meta = dict(tool_meta) if isinstance(tool_meta, dict) else {}
+    tool_meta["is_error"] = bool(is_error)
+    merged[TOOL_RESULT_METADATA] = tool_meta
+    message["display_metadata"] = merged
 
 
 def _set_display_metadata_key(message: MutableMapping[str, Any], key: str, value: Any) -> None:
@@ -74,6 +99,16 @@ def _display_metadata_str(message: Any, key: str) -> Optional[str]:
 def data_use_requirement(messages: Any) -> frozenset[str]:
     """The union of ``data_use`` over *messages*: what the model receiving them must guarantee."""
     return frozenset(r for m in messages or () if isinstance(m, Mapping) for r in m.get(DATA_USE) or ())
+
+
+def stamp_tool_output_artifacts(message: MutableMapping[str, Any], artifacts: dict[str, Any]) -> None:
+    """Attach the tool-call archive descriptor (ADR-16 D3) to a tool message's durable
+    ``display_metadata``; merged, so a result-metadata callback's payload survives."""
+    metadata = message.get("display_metadata")
+    message["display_metadata"] = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        TOOL_OUTPUT_ARTIFACTS: dict(artifacts),
+    }
 
 
 def stamp_data_use(message: MutableMapping[str, Any], requires: list[str]) -> None:

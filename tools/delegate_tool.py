@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-Delegate Tool -- Subagent Architecture
+Delegate Tool -- Legacy subagent architecture
+
+DEPRECATED: the ``agent`` tool (``tools/agent_tool.py``) fully supersedes
+``delegate_task``. It runs named agents with their own prompt, tools, model,
+JSONL history, background/resident lifecycle, output contracts and
+``agent_out`` artifacts, and can resume a run with ``continue_from``.
+``delegate_task`` remains for legacy batch callers and older transcripts; new
+prompt policy and tooling should use ``agent``.
 
 Spawns child AIAgent instances with a fresh conversation, their own task_id
 (terminal session, file-ops cache), the parent's toolsets minus child-blocked
@@ -361,6 +368,9 @@ def _build_child_agent(
         child._credential_pool = child_pool
 
     _attach_child(parent_agent, child)  # interrupt propagation
+    # One freeze covers the execution tree: a subagent parks on the parent's gate, never a copy.
+    from agent.pause_gate import share_gate
+    share_gate(child, parent_agent)
     # spawn_requested now — the child may queue for seconds when the pool is
     # saturated — then the subagent_start lifecycle hook.
     _safe_progress(child_progress_cb, "subagent.spawn_requested", preview=goal)
@@ -860,7 +870,13 @@ DELEGATE_TASK_SCHEMA = {
                 "Control actions return immediately; goal/tasks are ignored unless spawning.",
                 enum=["spawn", "list", "steer", "stop"],
             ),
-            "subagent_id": _p("string", "Target for action='steer'/'stop' (ids from the spawn response or action='list')."),
+            "subagent_id": _p(
+                "string",
+                "Target for action='steer'/'stop': a live child id (from the spawn response or "
+                "action='list'), or a named agent session's agent_session_id (the id the agent "
+                "tool returned). Steering a named session with no live run queues the message "
+                "in its inbox instead of failing.",
+            ),
             "message": _p(
                 "string",
                 "For action='steer': the course correction, appended to "

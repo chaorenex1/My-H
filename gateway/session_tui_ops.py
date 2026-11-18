@@ -119,17 +119,41 @@ async def export_session(connection, ref, params):
 
 
 async def session_history(connection, ref, params):
-    """Main's ``session.history``: the display transcript of the conversation's current physical row (compression tip or local receipt entry), ancestors included, each row with its durable ``row_id``; Desktop's edit resolves its turn by it."""
-    _live_ref(connection, ref, params, {'session_id', 'profile'}, 'session:read')
+    """Main's ``session.history``: the display transcript of the conversation's current physical row
+    (compression tip or local receipt entry), ancestors included, each row with its durable
+    ``row_id``; Desktop's edit resolves its turn by it. ``since`` / ``cursor`` page by row id and
+    ``limit`` cuts one page (1..500); ``entries`` carry the paged transcript rows."""
+    _live_ref(connection, ref, params, {'session_id', 'profile', 'since', 'cursor', 'limit',
+                                        'project_custom_messages', 'include_tool_content',
+                                        'include_outline'}, 'session:read')
+    include_tool_content = params.get('include_tool_content', 'none')
+    if include_tool_content not in ('none', 'text', 'full'):
+        raise RuntimeStoreError('invalid_params', field='include_tool_content')
+    include_outline = params.get('include_outline') is True
+    limit = params.get('limit')
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise RuntimeStoreError('invalid_params', field='limit')
+    limit = min(limit, 500) if limit is not None else None
+    since, cursor = params.get('since'), params.get('cursor')
+    after = since if since is not None else cursor
     authority = connection.authority
     from gateway.session_local_recovery import transcript_target
     # On the loop, as ``attach`` resolves it: a local restore publishes the live entry.
     target = transcript_target(authority, ref)
+    running = authority._handle(ref).execution_state == 'running'
 
     def read():
         from gateway.session_controls import display_projection
+        from tui_gateway.history_paging import history_page
         rows = authority.db.get_messages_as_conversation(target, include_ancestors=True, include_row_ids=True)
-        return {'count': len(rows), 'messages': display_projection(rows, authority.profile_id)}
+        messages = display_projection(rows, authority.profile_id,
+                                      include_tool_content=include_tool_content, running=running)
+        page, entries, next_cursor, outline = history_page(messages, after=after, limit=limit,
+                                                           include_outline=include_outline)
+        leaf_id = max((m['row_id'] for m in messages if isinstance(m.get('row_id'), int)), default=None)
+        return {'count': len(page), 'messages': page, 'entries': entries, 'leaf_id': leaf_id,
+                'next_cursor': next_cursor, 'total_messages': len(messages),
+                **({'outline': outline} if outline is not None else {})}
     return await asyncio.to_thread(read)
 
 

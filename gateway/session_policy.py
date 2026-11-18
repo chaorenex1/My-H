@@ -17,7 +17,9 @@ CREATE_FIELDS = frozenset({'request_id', 'source', 'cwd', 'model', 'toolsets',
                            'yolo', 'safe_mode', 'ignore_user_config',
                            'skills', 'checkpoints', 'accept_hooks', 'pass_session_id', 'follow_profile_config',
                            'service_tier', 'cwd_explicit', 'run_budget', 'verbose', 'row_cwd', 'client_env',
-                           'client'})
+                           'client',
+                           # ADR-10 D9: the create-only custom-row flag.
+                           'custom_messages'})
 # Sections a ``follow_profile_config`` session re-reads from the owning profile's CURRENT config each
 # turn (main's Bot Chat row), credentials included: a frozen key never crosses a profile route change.
 FOLLOW_SECTIONS = ('model', 'providers', 'custom_providers', 'fallback_providers', 'fallback_model', 'model_aliases',
@@ -167,6 +169,9 @@ class LocalSessionPolicy:
     # An ACP session's edit approval (``session.mutate edit_policy``; main's ACP modes): ``ask`` (Default),
     # ``workspace_session`` (Accept Edits) or ``session`` (Don't Ask). Sensitive paths always ask.
     edit_approval_policy: str = 'ask'
+    # ADR-10 D9: the create-only session flag that makes producers write ``role:"custom"`` rows.
+    # Resume never changes it. (The creating client itself rides the frozen request, not this policy.)
+    custom_messages: bool = False
 
     def client_env(self):
         return None if self.client_env_json is None else json.loads(self.client_env_json)
@@ -496,7 +501,8 @@ def build_policy(params, config, *, private_secrets=None, profile_terminal=True,
                               safe_mode=safe_mode, ignore_user_config=ignore_user_config,
                               coding_posture=coding_posture, client_env_json=client_env,
                               client_env_remote=client_env is not None and not client_local,
-                              client_env_rules_json=rules)
+                              client_env_rules_json=rules,
+                              custom_messages=params.get('custom_messages') is True)
 
 
 def terminal_uses_host_cwd(terminal):
@@ -1004,6 +1010,7 @@ def restore_policy(data):
                 or type(policy.safe_mode) is not bool or type(policy.ignore_user_config) is not bool
                 or not isinstance(policy.skills_prompt, (str, type(None)))
                 or type(policy.coding_posture) is not bool
+                or type(policy.custom_messages) is not bool
                 or not _valid_client_env(policy.client_env_json) or type(policy.client_env_remote) is not bool
                 or not _valid_client_env(policy.client_env_rules_json, list)
                 or policy.edit_approval_policy not in EDIT_APPROVAL_POLICIES

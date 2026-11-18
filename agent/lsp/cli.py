@@ -78,17 +78,36 @@ def _status_for(server_id: str) -> str:
     return detect_status(_recipe_pkg_for(server_id))
 
 
+def _semgrep_master_enabled() -> bool:
+    """``code_intel.semgrep.enabled``: the scanner switch, separate from ``lsp.display``."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        code_intel = load_config_readonly().get("code_intel")
+        semgrep = code_intel.get("semgrep") if isinstance(code_intel, dict) else None
+        return bool(semgrep.get("enabled")) if isinstance(semgrep, dict) else False
+    except Exception:  # health: allow BLE001 -- status must work with a broken/absent config
+        return False
+
+
 def _cmd_status(emit_json: bool) -> int:
     from agent.lsp import get_service
+    from agent.lsp.display import display_policy
     from agent.lsp.servers import UNTRUSTED_SAFE_SERVERS
     servers = _all_servers()
     svc = get_service()
     info = svc.get_status() if svc is not None else {"enabled": False}
+    policy = display_policy()
+    display = {"lsp": {"mode": policy.lsp.mode, "severities": list(policy.lsp.severities)},
+               "semgrep": {"mode": policy.semgrep.mode, "severities": list(policy.semgrep.severities)}}
+    semgrep_master = _semgrep_master_enabled()
     if emit_json:
         import json
         registry = [{"server_id": s.server_id, "extensions": list(s.extensions), "description": s.description,
                      "binary_status": _status_for(s.server_id)} for s in servers]
-        sys.stdout.write(json.dumps({"service": info, "registry": registry}, indent=2) + "\n")
+        sys.stdout.write(json.dumps({"service": info, "display": display,
+                                     "code_intel": {"semgrep_enabled": semgrep_master},
+                                     "registry": registry}, indent=2) + "\n")
         return 0
 
     out = ["LSP Service", "===========", f"  enabled:         {info.get('enabled', False)}"]
@@ -96,6 +115,12 @@ def _cmd_status(emit_json: bool) -> int:
         out += [f"  wait_mode:       {info.get('wait_mode')}",
                 f"  wait_timeout:    {info.get('wait_timeout')}s",
                 f"  install_strategy:{info.get('install_strategy')}"]
+    out += [f"  display.lsp:     mode={display['lsp']['mode']} severities={','.join(display['lsp']['severities'])}",
+            f"  display.semgrep: mode={display['semgrep']['mode']} "
+            f"severities={','.join(display['semgrep']['severities'])}",
+            f"  semgrep master:  enabled={semgrep_master}  (code_intel.semgrep.enabled; "
+            "display.mode only gates the write path)"]
+    if svc is not None:
         clients = info.get("clients") or []
         out.append(f"  active clients:  {len(clients)}" if clients else "  active clients:  none")
         out += [f"    - {c['server_id']:20s} state={c['state']:10s} root={c['workspace_root']}" for c in clients]

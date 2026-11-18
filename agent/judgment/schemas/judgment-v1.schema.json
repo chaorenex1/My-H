@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hermes:judgment:v1",
+  "title": "Hermes judgment v1 contract schema registry",
+  "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "boolean"},
+        {"type": "number"},
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/JsonValue"}},
+        {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/JsonValue"}
+        }
+      ]
+    },
+    "JsonState": {
+      "anyOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"$ref": "#/$defs/JsonValue"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/JsonValue"}}
+      ]
+    },
+    "QuestionSpec": {
+      "type": "object",
+      "required": ["instructions"],
+      "properties": {
+        "instructions": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "criteria": {
+          "oneOf": [
+            {"type": "array", "minItems": 2, "items": {"type": "string"}},
+            {
+              "type": "object",
+              "additionalProperties": {"type": ["string", "null"]}
+            }
+          ]
+        },
+        "image": {"type": "integer", "minimum": 0}
+      },
+      "oneOf": [
+        {"required": ["image"], "not": {"required": ["criteria"]}},
+        {"not": {"required": ["image"]}}
+      ],
+      "additionalProperties": false
+    },
+    "Questions": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"minLength": 1, "pattern": "\\S"},
+      "additionalProperties": {"$ref": "#/$defs/QuestionSpec"}
+    },
+    "ImageAsset": {
+      "type": "object",
+      "required": ["mime_type"],
+      "properties": {
+        "data": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9+/]*={0,2}$"},
+        "path": {"type": "string", "minLength": 1},
+        "mime_type": {"type": "string", "pattern": "^image/[A-Za-z0-9][A-Za-z0-9!$&^_.+-]{0,126}$"},
+        "detail": {"type": "string", "enum": ["auto", "low", "high", "original"]}
+      },
+      "oneOf": [
+        {"required": ["data"], "not": {"required": ["path"]}},
+        {"required": ["path"], "not": {"required": ["data"]}}
+      ],
+      "additionalProperties": false
+    },
+    "JudgeRequest": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"$ref": "#/$defs/JsonState"},
+        "questions": {"$ref": "#/$defs/Questions"},
+        "questions_file": {"type": "string", "minLength": 1},
+        "contexts": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/JsonValue"}
+        },
+        "labels": {
+          "type": "object",
+          "propertyNames": {"minLength": 1, "pattern": "\\S"},
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          }
+        },
+        "images": {"type": "array", "items": {"$ref": "#/$defs/ImageAsset"}},
+        "purpose": {"type": "string", "minLength": 1},
+        "budget_usd": {"type": "number", "minimum": 0},
+        "timeout_ms": {"type": "integer", "minimum": 1}
+      },
+      "oneOf": [
+        {"required": ["questions"], "not": {"required": ["questions_file"]}},
+        {"required": ["questions_file"], "not": {"required": ["questions"]}}
+      ],
+      "additionalProperties": false
+    },
+    "ChoiceAnswer": {
+      "type": "object",
+      "required": ["type", "choice", "probabilities", "confidence"],
+      "properties": {
+        "type": {"const": "choice"},
+        "choice": {"type": "string"},
+        "probabilities": {"type": "object", "additionalProperties": {"type": "number"}},
+        "confidence": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "NoulAnswer": {
+      "type": "object",
+      "required": ["type", "noul"],
+      "properties": {"type": {"const": "noul"}, "noul": {"type": "number"}},
+      "additionalProperties": false
+    },
+    "ScoreAnswer": {
+      "type": "object",
+      "required": ["type", "score", "probabilities", "confidence"],
+      "properties": {
+        "type": {"const": "score"},
+        "score": {"type": "integer"},
+        "probabilities": {"type": "object", "additionalProperties": {"type": "number"}},
+        "confidence": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "BoxAnswer": {
+      "type": "object",
+      "required": ["type", "box", "confidence"],
+      "properties": {
+        "type": {"const": "box"},
+        "box": {
+          "type": "object",
+          "required": ["top", "bottom", "left", "right"],
+          "properties": {
+            "top": {"type": "number"},
+            "bottom": {"type": "number"},
+            "left": {"type": "number"},
+            "right": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "confidence": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "Answer": {
+      "oneOf": [
+        {"$ref": "#/$defs/ChoiceAnswer"},
+        {"$ref": "#/$defs/NoulAnswer"},
+        {"$ref": "#/$defs/ScoreAnswer"},
+        {"$ref": "#/$defs/BoxAnswer"}
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "required": ["input_tokens", "output_tokens", "request_count"],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "cache_read_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_tokens": {"type": "integer", "minimum": 0},
+        "request_count": {"type": "integer", "minimum": 0},
+        "raw_usage": {"$ref": "#/$defs/JsonValue"}
+      },
+      "additionalProperties": false
+    },
+    "JudgeResult": {
+      "type": "object",
+      "required": ["kind", "api", "provider", "model", "answers", "usage", "cost_usd", "cached_questions"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["native", "local", "online"]},
+        "api": {"type": "string", "minLength": 1},
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "answers": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"minLength": 1},
+          "additionalProperties": {"$ref": "#/$defs/Answer"}
+        },
+        "usage": {"$ref": "#/$defs/Usage"},
+        "cost_usd": {"type": ["number", "null"], "minimum": 0},
+        "cached_questions": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "BatchKey": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {"type": "number"}
+      ]
+    },
+    "BatchItem": {
+      "type": "object",
+      "required": ["key", "state"],
+      "properties": {
+        "key": {"$ref": "#/$defs/BatchKey"},
+        "state": {"$ref": "#/$defs/JsonState"},
+        "images": {"type": "array", "items": {"$ref": "#/$defs/ImageAsset"}}
+      },
+      "additionalProperties": false
+    },
+    "BatchRequest": {
+      "type": "object",
+      "required": ["items", "min_ok", "max_concurrency"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/BatchItem"}
+        },
+        "questions": {"$ref": "#/$defs/Questions"},
+        "questions_file": {"type": "string", "minLength": 1},
+        "contexts": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/JsonValue"}
+        },
+        "labels": {
+          "type": "object",
+          "propertyNames": {"minLength": 1, "pattern": "\\S"},
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          }
+        },
+        "purpose": {"type": "string", "minLength": 1},
+        "budget_usd": {"type": "number", "minimum": 0},
+        "timeout_ms": {"type": "integer", "minimum": 1},
+        "min_ok": {"type": "integer", "minimum": 0},
+        "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 4}
+      },
+      "oneOf": [
+        {"required": ["questions"], "not": {"required": ["questions_file"]}},
+        {"required": ["questions_file"], "not": {"required": ["questions"]}}
+      ],
+      "additionalProperties": false
+    },
+    "BatchSuccess": {
+      "type": "object",
+      "required": ["key", "ok", "result"],
+      "properties": {
+        "key": {"$ref": "#/$defs/BatchKey"},
+        "ok": {"const": true},
+        "result": {"$ref": "#/$defs/JudgeResult"}
+      },
+      "additionalProperties": false
+    },
+    "BatchFailure": {
+      "type": "object",
+      "required": ["key", "ok", "error"],
+      "properties": {
+        "key": {"$ref": "#/$defs/BatchKey"},
+        "ok": {"const": false},
+        "error": {
+          "type": "object",
+          "required": ["type", "message"],
+          "properties": {
+            "type": {"type": "string", "minLength": 1},
+            "message": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "BatchResult": {
+      "type": "object",
+      "required": ["results", "min_ok_met"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {"$ref": "#/$defs/BatchSuccess"},
+              {"$ref": "#/$defs/BatchFailure"}
+            ]
+          }
+        },
+        "min_ok_met": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

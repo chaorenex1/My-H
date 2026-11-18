@@ -25,7 +25,7 @@ import {
   toolEventOwnerMessageId,
   upsertToolPart
 } from '@/lib/chat-messages'
-import { adviserFromMessage } from '@/lib/chat-messages/hydration'
+import { advisorFromMessage } from '@/lib/chat-messages/hydration'
 import type { ErrorSurface } from '@/lib/error-surface'
 import {
   dedupeGeneratedImageEchoesInParts,
@@ -657,7 +657,7 @@ export function useMessageStream({
     [flushQueuedDeltas, mutateStream, sessionInterrupted]
   )
 
-  const appendAdviserMessage = useCallback(
+  const appendAdvisorMessage = useCallback(
     (
       sessionId: string,
       payload: { id?: string; text?: string; severity?: string; label?: string } | undefined,
@@ -679,17 +679,17 @@ export function useMessageStream({
         const severity = String(payload?.severity || 'advisory')
         // The live row carries the rendered block, so parse it here too: otherwise a live
         // card would keep one tone until the session is reopened.
-        const parsed = adviserFromMessage(text)
+        const parsed = advisorFromMessage(text)
 
         return {
           ...state,
           messages: [
             ...state.messages,
             {
-              id: `adviser-${id}`,
+              id: `advisor-${id}`,
               role: 'system',
               parts: [textPart(text, occurredAt)],
-              adviser: parsed
+              advisor: parsed
                 ? { ...parsed, label, severity }
                 : { severity, label, body: text, items: [] },
               pluginMessageId: id,
@@ -1324,7 +1324,7 @@ export function useMessageStream({
     failAssistantMessage,
     flushQueuedDeltas,
     dropQueuedDeltas,
-    appendAdviserMessage,
+    appendAdvisorMessage,
     finalizeInterimAssistantMessage,
     hydrateFromStoredSession,
     queryClient,
@@ -1355,7 +1355,7 @@ export function useMessageStream({
     completeAssistantMessage,
     handleGatewayEvent,
     handleServerRequest,
-    appendAdviserMessage,
+    appendAdvisorMessage,
     finalizeInterimAssistantMessage,
     upsertToolCall
   }

@@ -40,8 +40,11 @@ from tools.connectors.gateway.wire import ConnectionStatus
 from tools.connectors.portal.tools_cache import ToolsRead
 from tools.connectors.portal.wire import ConnectorTool
 
-TS_OUT = ROOT / "apps" / "shared" / "src" / "gateway-contract.generated.ts"
-OPENRPC_OUT = ROOT / "apps" / "shared" / "src" / "gateway-contract.openrpc.json"
+# The generated wire belongs to the client that consumes it: omp-ui's RPC directory. The
+# original apps/shared copies are the legacy TUI/Desktop surface and are not touched by this
+# generator any more.
+TS_OUT = ROOT / "omp-ui" / "src" / "modes" / "rpc" / "gateway-contract.generated.ts"
+OPENRPC_OUT = ROOT / "omp-ui" / "src" / "modes" / "rpc" / "gateway-contract.openrpc.json"
 _ENUM_PAIRS = (
     ("ConnectionTargetState", ConnectionTargetState, "TargetState", TargetState),
     ("ConnectionSettleReason", ConnectionSettleReason, "SettleReason", SettleReason),
@@ -232,6 +235,13 @@ def render_ts() -> str:
 
     out = [HEADER, "/* eslint-disable */\n", "// ── Types ──\n"]
     out.extend(r.emitted.values())
+    # ADR-10 D10: the eleven renderer roles, derived from the Python seat table. ``TranscriptRole``
+    # (the wire union) also carries the legacy ``system`` member; clients branch on this subset.
+    from tui_gateway.contracts.transcript_roles import TRANSCRIPT_ROLE_NAMES
+    out.append("export const TRANSCRIPT_ROLES = [\n"
+               + "".join(f"  {_lit(name)},\n" for name in TRANSCRIPT_ROLE_NAMES)
+               + "] as const\n")
+    out.append("export type TranscriptRoleName = (typeof TRANSCRIPT_ROLES)[number]\n")
     out.append(
         "export type ConnectorErrorReason = "
         + r.type_of({"enum": [member.value for member in ConnectorErrorReason]})

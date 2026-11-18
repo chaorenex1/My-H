@@ -90,7 +90,12 @@ async def test_session_stats_returns_the_same_dict(tmp_path, monkeypatch):
         reply = await connection.dispatch({'id': 2, 'method': 'session.stats', 'params': {'session_id': 's'}})
         assert 'result' in reply, reply
         from gateway.session_usage import usage_stats
-        assert reply['result'] == usage_stats(agent)
+        # The verb adds the stored-row counters (session_id/tokens/context_usage/cost/…) on top of
+        # the live usage dict, so every live figure must match and the enrichment must be present.
+        for key, value in usage_stats(agent).items():
+            assert reply['result'][key] == value
+        assert reply['result']['session_id'] == 's'
+        assert reply['result']['tokens']['total'] == reply['result']['total_tokens']
         CANONICAL_METHODS['session.stats'].result.model_validate(reply['result'])
     finally:
         await connection.close()
@@ -115,21 +120,48 @@ def test_completion_carries_main_tui_usage_from_the_turn_end_stats():
     assert 'usage' not in completion_payload(row, {'outcome': 'completed'}, 'hi', {'result': {}})
 
 
+def test_completion_carries_per_step_usage_and_served_models():
+    """ADR-2 D1/D2: ``step_usage`` is the last response's own Usage (null when absent), and the
+    requested/served ids ride the same frame for the served-model marker."""
+    from gateway.session_settlement_recovery import completion_payload
+    from tui_gateway.contracts.registry import EVENTS
+
+    row = {'admission_id': 'a1', 'request_id': 'r1'}
+    step = {'model': 'm-1', 'input': 10, 'output': 2, 'reasoning': 0, 'prompt': 19,
+            'completion': 2, 'total': 21, 'calls': 1, 'cache_read': 7, 'cache_write': 1,
+            'cost_usd': 0.5}
+    captured = {'result': {'final_response': 'hi', 'served_model': 'm-served',
+                           'requested_model': 'm-1'}, 'step_usage': step}
+    complete = completion_payload(row, {'outcome': 'completed'}, 'hi', captured)
+    assert complete['step_usage'] == step
+    assert (complete['served_model'], complete['requested_model']) == ('m-served', 'm-1')
+    EVENTS['message.complete'].payload.model_validate(
+        {'text': 'hi', **{key: complete[key] for key in ('step_usage', 'served_model', 'requested_model')}})
+    # Absent is null, not a copy of the session-cumulative usage.
+    blank = completion_payload(row, {'outcome': 'completed'}, 'hi', {'result': {}})
+    assert blank['step_usage'] is None and blank['served_model'] is None and blank['requested_model'] is None
+
+
 def test_local_viewer_turn_end_records_stats_for_the_completion():
     from gateway.session_results import execution_result
     from gateway.session_usage import publish_usage
     published = []
-    turn = _turn(Platform.LOCAL, published, _agent())
+    agent = _agent()
+    agent._last_step_usage = {'input': 10, 'output': 2, 'total': 12, 'cache_read': 7, 'cache_write': 1}
+    agent._last_step_cost_usd = 0.25
+    turn = _turn(Platform.LOCAL, published, agent)
     captured = {}
     token = execution_result.set(captured)
     try:
-        publish_usage(turn, _agent(), record=True)
+        publish_usage(turn, agent, record=True)
     finally:
         execution_result.reset(token)
     frame = published[-1][1]
     # The captured stats stay the loose counters (``completion_payload`` maps them with
     # ``tui_usage`` for ``message.complete``); only the published frame carries both views.
     assert captured['session_usage'] == {key: value for key, value in frame.items() if key != 'usage'}
+    assert captured['step_usage'] == {'input': 10, 'output': 2, 'total': 12,
+                                      'cache_read': 7, 'cache_write': 1, 'cost_usd': 0.25}
     assert 'usage' in frame
 
 

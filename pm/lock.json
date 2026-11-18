@@ -1,5 +1,71 @@
 {
   "packages": {
+    "ast-grep": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "e18e13c27ed6c4b3ec4de00745b0755dee9dc26c035e226f4dd5d147dca99cc8",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-aarch64-apple-darwin.zip"
+        },
+        "darwin-x64": {
+          "sha256": "8438fe549da59da28518c45bdaab5b851aabafe8fb4f8dc05c261a7649b4eca6",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-x86_64-apple-darwin.zip"
+        },
+        "linux-arm64": {
+          "sha256": "73af0ebe5958acee012754a5b2826a186580ef83333092408a7a01096fc30b8b",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-aarch64-unknown-linux-gnu.zip"
+        },
+        "linux-x64": {
+          "sha256": "a7eead5552d3a8daad70f5d50d935da44bd0c138e946b5b0a96b1d38169fa639",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-x86_64-unknown-linux-gnu.zip"
+        },
+        "win32-arm64": {
+          "sha256": "fb6a4c3c6ed350d7e64eae81961bdf6b3f201c6e7c31ace8caccf8ceddff1cac",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-aarch64-pc-windows-msvc.zip"
+        },
+        "win32-x64": {
+          "sha256": "1a5b7824c5925ac34257f806488e54860817cefd855fd308d13df7550d068908",
+          "url": "https://github.com/ast-grep/ast-grep/releases/download/0.51.0/app-x86_64-pc-windows-msvc.zip"
+        }
+      },
+      "version": "0.51.0"
+    },
+    "bun": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "c240d7f0ccb90c263a849fcdb09b7ee62630d921348ed6aafda86b9d577bc510",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-aarch64.zip"
+        },
+        "darwin-x64": {
+          "sha256": "50a3491f73abc2fe81673171a85762d3bc2cc1680ccecadd983de99adf77977e",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-darwin-x64.zip"
+        },
+        "linux-arm64": {
+          "sha256": "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip"
+        },
+        "linux-arm64-musl": {
+          "sha256": "57f01b02ac7113c61c935f28f38c2eab849e3c970dab21f8b640a87b1ef65009",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64-musl.zip"
+        },
+        "linux-x64": {
+          "sha256": "bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64.zip"
+        },
+        "linux-x64-musl": {
+          "sha256": "a5a8ccc5e74dcb883fe974f125a7bdb3b41e5195ed1b870e73f17effd3eb2b2d",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-musl.zip"
+        },
+        "win32-arm64": {
+          "sha256": "2d57a0eec0cb44d95c918c3f9734f60455a1306ae5085d76fc68f44e3ee30d09",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-aarch64.zip"
+        },
+        "win32-x64": {
+          "sha256": "cd2c0fccc78f3ede1f50ca827a15f063eda13d4d150a3d0674f4f6e323d864a5",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64.zip"
+        }
+      },
+      "version": "1.4.4"
+    },
     "bws": {
       "artifacts": {
         "darwin-arm64": {
@@ -65,6 +131,35 @@
         }
       },
       "version": "1208+145.0.7632.6"
+    },
+    "codeql": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "5a035e81cd8c76622d0e453d1d5197cfee46177f171d623f15fbb560a0b2b215",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-osx64.tar.gz"
+        },
+        "darwin-x64": {
+          "sha256": "5a035e81cd8c76622d0e453d1d5197cfee46177f171d623f15fbb560a0b2b215",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-osx64.tar.gz"
+        },
+        "linux-arm64": {
+          "sha256": "0c9e32e9fcf65be4ab8df0cf0a7bb83e64aff4099fffc5f4930e84c12a454c8b",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-linux-arm64.tar.gz"
+        },
+        "linux-x64": {
+          "sha256": "64518dc413c8e7b5733fee2489e830a899bb1e3f28c8873b5869d5cc90164c5c",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-linux64.tar.gz"
+        },
+        "win32-arm64": {
+          "sha256": "b1a54af0e0657bc8dd2201474373aae6cee72c20d820a3a89423013f2465533d",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-win64.tar.gz"
+        },
+        "win32-x64": {
+          "sha256": "b1a54af0e0657bc8dd2201474373aae6cee72c20d820a3a89423013f2465533d",
+          "url": "https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.3/codeql-bundle-win64.tar.gz"
+        }
+      },
+      "version": "2.27.3"
     },
     "cua-driver": {
       "artifacts": {
@@ -190,6 +285,43 @@
         }
       },
       "version": "2.53.0+3"
+    },
+    "gopass": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "b052f36631e619fa9391edeee581d1f3937c4c41d432aa4ba673b53401800c0f",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-darwin-arm64.tar.gz"
+        },
+        "darwin-x64": {
+          "sha256": "c02174953a396c4c457f238505f2efa1cb5eee9439087654d7d3d7e72e978495",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-darwin-amd64.tar.gz"
+        },
+        "linux-arm64": {
+          "sha256": "5534508600159b8a7c3909e9ea094a3ed3887b0a5de182bb3f223be0221c9026",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-arm64.tar.gz"
+        },
+        "linux-arm64-musl": {
+          "sha256": "5534508600159b8a7c3909e9ea094a3ed3887b0a5de182bb3f223be0221c9026",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-arm64.tar.gz"
+        },
+        "linux-x64": {
+          "sha256": "fe63584ba2275409c54d060d7f601de24d03ca980b11e617cd30cd9c4814597a",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-amd64.tar.gz"
+        },
+        "linux-x64-musl": {
+          "sha256": "fe63584ba2275409c54d060d7f601de24d03ca980b11e617cd30cd9c4814597a",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-linux-amd64.tar.gz"
+        },
+        "win32-arm64": {
+          "sha256": "f110f9dfde85db79e12d7e087df2aa9b08e8b7c1eaf0f43702d0f789bb00fc27",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-windows-arm64.zip"
+        },
+        "win32-x64": {
+          "sha256": "8965ee29f9ede2acfde2de6f5564ecc98de9965a612b675acb453c784d847eaa",
+          "url": "https://github.com/gopasspw/gopass/releases/download/v1.17.4/gopass-1.17.4-windows-amd64.zip"
+        }
+      },
+      "version": "1.17.4"
     },
     "iron-proxy": {
       "artifacts": {
@@ -686,6 +818,10 @@
       },
       "version": "15.2.0"
     },
+    "semgrep": {
+      "artifacts": {},
+      "version": "1.183.0"
+    },
     "termux-docker": {
       "artifacts": {
         "linux-arm64-bionic": {
@@ -693,6 +829,35 @@
         }
       },
       "version": "sha256:c14ffb703abf44f2d3bf7fdffdcc50df7d1454d09c705be190e0342a0b47f303"
+    },
+    "tree-sitter": {
+      "artifacts": {
+        "darwin-arm64": {
+          "sha256": "6362cda144b6e45d92c739d4eafb7e3c322f0545b0b959b4f7ca7d53fb3300fa",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-macos-arm64.zip"
+        },
+        "darwin-x64": {
+          "sha256": "fd7e60f57b6e00caecaa055b94da20d7875b05cef2277831588546e08ab8bb29",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-macos-x64.zip"
+        },
+        "linux-arm64": {
+          "sha256": "3c0d0113cae3fea36f2336c271cbdacbcdb349edb006319155652b9386803c55",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-arm64.zip"
+        },
+        "linux-x64": {
+          "sha256": "c7e686aec16ba17053c2e6fd87600ccb10cf8ba3d055756b17e756d538e11114",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-linux-x64.zip"
+        },
+        "win32-arm64": {
+          "sha256": "eadbb00c87c5a38f874eb92af593df7264635afefb455af3218bdb1c50123bad",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-windows-arm64.zip"
+        },
+        "win32-x64": {
+          "sha256": "de043e4c289efcef7981df99988300f23763befdeb36abf7c1898f080c478424",
+          "url": "https://github.com/tree-sitter/tree-sitter/releases/download/v0.27.1/tree-sitter-cli-windows-x64.zip"
+        }
+      },
+      "version": "0.27.1"
     },
     "uv": {
       "artifacts": {

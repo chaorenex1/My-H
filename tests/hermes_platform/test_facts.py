@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 import importlib
+import platform
+import sys
 from pathlib import Path
 
 import pytest
 
 from hermes_platform.host import facts
+
+
+def test_os_release_matches_this_host():
+    """The release is a host fact: macOS product version, full Windows version, else kernel release."""
+    if sys.platform == "darwin":
+        expected = platform.mac_ver()[0] or platform.release()
+    elif sys.platform == "win32":
+        expected = platform.version()
+    else:
+        expected = platform.release()
+    assert facts.os_release() == expected
+
 
 @pytest.mark.parametrize(
     ("raw", "expected"),

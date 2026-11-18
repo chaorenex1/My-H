@@ -233,13 +233,13 @@ def test_the_call_runs_in_the_handlers_context_and_its_result_is_checked_before_
 def test_a_worker_that_cannot_start_gives_its_slot_back(monkeypatch):
     """Thread exhaustion at spawn: the call fails with the start error, and its admission and the
     worker count go back, so the owner does not answer ``oneshot_busy`` for good after 16 of them."""
-    from agent import memory_provider
-    real = memory_provider.spawn_context_thread
+    import hermes_threading
+    real = hermes_threading.spawn_context_thread
 
     class _Unstartable:
         def start(self):
             raise RuntimeError("can't start new thread")
-    monkeypatch.setattr(memory_provider, 'spawn_context_thread', lambda *args, **kwargs: _Unstartable())
+    monkeypatch.setattr(hermes_threading, 'spawn_context_thread', lambda *args, **kwargs: _Unstartable())
     pool, refusals = oneshot._Pool(), []
     for _ in range(oneshot._ADMITTED + 1):
         try:
@@ -248,5 +248,5 @@ def test_a_worker_that_cannot_start_gives_its_slot_back(monkeypatch):
             refusals.append(type(exc).__name__)
     assert refusals == ['RuntimeError'] * (oneshot._ADMITTED + 1)
     assert (pool.calls, pool.queue, pool.threads) == (set(), {}, 0)
-    monkeypatch.setattr(memory_provider, 'spawn_context_thread', real)
+    monkeypatch.setattr(hermes_threading, 'spawn_context_thread', real)
     assert pool.submit(lambda: {'text': 'ok'}).result(timeout=10) == {'text': 'ok'}

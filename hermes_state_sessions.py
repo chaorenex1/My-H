@@ -9,7 +9,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 from agent.session_activity import (
     ActivityProvenance, bound_activity_description, normalize_activity_provenance,
@@ -620,6 +620,32 @@ class SessionSessionsMixin:
             ).fetchone()
             return None if row is None else int(row[0])
         return self._execute_write(_do)
+
+    def get_session_workspace_roots(self, session_id: str) -> list[str]:
+        """Additional workspace roots of *session_id* (``/add-dir``), in stored order."""
+        if not session_id:
+            return []
+        row = self._read_one("SELECT workspace_roots FROM sessions WHERE id = ?", (session_id,))
+        raw = row[0] if row is not None else None
+        if not raw:
+            return []
+        try:
+            roots = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+        return [str(root) for root in roots if isinstance(root, str) and root] if isinstance(roots, list) else []
+
+    def update_session_workspace_roots(self, session_id: str, roots: Sequence[str]) -> bool:
+        """Persist *roots* as *session_id*'s additional workspace roots; False for an unknown row."""
+        if not session_id:
+            return False
+        payload = json.dumps([str(root) for root in roots], ensure_ascii=False)
+
+        def _do(conn):
+            cur = conn.execute("UPDATE sessions SET workspace_roots = ? WHERE id = ?", (payload, session_id))
+            return cur.rowcount > 0
+
+        return bool(self._execute_write(_do))
 
     def publish_session_git_metadata(
         self, session_id: str, cwd: str, generation: int, git_branch: Optional[str] = None,
@@ -1960,9 +1986,9 @@ class SessionSessionsMixin:
     # The ``NOT EXISTS`` probe is the authority; : ``message_count = 0`` stays as a cheap prefilter. Same
     # shape as every : other emptiness guard in this module. (#95868)
     _EMPTY_SESSION_WHERE = (
-        "message_count = 0 AND ended_at IS NOT NULL AND archived = 0 AND NOT EXISTS ("
-        "SELECT 1 FROM messages WHERE messages.session_id = sessions.id)"
-    )
+        "message_count = 0 AND ended_at IS NOT NULL AND archived = 0 "
+        "AND COALESCE(offloaded, 0) = 0 AND NOT EXISTS ("
+        "SELECT 1 FROM messages WHERE messages.session_id = sessions.id)")
 
     def count_empty_sessions(self) -> int:
         """Count of empty, ended, non-archived sessions; ended_at guards a fresh session's first message."""

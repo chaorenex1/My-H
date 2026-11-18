@@ -494,6 +494,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     cache_write_tokens INTEGER DEFAULT 0,
     reasoning_tokens INTEGER DEFAULT 0,
     cwd TEXT,
+    -- Additional workspace roots (`/add-dir`), a JSON array of absolute paths; NULL/`[]` = none.
+    workspace_roots TEXT,
     git_branch TEXT,
     git_repo_root TEXT,
     git_metadata_generation INTEGER NOT NULL DEFAULT 0,
@@ -536,6 +538,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_read_at REAL,
     tool_names TEXT,
     transcript_revision INTEGER NOT NULL DEFAULT 0,
+    -- ADR-16 D3: per-session 1-based tool-call ordinal used as the tool-output archive
+    -- file name. Monotonic, never reused (rewind does not roll it back).
+    tool_output_seq INTEGER NOT NULL DEFAULT 0,
+    -- ADR-16 D8: cold mirror state. ``mirror_path`` is the authoritative bundle JSONL path;
+    -- ``offloaded`` means the message rows were pruned and restore is required before resume.
+    mirror_path TEXT,
+    mirrored_at REAL,
+    offloaded INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (parent_session_id) REFERENCES sessions(id),
     FOREIGN KEY (system_prompt_hash) REFERENCES system_prompts(hash)
 );
@@ -707,6 +717,15 @@ CREATE TABLE IF NOT EXISTS session_jobs (
 CREATE INDEX IF NOT EXISTS idx_session_jobs_session
     ON session_jobs(origin_session_id, next_due_seq);
 
+-- TTSR ``repeatMode: once`` state (ADR-6 D4): the live notification is never persisted; only the
+-- delivered rule names are, so a resumed omp-ui session does not inject the same reminder twice.
+CREATE TABLE IF NOT EXISTS session_ttsr_injections (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    rule_name TEXT NOT NULL,
+    injected_at REAL NOT NULL,
+    PRIMARY KEY (session_id, rule_name)
+);
+
 CREATE TABLE IF NOT EXISTS session_job_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL,
@@ -774,6 +793,23 @@ CREATE TABLE IF NOT EXISTS worker_receipts (
 CREATE TABLE IF NOT EXISTS state_meta (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- Per-agent (role) custom configuration, profile-scoped: the Agent Hub writes model/provider,
+-- advisor/prewalk toggles, reasoning effort and pattern here; no config.yaml or WATCHDOG.yml
+-- round-trip. NULL means "not set" (inherit the delegation route / advisor default).
+CREATE TABLE IF NOT EXISTS agent_config (
+    agent_id TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    model TEXT,
+    provider TEXT,
+    advisor INTEGER,
+    prewalk INTEGER,
+    reasoning_effort TEXT,
+    pattern TEXT,
+    prompt_path TEXT,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (agent_id, source)
 );
 
 CREATE TABLE IF NOT EXISTS gateway_routing (
@@ -880,6 +916,51 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     -- from the canonical schema (#94691).
     origin_session_id TEXT NOT NULL DEFAULT ''
 );
+
+-- One row per named in-process agent session (the ``agent`` tool). The identity ``agent_out``
+-- resolves (by id or by unique subject), the JSONL transcript the session owns, and the run's
+-- final answer. Not a second conversation store: the transcript file is the history.
+CREATE TABLE IF NOT EXISTS agent_session (
+    agent_session_id TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    parent_session_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    short_name TEXT NOT NULL DEFAULT '',  -- profile-unique address (agent_message/agent_out)
+    transcript_path TEXT NOT NULL,
+    artifact_manifest TEXT,
+    final_response TEXT,
+    status TEXT NOT NULL,            -- running | completed | error | stalled | parked | cancelled
+    last_activity_at REAL NOT NULL DEFAULT 0,
+    parked_at REAL,
+    model_role TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT,              -- rebuild spec for wake/revive (never credentials)
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_subject ON agent_session(subject);
+CREATE INDEX IF NOT EXISTS idx_agent_session_parent ON agent_session(agent_name, parent_session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_status ON agent_session(status);
+
+-- The owner -> named-agent delivery queue (ADR-15 D4). A message is written here only when the
+-- target session has no live run; ``agent_out(mode="inbox")`` reads pending rows, and a later
+-- run/revive drains them. Delivered rows keep the audit trail of what the session was told.
+CREATE TABLE IF NOT EXISTS agent_inbox (
+    id TEXT PRIMARY KEY,
+    agent_session_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    body TEXT NOT NULL,
+    kind TEXT NOT NULL,            -- message | broadcast | progress | wake_relay
+    reply_to TEXT,
+    broadcast INTEGER NOT NULL DEFAULT 0,
+    progress INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,          -- pending | delivered | failed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    delivered_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_inbox_pending
+    ON agent_inbox(agent_session_id, status, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);

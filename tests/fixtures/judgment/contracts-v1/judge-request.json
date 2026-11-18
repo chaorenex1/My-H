@@ -1,0 +1,19 @@
+{
+  "state": {"request": "Classify these cases", "items": ["first", "second"]},
+  "questions": {
+    "severity": {"instructions": "How bad?", "criteria": ["calm", "angry"]},
+    "urgent": {"instructions": "Urgent?"},
+    "stopped": {
+      "instructions": "Stopped?",
+      "criteria": {"true": "Says it will act, then ends.", "false": null}
+    },
+    "tier": {"instructions": "Which tier?", "criteria": {"low": "trivial", "high": null}},
+    "row": {"instructions": "Which row?", "criteria": {}}
+  },
+  "contexts": {"row": {"column": "latency"}},
+  "labels": {"row": ["shared", "series", "row"]},
+  "images": [{"data": "AQID", "mime_type": "image/png", "detail": "auto"}],
+  "purpose": "contract-fixture",
+  "budget_usd": 0.05,
+  "timeout_ms": 15000
+}

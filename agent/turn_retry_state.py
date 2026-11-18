@@ -60,3 +60,6 @@ class TurnRetryState:
     # A user correction cancelled the in-flight request: append a role-safe checkpoint +
     # user message, rebuild the payload, and retry the same logical iteration.
     restart_with_redirected_messages: bool = False
+    # A TTSR rule aborted the response (ADR-6 P3): discard it, deliver the hidden
+    # ``ttsr-injection`` reminder and retry the same logical iteration.
+    restart_with_ttsr_messages: bool = False

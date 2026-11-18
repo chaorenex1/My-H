@@ -5,11 +5,13 @@ listing/browsing stored rows, spawn-tree snapshots, event replay and the statele
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 
 from .base import JsonValue, Params, Result, WireEnum
-from .common import (OpenModel, PendingApproval, ProfileParams, SessionLiveInfo, SessionParams, TranscriptMessage,
-                     UndoRollbackHint, Usage)
+from .common import (CanonicalClientIdentity, OpenModel, PendingApproval, ProfileParams, SessionLiveInfo,
+                     SessionParams, ToolLabel, TranscriptMessage, TranscriptRole, UndoRollbackHint, Usage)
 from .connectors_operation import ConnectionRequestPayload
 from .registry import method
 
@@ -134,6 +136,12 @@ class SessionCreateParams(ProfileParams):
     hidden: bool = False
     room_plumbing: bool = False
     follow_profile_config: bool = False
+    # ADR-10 D8.5: the creating client's self-declared identity (``{name: "omp-ui"}``); attribution
+    # only, never a policy input.
+    client: CanonicalClientIdentity | None = None
+    # ADR-10 D9: session-level model flag. Create-only; persisted with the session and never
+    # changed by resume. False keeps every legacy payload byte-identical.
+    custom_messages: bool = False
     # #65410: stable caller-chosen key so a retried create (response lost in
     # transit) returns the SAME session instead of a duplicate child.
     idempotency_key: str | None = None
@@ -236,6 +244,10 @@ class SessionListRow(Result):
     message_count: int = 0
     live_message_count: int | None = None
     source: str = ""
+    # ADR-16 D8: a cold-mirrored row survives ``--prune-source``; ``restore_required`` means
+    # its messages live only in the bundle and resume will restore them first.
+    archived: bool = False
+    restore_required: bool = False
     # Durable lineage root of a compressed conversation (REST parity, #66663); None on
     # rows that are not projected compression tips.
     lineage_root_id: str | None = Field(default=None, alias="_lineage_root_id")
@@ -247,6 +259,71 @@ class SessionListResult(Result):
 
 method("session.list", params=SessionListParams, result=SessionListResult,
        doc="Human-facing stored sessions, most recent first (sub-agent / kanban sources denied).")
+
+
+# ── mirrored transcript files (ADR-16 P4 / D7) ───────────────────────────────────────────────
+#
+# The cold mirror is the only place a pruned session's messages still exist, and the picker must
+# be able to tell "mirrored" from "not mirrored" without reading the host filesystem. The RPC is
+# read-only and addresses bundles by session id only — a client-supplied path is never opened.
+
+
+class SessionTranscriptListParams(ProfileParams):
+    limit: int | None = None
+
+
+class SessionTranscriptFile(Result):
+    """One bundle's main JSONL (``<project>/<timestamp>_<id>.jsonl``); subagent and advisor files
+    are not sessions and never appear here."""
+
+    session_id: str
+    project: str  # the encoded project directory name
+    path: str
+    started_at: float = 0
+    cwd: str = ""
+    title: str = ""
+    size_bytes: int = 0
+    message_count: int = 0
+    modified_at: float = 0
+    # Manifest bookkeeping (absent for a file copied in without a manifest entry).
+    mirrored_at: float | None = None
+    offloaded: bool = False
+
+
+class SessionTranscriptProject(Result):
+    project: str
+    sessions: list[SessionTranscriptFile]
+
+
+class SessionTranscriptListResult(Result):
+    projects: list[SessionTranscriptProject]
+    total: int = 0
+
+
+method("session.transcript.list", params=SessionTranscriptListParams, result=SessionTranscriptListResult,
+       doc="Mirrored session bundles in this profile, most recent first, grouped by project directory.")
+
+
+class SessionTranscriptReadParams(ProfileParams):
+    session_id: str = Field(min_length=1)
+    offset: int = 0
+    limit: int = 200
+
+
+class SessionTranscriptReadResult(Result):
+    """One page of a bundle's message rows; ``session`` is the bundle header."""
+
+    session_id: str
+    path: str
+    session: dict[str, JsonValue]
+    messages: list[dict[str, JsonValue]]
+    offset: int
+    total: int
+    has_more: bool
+
+
+method("session.transcript.read", params=SessionTranscriptReadParams, result=SessionTranscriptReadResult,
+       doc="Page one mirrored bundle's JSONL by message index (read-only; never takes a client path).")
 
 
 class SessionMostRecentParams(ProfileParams):
@@ -490,16 +567,65 @@ method("session.status", params=SessionStatusParams, result=SessionStatusResult,
 
 
 class SessionHistoryParams(SessionParams):
-    pass
+    since: int | None = None  # rows after this durable row id
+    cursor: int | None = None  # alias of ``since`` (``since`` wins when both are set)
+    limit: int | None = None  # page size, clamped to 1..500 by the handler
+    # DEPRECATED-NO-OP (ADR-10 P5): the projection is always the custom shape; old clients that
+    # still send the viewer flag are accepted and ignored.
+    project_custom_messages: bool = False
+    # ADR-10 D4/ADR-2 D6: tool result ``content`` depth. Default ``none`` keeps today's payload.
+    include_tool_content: Literal['none', 'text', 'full'] = 'none'
+    # ADR-10 D4: the page's selector rows (``row_id``/``role``/80-char ``summary``). Default off.
+    include_outline: bool = False
+
+
+class HistoryEntry(Result):
+    """One paged transcript entry (a projected message carrying a durable ``row_id``)."""
+
+    entry_id: int
+    role: TranscriptRole
+    text: str | None = None
+    timestamp: float | None = None
+    # ADR-10 P5: synthetic user/assistant rows (auto-continue, failed turn, steer only).
+    synthetic_kind: str | None = None
+    live_steered: bool | None = None
+    custom_type: str | None = None
+    display: bool | None = None
+    display_only: bool | None = None
+    details: JsonValue | None = None
+    attribution: str | None = None
+    legacy_role: str | None = None
+    # ADR-10 D4/D5: tool rows (display-safe ``content`` only under ``include_tool_content``).
+    content: JsonValue | None = None
+    args: dict[str, JsonValue] | None = None
+    labels: list[ToolLabel] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
+    context: str | None = None
+    is_error: bool | None = None
+    reasoning: str | None = None
+
+
+class HistoryOutlineEntry(Result):
+    """One ``session.history.outline`` row (ADR-10 D4/ADR-2 D6): the page's selector summary."""
+
+    row_id: int
+    role: TranscriptRole
+    summary: str
 
 
 class SessionHistoryResult(Result):
     count: int
     messages: list[TranscriptMessage]
+    entries: list[HistoryEntry] = []
+    leaf_id: int | None = None  # largest row id in the full transcript
+    next_cursor: int | None = None  # last returned entry id while rows follow
+    total_messages: int = 0  # full transcript length before paging
+    outline: list[HistoryOutlineEntry] | None = None  # only when ``include_outline``
 
 
 method("session.history", params=SessionHistoryParams, result=SessionHistoryResult,
-       doc="The durable display transcript (ancestors included, row ids attached).")
+       doc="The durable display transcript (ancestors included, row ids attached), paged by row id.")
 
 
 class SessionUsageParams(SessionParams):
@@ -523,6 +649,21 @@ class ContextCategory(Result):
     color: str
     id: str
     label: str
+    tokens: int
+
+
+class ContextMessagePart(Result):
+    """One per-role slice of the conversation estimate (wire ids; clients own the labels)."""
+
+    id: str
+    label: str
+    tokens: int
+
+
+class ContextToolOutput(Result):
+    """Estimated tokens one tool's results occupy in the transcript."""
+
+    name: str
     tokens: int
 
 
@@ -550,6 +691,13 @@ class SessionContextBreakdownResult(Result):
     context_source: str
     model: str
     context_files: list[ContextFileSource] = []
+    # ``conversation`` split by message role; the parts sum to that category's tokens.
+    message_parts: list[ContextMessagePart] = []
+    tool_outputs: list[ContextToolOutput] = []
+    # Whole-window budget: fire point, buffer between it and the ceiling, and the remainder.
+    context_threshold: int = 0
+    auto_compact_buffer: int = 0
+    free_tokens: int = 0
 
 
 method("session.context_breakdown", params=SessionContextBreakdownParams, result=SessionContextBreakdownResult,

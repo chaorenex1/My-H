@@ -78,3 +78,34 @@ def test_deltas_and_seals_carry_turn_segment_and_utf16_offset(monkeypatch):
     assert len(first) == len(second) == 1 and None not in first | second and first != second
     # A finished turn leaves no cursor behind, so a later non-turn emitter's frame stays unstamped.
     assert srv.stream_segments.SESSION_KEY not in session
+
+
+def test_turn_boundaries_and_text_blocks_carry_one_message_identity(monkeypatch):
+    """The omp wire's turn/message primitives: turn.start ends once, text blocks bracket the
+    streamed answer, and every message frame of the turn shares one message_id."""
+    def run_conversation(agent, prompt, stream_callback=None, **_kwargs):
+        stream_callback("Hello")
+        stream_callback(" world")
+        return {"final_response": "Hello world", "messages": [
+            {"role": "user", "content": prompt}, {"role": "assistant", "content": "Hello world"}]}
+
+    frames, _session = _submit_turns(monkeypatch, run_conversation, turns=1)
+    ordered = [e for e, _p in frames if e in {
+        "turn.start", "message.start", "message.block_start", "message.block_end",
+        "message.complete", "turn.end", "prompt.result", "session.settled"}]
+    assert ordered == [
+        "turn.start", "message.start", "message.block_start", "message.block_end",
+        "message.complete", "turn.end", "prompt.result", "session.settled"]
+
+    blocks = [p for e, p in frames if e == "message.block_end"]
+    assert [(b["kind"], b["content_index"], b["content"]) for b in blocks] == [("text", 0, "Hello world")]
+    assert [p["kind"] for e, p in frames if e == "message.block_start"] == ["text"]
+
+    identity = set()
+    for event, payload in frames:
+        if event in {"turn.start", "message.start", "message.delta", "message.block_start",
+                     "message.block_end", "message.complete"}:
+            identity.add(payload["message_id"])
+    assert len(identity) == 1 and None not in identity
+    complete = next(p for e, p in frames if e == "message.complete")
+    assert complete["stop_reason"] == "stop"

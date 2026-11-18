@@ -17,7 +17,8 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agent.memory_provider import MemoryProvider, spawn_context_thread
+from agent.memory_provider import MemoryProvider
+from hermes_threading import spawn_context_thread
 from tools.registry import tool_error
 
 logger = logging.getLogger(__name__)

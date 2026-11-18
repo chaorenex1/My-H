@@ -1,7 +1,7 @@
 """The plugin-facing ``agent_loop`` capability: in-process agent runs on a bounded thread pool.
 
 ``PluginContext.agent_loop`` returns a :class:`PluginAgentLoop`. Each accepted call runs on its
-own daemon thread — ``agent.memory_provider.spawn_context_thread`` copies the caller's
+own daemon thread — ``hermes_threading.spawn_context_thread`` copies the caller's
 contextvars, so the profile home, secret scope and recursion depth follow the call — up to
 ``agent_loop.max_workers`` threads
 at once. Beyond that, calls wait FIFO in a bounded queue (``agent_loop.max_queued``); nothing is
@@ -102,7 +102,7 @@ class AgentLoopService:
         future is settled. It is the notification seam for background callers; it must not raise
         (a raising callback is logged and ignored).
         """
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         job = AgentLoopJob(job_id=f"agent-loop-{next(_SEQUENCE)}", label=str(label or ""),
                            session_key=str(session_key or ""), on_settle=on_settle)
@@ -318,7 +318,7 @@ class PluginAgentLoop:
 
         Keyword parameters are :func:`agent.agent_run.run`'s: ``context``, ``model``,
         ``provider``, ``api_mode``, ``toolsets``, ``system_message``, ``max_iterations``,
-        ``project_dir``, ``all_tools``, ``read_only``, ``history``, ``session_id``, ``layer``,
+        ``project_dir``, ``all_tools``, ``enable_tools``, ``history``, ``session_id``, ``layer``,
         ``history_session``, ``account_task``, ``skip_memory``, ``skip_context_files``,
         ``skip_background_review``, ``load_soul_identity``, ``extra_tools``, ``cache_scope``,
         ``tool_guardrails``, ``meta`` and ``record_history``.

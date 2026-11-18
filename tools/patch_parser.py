@@ -319,6 +319,7 @@ class ApplyResult(NamedTuple):
     lint: Optional[dict] = None
     write: Optional[tuple] = None
     notes: tuple[str, ...] = ()
+    semgrep: Optional[str] = None  # ADR-9 D8: Semgrep findings, separate from the LSP block
 
 
 def _fail(error: str) -> ApplyResult:
@@ -326,12 +327,14 @@ def _fail(error: str) -> ApplyResult:
 
 
 def _written(result: Any, diff: str, path: str, read_sha256: Optional[str]) -> ApplyResult:
-    """Outcome of a write: its error, else success with LSP/lint propagated from the WriteResult
-    and the ``(path, read_sha256, written_sha256)`` record of the bytes it replaced and wrote."""
+    """Outcome of a write: its error, else success with LSP/Semgrep/lint propagated from the
+    WriteResult and the ``(path, read_sha256, written_sha256)`` record of the bytes it replaced."""
     if result.error:
         return _fail(result.error)
     write = (path, read_sha256, getattr(result, "_content_sha256", None))
-    return ApplyResult(True, diff, getattr(result, "lsp_diagnostics", None), getattr(result, "lint", None), write)
+    return ApplyResult(True, diff, lsp=getattr(result, "lsp_diagnostics", None),
+                       lint=getattr(result, "lint", None),
+                       semgrep=getattr(result, "semgrep_diagnostics", None), write=write)
 
 
 def _unified_diff(path: str, old: str, new: Optional[str]) -> str:
@@ -356,14 +359,16 @@ def apply_v4a_operations(operations: list[PatchOperation], file_ops: Any) -> Pat
     files: dict[str, list[str]] = {"created": [], "deleted": [], "modified": []}
     all_diffs: list[str] = []
     notes: list[str] = []
-    # V4A bypasses write_file's WriteResult plumbing: LSP diagnostics and lint propagate per file.
+    # V4A bypasses write_file's WriteResult plumbing: LSP/Semgrep diagnostics and lint propagate
+    # per file.
     lsp_blocks: list[str] = []
+    semgrep_blocks: list[str] = []
     lint_results: dict[str, dict] = {}
     writes: list[tuple] = []
     for op in operations:
         handler, verb, bucket = _APPLY_DISPATCH[op.operation]
         try:
-            ok, payload, lsp, lint, write, op_notes = handler(op, file_ops)
+            ok, payload, lsp, lint, write, op_notes, semgrep = handler(op, file_ops)
         except Exception as e:
             ok, payload = None, str(e)
         if not ok:
@@ -378,16 +383,19 @@ def apply_v4a_operations(operations: list[PatchOperation], file_ops: Any) -> Pat
         notes.extend(op_notes)
         if lsp:
             lsp_blocks.append(lsp)
+        if semgrep:
+            semgrep_blocks.append(semgrep)
         if lint:
             lint_results[op.file_path] = lint
-    # Each LSP block carries its own <diagnostics file="..."> header; joining keeps attribution.
+    # Each block carries its own <diagnostics file="..."> header; joining keeps attribution.
     return PatchResult(
         success=not errors,
         error=("Apply phase failed (state may be inconsistent — run `git diff` to assess):\n"
                + _bullets(errors)) if errors else None,
         diff='\n'.join(all_diffs),
         files_modified=files["modified"], files_created=files["created"], files_deleted=files["deleted"],
-        lint=lint_results or None, lsp_diagnostics="\n\n".join(lsp_blocks) or None, _writes=writes,
+        lint=lint_results or None, lsp_diagnostics="\n\n".join(lsp_blocks) or None,
+        semgrep_diagnostics="\n\n".join(semgrep_blocks) or None, _writes=writes,
         note="\n".join(dict.fromkeys(notes)) or None)
 
 

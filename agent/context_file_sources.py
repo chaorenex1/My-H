@@ -1,15 +1,18 @@
 """Per-file manifest of the context/instruction files behind the ``/context`` "Rules" figure.
 
-Read-only: enumerates the same candidates ``build_context_files_prompt`` loads (through
-``agent.prompt_builder.discover_context_files`` — one discovery walk, so the listing cannot drift from the
-prompt) and reports, per file, its size and whether it was loaded, truncated over the context-file cap,
-shadowed by a higher-priority context type, blocked by the injection scan (or, for the user's own SOUL.md,
-flagged but loaded), empty/unreadable, or suppressed by the install-tree guard. Nothing here builds a prompt or touches the truncation-warning ContextVar, so it
+Read-only: enumerates the same candidates the live ``<project-context>`` block injects
+(``agent.prompt_builder.discover_context_files`` + ``agent.prompts.project_context.select_context_files``
+over ONE discovery walk, so the listing's loaded/repeated/shadowed decision cannot drift from the prompt)
+and reports, per file, its size and whether it was loaded, truncated over the context-file cap,
+shadowed by a higher-priority context type, dropped because a nearer file repeats it, blocked by the
+injection scan (or, for the user's own SOUL.md, flagged but loaded), empty/unreadable, or suppressed by
+the install-tree guard. Nothing here builds a prompt or touches the truncation-warning ContextVar, so it
 is free of cache impact.
 
 Approximations (the manifest re-derives, it does not re-render): the truncation check sizes the raw
 ``## label`` section, so a .hermes.md whose YAML frontmatter the builder strips can read a few chars larger
-here, and the AGENTS.md directory-chain cap (applied to the merged chain after per-file caps) is not modelled.
+here, and the merged AGENTS.md directory-chain / ``.cursorrules`` cap (applied after per-file caps) is not
+modelled.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ _STATUS_DISPLAY = {
     "flagged": ("⚠", "loaded — matched prompt-injection pattern(s); review the file"),
     "empty": ("○", "not loaded — empty file"),
     "unreadable": ("✗", "not loaded — could not be read"),
+    "repeated": ("○", "not loaded — content already contained in a nearer file"),
     "suppressed": ("○", "not loaded — cwd fell back to the Hermes install tree"),
 }
 
@@ -70,17 +74,26 @@ def list_context_file_sources(
     cwd_path = Path(cwd if cwd is not None else os.getcwd()).resolve()
     max_chars = _pb._get_context_file_max_chars(context_length)
     suppressed = _pb._project_context_suppressed(cwd, cwd_path, allow_install_tree_fallback)
+    discovered = list(_pb.discover_context_files(cwd_path))
+    # The prompt's own selection: containment dedupe drops a file that a nearer file repeats,
+    # and the listing must report that instead of claiming it loaded.
+    from agent.prompts.project_context import select_context_files
+
+    selected = set() if suppressed else {file.path for file in select_context_files(cwd_path, discovered)}
     sources: list[dict[str, Any]] = []
     winner: Optional[str] = None
-    for kind, label, path, content in _pb.discover_context_files(cwd_path):
+    for kind, label, path, content in discovered:
         if not content:
             status = _empty_status(path)
         elif suppressed:
             status = "suppressed"
         elif winner in (None, kind):
             winner = kind
-            # The builder caps the rendered ``## label`` section, not the raw file.
-            status = _loaded_status(content, len(f"## {label}\n\n{content}"), max_chars)
+            if path not in selected:
+                status = "repeated"
+            else:
+                # The builder caps the rendered ``## label`` section, not the raw file.
+                status = _loaded_status(content, len(f"## {label}\n\n{content}"), max_chars)
         else:
             status = "shadowed"
         sources.append(_entry(label, path, content, status))
@@ -97,14 +110,12 @@ def list_context_file_sources(
 
 
 def context_file_sources_for_agent(agent: Any) -> list[dict[str, Any]]:
-    """The manifest for a live agent, resolved exactly like ``agent.system_prompt._context_files_part``
+    """The manifest for a live agent, resolved exactly like ``agent.system_prompt._render_context``
     (session cwd, install-tree policy per platform, the agent's own profile home)."""
     if getattr(agent, "skip_context_files", False):
         return []
-    from agent.runtime_cwd import resolve_context_cwd
-    from agent.system_prompt import _agent_home
-    launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
-    cwd = resolve_context_cwd(include_session_override=not launch_artifact)
+    from agent.system_prompt import _agent_home, _context_cwd
+    cwd = _context_cwd(agent)
     ctx_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     return list_context_file_sources(
         cwd=str(cwd) if cwd is not None else None, context_length=ctx_len if isinstance(ctx_len, int) else None,

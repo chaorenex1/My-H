@@ -27,23 +27,64 @@ class TurnSegments:
 
     def __init__(self) -> None:
         self.turn_id = uuid.uuid4().hex
+        #: The assistant message this turn produces; one id for its start, deltas and completion.
+        self.message_id = self.turn_id
         self.segment = 0
         self.offset = 0
+        #: The open text block: its content_index (the segment it started in) and its chunks.
+        self.text_block_index: int | None = None
+        self._text_parts: list[str] = []
 
     def start(self) -> dict[str, Any]:
-        return {"turn_id": self.turn_id}
+        return {"turn_id": self.turn_id, "message_id": self.message_id}
 
     def delta(self, text: Any) -> dict[str, Any]:
-        stamp = {"turn_id": self.turn_id, "segment": self.segment, "offset": self.offset}
+        stamp = {
+            "turn_id": self.turn_id, "message_id": self.message_id,
+            "content_index": self.segment, "segment": self.segment, "offset": self.offset,
+        }
         if isinstance(text, str):
             self.offset += _utf16_len(text)
         return stamp
 
     def seal(self) -> dict[str, Any]:
-        stamp = {"turn_id": self.turn_id, "segment": self.segment}
+        stamp = {"turn_id": self.turn_id, "message_id": self.message_id, "segment": self.segment}
         self.segment += 1
         self.offset = 0
         return stamp
+
+    def rewind(self) -> dict[str, Any]:
+        """Drop the live draft and open a fresh segment for the retry (ADR-6 D13).
+
+        The discarded text block is not sealed: the client removes the live block, and the
+        retry's deltas carry a new ``segment`` so they cannot dedupe against the dead one.
+        """
+        self.text_block_index = None
+        self._text_parts = []
+        self.segment += 1
+        self.offset = 0
+        return {"message_id": self.message_id, "segment": self.segment}
+
+    def open_text_block(self) -> int | None:
+        """Start the segment's text block; returns its content_index, or None when already open."""
+        if self.text_block_index is not None:
+            return None
+        self.text_block_index = self.segment
+        self._text_parts = []
+        return self.text_block_index
+
+    def note_text(self, text: str) -> None:
+        if self.text_block_index is not None:
+            self._text_parts.append(text)
+
+    def close_text_block(self) -> tuple[int, str] | None:
+        """Close the open text block: ``(content_index, content)``, or None when none was open."""
+        if self.text_block_index is None:
+            return None
+        index, content = self.text_block_index, "".join(self._text_parts)
+        self.text_block_index = None
+        self._text_parts = []
+        return index, content
 
 
 #: Where a tui_gateway session holds its running prompt turn's cursor (set at turn start, dropped at
@@ -63,6 +104,11 @@ def stamp_reply_frame(segments: TurnSegments | None, event: str, payload: dict |
         return payload
     if event == "message.start":
         return {**(payload or {}), **segments.start()}
+    if event in ("message.block_start", "message.block_end") and payload is not None:
+        return {
+            **payload, "message_id": segments.message_id,
+            "content_index": payload.get("content_index", segments.segment),
+        }
     if event == "message.interim" and payload is not None:
         return {**payload, **segments.seal()}
     if event == "message.delta" and payload is not None and isinstance(payload.get("text"), str):

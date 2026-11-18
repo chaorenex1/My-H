@@ -1,141 +1,89 @@
-"""Tests for agent/system_prompt.py — context-file cwd wiring."""
+"""Tests for agent/system_prompt.py — the assembler facade and cache contract."""
 
-import json
-import os
-import time
-from datetime import datetime
+from __future__ import annotations
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from agent.system_prompt import build_system_prompt, build_system_prompt_parts
+from agent.conversation_loop import _restore_or_build_system_prompt
 
 
 def _make_agent(**overrides):
     base = dict(
         load_soul_identity=False,
         skip_context_files=False,
-        valid_tool_names=[],
-        _task_completion_guidance=False,
-        _tool_use_enforcement=False,
-        _environment_probe=False,
-        _kanban_worker_guidance="",
+        valid_tool_names=set(),
         _memory_store=None,
         _memory_manager=None,
+        _memory_enabled=True,
+        _user_profile_enabled=True,
+        _context_cwd_is_launch_artifact=False,
+        _session_db=None,
+        _bot_mode_protocol=False,
+        _session_title_hint="",
+        _platform_hint_overrides={},
+        _auto_load_skills_resolved=True,
+        _auto_load_skills_result=("", [], []),
+        _agent_definition_metadata=None,
+        enabled_toolsets=(),
+        is_subagent=False,
         model="",
         provider="",
         platform="",
         pass_session_id=False,
         session_id="",
-        # build_system_prompt drains pending truncation warnings and
-        # forwards each to this; a warning left in the ContextVar by an
-        # earlier test file (they share one thread's context under plain
-        # pytest) must not make this stub AttributeError.
-        _emit_status=lambda *_args, **_kwargs: None,
+        # build_system_prompt drains pending truncation warnings and forwards each to this.
+        _emit_diagnostic_status=lambda *_args, **_kwargs: None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
 
 
 def _captured_context_cwd(agent):
-    """The cwd build_system_prompt_parts hands to build_context_files_prompt."""
+    """The cwd ``build_system_prompt_parts`` hands to the project-context block."""
     captured = {}
 
-    def fake_context_files(
-        cwd=None, skip_soul=False, context_length=None,
-        allow_install_tree_fallback=False, home_override=None,
-    ):
-        captured["cwd"] = cwd
+    def fake_project_context(**kwargs):
+        captured["cwd"] = kwargs.get("cwd")
         return ""
 
     with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", side_effect=fake_context_files),
+        patch("agent.prompts.renderer.render_project_context", side_effect=fake_project_context),
     ):
         build_system_prompt_parts(agent)
     return captured["cwd"]
 
 
-@pytest.mark.parametrize("task_id, expected", [(None, False), ("t_worker", True)])
-def test_kanban_guidance_requires_worker_task_at_agent_init(monkeypatch, task_id, expected):
-    """A profile can expose kanban tools without making the session a worker."""
-    from agent.agent_init import _load_tools
-    from agent.prompt_builder import KANBAN_GUIDANCE
-    import model_tools
-
-    if task_id is None:
-        monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
-    else:
-        monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
-    monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
-    monkeypatch.setattr(
-        model_tools,
-        "get_tool_definitions",
-        lambda **_kwargs: [{"function": {"name": "kanban_show"}}],
-    )
-    agent = SimpleNamespace(quiet_mode=True)
-
-    _load_tools(agent, enabled_toolsets=["kanban"], disabled_toolsets=None)
-
-    assert (agent._kanban_worker_guidance == KANBAN_GUIDANCE) is expected
+def _stable_prompt(agent):
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
+    ):
+        return build_system_prompt_parts(agent)["stable"]
 
 
-@pytest.mark.parametrize("task_id, owner, expected", [
-    (None, True, False),        # interactive session with the kanban toolset enabled
-    ("t_worker", True, True),   # the dispatcher-owned worker
-    ("t_worker", False, False), # cron run / delegate child inheriting the worker's env
-])
-def test_kanban_guidance_fallback_requires_owned_worker_task(monkeypatch, task_id, owner, expected):
-    """Prompt fallback preserves the worker boundary when init was bypassed: tool access
-    is not identity, and an inherited HERMES_KANBAN_TASK is not ownership (#112486)."""
-    from contextlib import nullcontext
-
-    from agent.delegation_context import non_dispatcher_owned_context
-    from agent.prompt_builder import KANBAN_GUIDANCE
-    from agent.system_prompt import _tool_guidance_block
-
-    if task_id is None:
-        monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
-    else:
-        monkeypatch.setenv("HERMES_KANBAN_TASK", task_id)
-    agent = _make_agent(valid_tool_names={"kanban_show"})
-    delattr(agent, "_kanban_worker_guidance")
-
-    with nullcontext() if owner else non_dispatcher_owned_context():
-        assert (_tool_guidance_block(agent) == KANBAN_GUIDANCE) is expected
-
-
-@pytest.mark.parametrize("stores", [(True, True), (False, True), (True, False), (False, False)])
-@pytest.mark.parametrize("names", [
-    set(), {"memory"}, {"memory", "skill_view", "skills_list"},
-    {"memory", "skill_view", "skills_list", "skill_manage"},
-])
-def test_memory_guidance_respects_available_writes(stores, names, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    agent = _make_agent(valid_tool_names=names, skip_context_files=True,
-                        _memory_enabled=stores[0], _user_profile_enabled=stores[1])
-    prompt = build_system_prompt(agent)
-    enabled = "memory" in names and any(stores)
-    assert ("Memory is the narrow exception" in prompt) == enabled
-    assert ("(skill_manage)" in prompt) == (enabled and "skill_manage" in names)
-    if enabled and not stores[0]:
-        assert "never target='memory'" in prompt
+def _prompt_parts(agent):
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
+    ):
+        return build_system_prompt_parts(agent)
 
 
 class TestContextFileCwd:
     def test_none_when_terminal_cwd_unset(self, monkeypatch):
-        # Unset → None, so discovery falls back to the launch dir inside
-        # build_context_files_prompt (the local-CLI #19242 contract).
         monkeypatch.delenv("TERMINAL_CWD", raising=False)
         assert _captured_context_cwd(_make_agent()) is None
 
     def test_configured_dir_when_terminal_cwd_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-        assert _captured_context_cwd(_make_agent()) == tmp_path
+        captured_cwd = _captured_context_cwd(_make_agent())
+        assert Path(captured_cwd) == tmp_path
 
     def test_desktop_launch_artifact_does_not_load_bundled_agents_md(
         self, monkeypatch, tmp_path
@@ -146,18 +94,11 @@ class TestContextFileCwd:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "AGENTS.md").write_text("bundled contributor instructions")
 
-        agent = _make_agent(
-            platform="desktop",
-            _context_cwd_is_launch_artifact=True,
-        )
-        with (
-            patch("agent.prompt_builder.load_soul_md", return_value=""),
-            patch("agent.prompt_builder.build_environment_hints", return_value=""),
-            patch("agent.system_prompt.resolve_context_cwd", return_value=None),
-        ):
-            context = build_system_prompt_parts(agent)["context"]
+        agent = _make_agent(platform="desktop", _context_cwd_is_launch_artifact=True)
+        with patch("agent.system_prompt.resolve_context_cwd", return_value=None):
+            stable = _stable_prompt(agent)
 
-        assert "bundled contributor instructions" not in context
+        assert "bundled contributor instructions" not in stable
 
     def test_desktop_launch_artifact_uses_profile_configured_cwd(
         self, monkeypatch, tmp_path
@@ -176,115 +117,45 @@ class TestContextFileCwd:
 
         token = runtime_cwd.set_session_cwd(str(launch))
         try:
-            agent = _make_agent(
-                platform="desktop",
-                _context_cwd_is_launch_artifact=True,
-            )
-            with (
-                patch("agent.prompt_builder.load_soul_md", return_value=""),
-                patch("agent.prompt_builder.build_environment_hints", return_value=""),
-            ):
-                context = build_system_prompt_parts(agent)["context"]
+            agent = _make_agent(platform="desktop", _context_cwd_is_launch_artifact=True)
+            with patch("agent.prompt_builder.build_environment_hints", return_value=""):
+                stable = build_system_prompt_parts(agent)["stable"]
         finally:
             runtime_cwd.reset_session_cwd(token)
 
-        assert "operator workspace rules" in context
-        assert "bundled contributor instructions" not in context
+        assert "operator workspace rules" in stable
+        assert "bundled contributor instructions" not in stable
 
-    def test_desktop_explicit_install_tree_workspace_still_loads_agents_md(
-        self, monkeypatch, tmp_path
-    ):
-        from agent import runtime_cwd
 
-        monkeypatch.setattr(runtime_cwd, "_PACKAGE_ROOT", tmp_path.resolve())
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "AGENTS.md").write_text("chosen workspace instructions")
+def test_project_context_lists_the_sessions_additional_workspace_roots(tmp_path):
+    """`/add-dir` roots ride the ``<workspace-roots>`` slot of the project-context block."""
+    from agent import workspace_dirs
 
-        agent = _make_agent(
-            platform="desktop",
-            _context_cwd_is_launch_artifact=False,
-        )
+    extra = tmp_path / "shared"
+    extra.mkdir()
+
+    class _DB:
+        def get_session_workspace_roots(self, session_id):
+            return [str(extra)]
+
+    captured = {}
+
+    def fake_project_context(*, workspace_roots=(), **kwargs):
+        captured["roots"] = list(workspace_roots)
+        return ""
+
+    workspace_dirs.clear_cache("sess-roots")
+    agent = _make_agent(session_id="sess-roots", _session_db=_DB())
+    try:
         with (
-            patch("agent.prompt_builder.load_soul_md", return_value=""),
             patch("agent.prompt_builder.build_environment_hints", return_value=""),
-            patch("agent.system_prompt.resolve_context_cwd", return_value=tmp_path),
+            patch("agent.prompts.renderer.render_project_context", side_effect=fake_project_context),
         ):
-            context = build_system_prompt_parts(agent)["context"]
+            build_system_prompt_parts(agent)
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
 
-        assert "chosen workspace instructions" in context
-
-
-def _stable_prompt(agent):
-    with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
-        patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
-    ):
-        return build_system_prompt_parts(agent)["stable"]
-
-
-def _prompt_parts(agent):
-    with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
-        patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=""),
-    ):
-        return build_system_prompt_parts(agent)
-
-
-def _init_code_repo(path):
-    """A git repo that actually holds code — the coding posture requires a source
-    file (or manifest), not a bare ``.git`` (a prose/notes repo stays general)."""
-    import subprocess
-
-    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
-    (path / "main.py").write_text("print('hi')\n")
-
-
-class TestCodingContextBlock:
-    def test_injected_when_active(self, monkeypatch, tmp_path):
-        _init_code_repo(tmp_path)
-        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-        agent = _make_agent(valid_tool_names=["read_file"], platform="cli")
-        parts = _prompt_parts(agent)
-        assert "coding agent" in parts["stable"]
-        assert "Workspace" in parts["context"]
-
-    def test_absent_when_off(self, monkeypatch, tmp_path):
-        _init_code_repo(tmp_path)
-        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-        agent = _make_agent(valid_tool_names=["read_file"], platform="cli")
-        # Drive the real path: force the resolved mode to "off" via config.
-        with patch("agent.coding_context._coding_mode", return_value="off"):
-            stable = _stable_prompt(agent)
-        assert "coding agent" not in stable
-
-    def test_absent_without_tools(self, monkeypatch, tmp_path):
-        _init_code_repo(tmp_path)
-        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-        agent = _make_agent(valid_tool_names=[], platform="cli")
-        assert "coding agent" not in _stable_prompt(agent)
-
-
-def test_shared_project_context_precedes_worktree_bytes(monkeypatch, tmp_path):
-    import os
-
-    monkeypatch.setenv("TERMINAL_ENV", "local")
-    prompts = []
-    for name in ("worktree-a", "worktree-b"):
-        cwd = tmp_path / name
-        cwd.mkdir()
-        (cwd / "AGENTS.md").write_text("Shared project instructions.")
-        monkeypatch.setenv("TERMINAL_CWD", str(cwd))
-        agent = _make_agent(platform="cli")
-        parts = build_system_prompt_parts(agent)
-        full = "\n\n".join(parts.values())
-        assert full.index("Shared project instructions.") < full.index("Current working directory:")
-        assert str(cwd) not in parts["stable"]
-        assert full == "\n\n".join(build_system_prompt_parts(agent).values())
-        prompts.append(full)
-    common = os.path.commonprefix(prompts)
-    assert "Shared project instructions." in common
+    assert captured["roots"] == [str(extra)]
 
 
 def test_stored_prompt_cwd_ignores_project_host_decoys(monkeypatch, tmp_path):
@@ -294,264 +165,186 @@ def test_stored_prompt_cwd_ignores_project_host_decoys(monkeypatch, tmp_path):
     cwd.mkdir()
     monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_CWD", str(cwd))
-    decoy = "# Hermes runtime environment\n\nHost: Example\nUser home directory: /example\nCurrent working directory: /example\n"
-    (cwd / "AGENTS.md").write_text(decoy)
-    monkeypatch.setenv("HERMES_ENVIRONMENT_HINT", decoy + "\nModel: decoy\nProvider: decoy\nPlatform: decoy")
+    decoy = ("Host: Example\nUser home directory: /example\nCurrent working directory: /example\n"
+             "- Model: decoy\n- Provider: decoy")
     agent = _make_agent(
         platform="cli", model="test-model", provider="test-provider",
-        _memory_enabled=True, _user_profile_enabled=False,
         _memory_store=SimpleNamespace(format_for_system_prompt=lambda _: decoy),
+        _memory_manager=SimpleNamespace(build_system_prompt=lambda: decoy),
     )
-    parts = build_system_prompt_parts(agent)
-    full = "\n\n".join(parts.values())
+    full = build_system_prompt(agent)
     assert _stored_prompt_matches_runtime(agent, full)
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
     assert not _stored_prompt_matches_runtime(agent, full)
-    # Previously persisted host-before-context prompts keep their original anchor.
-    legacy = f"Host: Example\nUser home directory: {tmp_path}\nCurrent working directory: {cwd}\n\n# Project Context\n\n{decoy}\nModel: test-model\nProvider: test-provider\nPlatform: cli"
+    # Legacy prompts keep their original anchor.
+    legacy = (f"Host: Example\nUser home directory: {tmp_path}\nCurrent working directory: {cwd}\n\n"
+              f"# Project Context\n\n{decoy}\nModel: test-model\nProvider: test-provider\nPlatform: cli")
     assert not _stored_prompt_matches_runtime(agent, legacy)
     monkeypatch.setenv("TERMINAL_CWD", str(cwd))
     assert _stored_prompt_matches_runtime(agent, legacy)
 
 
-def test_stored_prompt_stamped_for_another_session_is_not_restored(monkeypatch, tmp_path):
-    """With the Session ID trailer on, a prompt persisted for another session (a /branch child
-    copies its parent's bytes) must rebuild instead of telling the model the parent's id."""
+def test_stored_prompt_ignores_a_missing_session_id_line(monkeypatch, tmp_path):
+    """Session ID left the prompt with the timestamp line (ADR-19 D5-A); its absence must
+    never force a rebuild, and a foreign id in project prose is not identity."""
     from agent.conversation_loop import _stored_prompt_matches_runtime
 
     monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
-    fields = dict(platform="cli", model="test-model", provider="test-provider", pass_session_id=True)
-    parent_prompt = build_system_prompt(_make_agent(session_id="parent-sid", **fields))
-    assert _stored_prompt_matches_runtime(_make_agent(session_id="parent-sid", **fields), parent_prompt)
-    assert not _stored_prompt_matches_runtime(_make_agent(session_id="child-sid", **fields), parent_prompt)
+    agent = _make_agent(session_id="parent-sid", pass_session_id=True)
+    prompt = build_system_prompt(agent).replace("parent-sid", "someone-else")
+    assert _stored_prompt_matches_runtime(agent, prompt)
 
 
-class TestExecutionGuidanceInjection:
-    """Injection gate for OPENAI_MODEL_EXECUTION_GUIDANCE via
-    ``agent.execution_guidance`` (auto/true/false/list).
-
-    Background — Composio agentic-eval traces (2026-08): the block was
-    historically fenced to gpt/codex/grok AND nested inside the
-    tool-use-enforcement branch, so DeepSeek/Kimi/Qwen-class models
-    received no execution discipline at all. The gate is now independent
-    of tool_use_enforcement and defaults to a broader family list.
-    """
-
-    def _prompt(self, model, execution_guidance="auto", *,
-                tool_use_enforcement=False,
-                valid_tool_names=("terminal", "read_file")):
-        agent = _make_agent(
-            valid_tool_names=list(valid_tool_names),
-            model=model,
-            _tool_use_enforcement=tool_use_enforcement,
-            _execution_guidance=execution_guidance,
-        )
-        return _stable_prompt(agent)
-
-    def test_deepseek_gets_guidance_by_default(self):
-        stable = self._prompt("deepseek/deepseek-v4-pro")
-        assert "Execution discipline" in stable
-        assert "<external_state_verification>" in stable
+def _root_prompt(*roots):
+    lines = "".join(f"- {root}\n" for root in roots)
+    return (
+        "SYSTEM BODY\n\n<project-context>\n<workspace-roots>\nAdditional workspace directories.\n"
+        f"{lines}</workspace-roots>\n</project-context>\n\n"
+        "<workstation>\n- Model: test-model\n- Provider: openrouter\n- Platform: cli\n</workstation>"
+    )
 
 
+def _root_agent(db):
+    from unittest.mock import MagicMock
+
+    agent = MagicMock()
+    agent._cached_system_prompt = None
+    agent.session_id = "sess-roots"
+    agent.model = "test-model"
+    agent.provider = "openrouter"
+    agent.platform = "cli"
+    agent.pass_session_id = False
+    agent._session_db = db
+    agent._use_prompt_caching = False
+    agent._persist_disabled = False
+    agent._bot_mode_protocol = False
+    agent._session_title_hint = ""
+    agent._surface_switch_note = ""
+    agent._gateway_turn_context_notes = ""
+    agent.enabled_toolsets = []
+    agent.disabled_toolsets = None
+    agent.tools = []
+    agent.valid_tool_names = set()
+    agent._build_system_prompt = MagicMock(return_value="NEW_PROMPT")
+    return agent
 
 
+class _RootDB:
+    def __init__(self, stored, roots):
+        self._stored, self.roots = stored, list(roots)
 
-    def test_independent_of_tool_use_enforcement(self):
-        # The gate must not require tool-use enforcement to be on.
-        stable = self._prompt("deepseek/deepseek-v4-flash",
-                              tool_use_enforcement=False)
-        assert "Execution discipline" in stable
-        assert "Tool-use enforcement" not in stable
+    def get_session(self, session_id):
+        return {"system_prompt": self._stored, "tool_names": None}
 
-    def test_claude_does_not_get_guidance_by_default(self):
-        assert "Execution discipline" not in self._prompt(
-            "anthropic/claude-opus-4.8")
+    def get_session_workspace_roots(self, session_id):
+        return list(self.roots)
 
-
-    def test_config_false_suppresses(self):
-        assert "Execution discipline" not in self._prompt(
-            "openai/gpt-5.5", execution_guidance=False)
-        assert "Execution discipline" not in self._prompt(
-            "deepseek/deepseek-v4-pro", execution_guidance="off")
-
-    def test_config_true_forces_for_any_model(self):
-        assert "Execution discipline" in self._prompt(
-            "anthropic/claude-opus-4.8", execution_guidance=True)
-
-    def test_config_list_matches_substring(self):
-        stable = self._prompt("mycorp/custom-llm-7b",
-                              execution_guidance=["custom-llm", "gpt"])
-        assert "Execution discipline" in stable
-
-    def test_config_list_non_match_suppresses(self):
-        assert "Execution discipline" not in self._prompt(
-            "openai/gpt-5.5", execution_guidance=["deepseek"])
-
-    def test_no_tools_no_guidance(self):
-        assert "Execution discipline" not in self._prompt(
-            "deepseek/deepseek-v4-pro", valid_tool_names=())
+    def update_system_prompt(self, *args, **kwargs):
+        return True
 
 
-class TestNamedProfileHintIntegration:
-    """The same defect through the REAL resolution chain (#72894).
+def test_a_new_workspace_root_is_not_lost_to_a_stored_prompt(tmp_path, monkeypatch):
+    """`/add-dir` writes the session row; the next turn must rebuild, not restore bytes that
+    omit the root (the stored-prompt predicate is what decides that)."""
+    from agent import workspace_dirs
 
-    ``TestNamedProfileHint`` mocks ``get_hermes_home``,
-    ``get_default_hermes_root`` and ``_resolve_active_profile_name``, so it
-    validates template rendering but not the relationship that causes the bug:
-    ``_resolve_active_profile_name`` returns a named profile *only* when the
-    active home is already ``<root>/profiles/<name>``, which is exactly why
-    appending that suffix again doubled it. Drive it with a real
-    ``HERMES_HOME`` and no resolver mocks.
-    """
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    extra = tmp_path / "shared"
+    extra.mkdir()
+    stored = _root_prompt(tmp_path / "old-root")
+    db = _RootDB(stored, [str(extra)])
+    agent = _root_agent(db)
+    workspace_dirs.clear_cache("sess-roots")
+    try:
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
+    agent._build_system_prompt.assert_called_once()
+    assert agent._cached_system_prompt == "NEW_PROMPT"
 
-    def test_real_hermes_home_under_profiles_renders_correct_paths(
-        self, tmp_path, monkeypatch
-    ):
+
+def test_a_stored_prompt_listing_the_same_roots_is_reused(tmp_path, monkeypatch):
+    """Adding no root must not break the prefix cache: same roots → the stored bytes are kept."""
+    from agent import workspace_dirs
+
+    (tmp_path / "home").mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    extra = tmp_path / "shared"
+    extra.mkdir()
+    stored = _root_prompt(extra)
+    agent = _root_agent(_RootDB(stored, [str(extra)]))
+    workspace_dirs.clear_cache("sess-roots")
+    try:
+        _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+    finally:
+        workspace_dirs.clear_cache("sess-roots")
+    agent._build_system_prompt.assert_not_called()
+    assert agent._cached_system_prompt == stored
+
+
+class TestNamedProfileIdentity:
+    def test_real_hermes_home_under_profiles_names_the_profile(self, tmp_path, monkeypatch):
         root = tmp_path / ".hermes"
         profile_home = root / "profiles" / "coder"
         profile_home.mkdir(parents=True)
-
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(profile_home))
         monkeypatch.delenv("TERMINAL_CWD", raising=False)
 
-        # Sanity-check the real chain before asserting on the prompt.
         from agent.file_safety import _resolve_active_profile_name
-        from hermes_constants import get_default_hermes_root, get_hermes_home
 
         assert _resolve_active_profile_name() == "coder"
-        assert get_hermes_home() == profile_home
-        assert get_default_hermes_root() == root
-
-        agent = _make_agent(valid_tool_names=["read_file"])
-        with patch("agent.coding_context._coding_mode", return_value="off"):
-            prompt = "\n\n".join(_prompt_parts(agent).values())
-
+        prompt = _stable_prompt(_make_agent())
         assert "Active Hermes profile: coder." in prompt
-        assert f"reads and writes {profile_home}/." in prompt
-        # The doubled form must not appear anywhere.
         assert f"{profile_home}/profiles/coder" not in prompt
-        # Default-profile pointers belong at the root, not inside the profile.
-        assert f"The default profile's data lives at {root}/skills/" in prompt
-        assert f"{profile_home}/skills/" not in prompt
 
-    def test_real_default_home_renders_default_branch(self, tmp_path, monkeypatch):
-        """HERMES_HOME at the root resolves to the default profile, unchanged."""
+    def test_default_home_names_the_default_profile(self, tmp_path, monkeypatch):
         root = tmp_path / ".hermes"
-        root.mkdir(parents=True)
-
+        root.mkdir()
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(root))
         monkeypatch.delenv("TERMINAL_CWD", raising=False)
 
-        from agent.file_safety import _resolve_active_profile_name
-
-        assert _resolve_active_profile_name() == "default"
-
-        agent = _make_agent(valid_tool_names=["read_file"])
-        with patch("agent.coding_context._coding_mode", return_value="off"):
-            prompt = "\n\n".join(_prompt_parts(agent).values())
-
-        assert "Active Hermes profile: default." in prompt
-        assert f"under {root}/profiles/<name>/." in prompt
+        assert "Active Hermes profile: default." in _stable_prompt(_make_agent())
 
 
-def test_stable_tier_is_identical_across_homes(tmp_path, monkeypatch):
-    """The profile line names the home path, so it must live outside the stable tier:
-    every home/profile on a host then shares one cacheable stable prefix."""
+def test_stable_body_is_identical_across_default_homes(tmp_path, monkeypatch):
+    """The identity block carries only the profile NAME, so two default homes share bytes."""
     monkeypatch.delenv("TERMINAL_CWD", raising=False)
-    tiers = []
+    bodies = []
     for name in ("a", "b"):
         root = tmp_path / name / ".hermes"
         root.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda root=root: root.parent)
         monkeypatch.setenv("HERMES_HOME", str(root))
-        with patch("agent.coding_context._coding_mode", return_value="off"):
-            parts = _prompt_parts(_make_agent(valid_tool_names=["read_file"]))
-        assert f"under {root}/profiles/<name>/." in parts["volatile"]
-        tiers.append(parts["stable"])
-    assert tiers[0] == tiers[1]
+        bodies.append(_stable_prompt(_make_agent()))
+    assert bodies[0] == bodies[1]
 
 
 def test_build_system_prompt_records_stable_prefix():
     agent = _make_agent()
     with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="context"),
+        patch("agent.prompts.renderer.render_project_context", return_value="PROJECT"),
     ):
-        prompt = build_system_prompt(agent)
+        prompt = build_system_prompt(agent, system_message="CALLER")
 
     assert prompt.startswith(agent._cached_system_prompt_static)
-    assert prompt[len(agent._cached_system_prompt_static):].startswith("\n\ncontext")
-
-
-def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
-    """Keep workspace guidance intact after the shared context."""
-    from agent import system_prompt
-
-    agent = _make_agent(
-        valid_tool_names=["read_file"],
-        _parallel_tool_call_guidance=False,
-    )
-    monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE", "HELP")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS", "HELP")
-    monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
-    monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
-
-    # Production renders this as str(get_hermes_home()) + "/profiles/<name>/",
-    # and str(Path("/hermes")) is platform-dependent (backslash on Windows) —
-    # build the expectation the same way instead of hardcoding "/hermes".
-    _home_str = str(Path("/hermes"))
-    expected_profile = (
-        "Active Hermes profile: default. Other profiles (if any) live "
-        f"under {_home_str}/profiles/<name>/. Each profile has its own skills/, "
-        "plugins/, cron/, and memories/ that affect a different session than "
-        "this one. Do not modify another profile's skills/plugins/cron/memories "
-        "unless the user explicitly directs you to."
-    )
-    expected = "\n\n".join((
-        "IDENTITY",
-        "HELP",
-        "STEER",
-        "CODING_STABLE",
-        "SYSTEM_MESSAGE",
-        "CONTEXT_FILES",
-        "WORKSPACE",
-        "Operator instructions (from config):\nOPERATOR",
-        expected_profile,
-        "Conversation started: Friday, January 02, 2026",
-    ))
-
-    with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
-        patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
-        patch(
-            "agent.coding_context.coding_system_prompt_parts",
-            return_value=(
-                ["CODING_STABLE"],
-                ["WORKSPACE"],
-                ["Operator instructions (from config):\nOPERATOR"],
-            ),
-        ),
-        patch("agent.file_safety._resolve_active_profile_name", return_value="default"),
-        patch("hermes_time.now", return_value=datetime(2026, 1, 2)),
-    ):
-        prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
-
-    assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+    assert agent._cached_system_prompt_static.endswith("PROJECT")
+    assert prompt[len(agent._cached_system_prompt_static):] == "\n\nCALLER"
 
 
 class TestTelegramRichMessagesHint:
-    """Verify that TELEGRAM_RICH_MESSAGES_HINT is conditionally included."""
+    def _stable(self, agent):
+        with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
+            mock_cfg.return_value = {
+                "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": True}}}}
+            }
+            return _stable_prompt(agent)
 
-    def test_base_hint_without_rich_messages(self, monkeypatch):
-        """When rich_messages is False, only the base hint is used."""
+    def test_base_hint_without_rich_messages(self):
         agent = _make_agent(platform="telegram")
         with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
             mock_cfg.return_value = {
@@ -560,399 +353,256 @@ class TestTelegramRichMessagesHint:
             stable = _stable_prompt(agent)
         assert "Standard Markdown auto-converts" in stable
         assert "lean into it" not in stable
-        assert "task lists" not in stable
 
-    def test_rich_hint_with_rich_messages_enabled(self, monkeypatch):
-        """When rich_messages is True in gateway.platforms, the extension
-        is appended (the canonical/primary location)."""
-        agent = _make_agent(platform="telegram")
-        with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {
-                "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": True}}}}
-            }
-            stable = _stable_prompt(agent)
+    def test_rich_hint_with_rich_messages_enabled(self):
+        stable = self._stable(_make_agent(platform="telegram"))
         assert "lean into it" in stable
         assert "task lists" in stable
-        assert "math/formulas" in stable
 
     def test_rich_hint_from_top_level_platforms(self):
-        """Top-level ``platforms.telegram.extra.rich_messages`` is merged
-        alongside gateway.platforms, so it works on its own."""
         agent = _make_agent(platform="telegram")
         with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {
-                "platforms": {"telegram": {"extra": {"rich_messages": True}}}
-            }
+            mock_cfg.return_value = {"platforms": {"telegram": {"extra": {"rich_messages": True}}}}
             stable = _stable_prompt(agent)
         assert "lean into it" in stable
-        assert "task lists" in stable
-
-    def test_top_level_overrides_gateway_rich_messages(self):
-        """Top-level ``platforms.telegram.extra`` wins over gateway.platforms
-        at the leaf, matching the adapter's merge precedence."""
-        agent = _make_agent(platform="telegram")
-        with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {
-                "gateway": {"platforms": {"telegram": {"extra": {"rich_messages": False}}}},
-                "platforms": {"telegram": {"extra": {"rich_messages": True}}},
-            }
-            stable = _stable_prompt(agent)
-        assert "lean into it" in stable
-
-    def test_gateway_extra_other_keys_does_not_block_top_level_rich_messages(self):
-        """When gateway.platforms.telegram.extra has other keys but not
-        rich_messages, the top-level rich_messages still activates."""
-        agent = _make_agent(platform="telegram")
-        with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {
-                "gateway": {"platforms": {"telegram": {"extra": {"disable_link_previews": True}}}},
-                "platforms": {"telegram": {"extra": {"rich_messages": True}}},
-            }
-            stable = _stable_prompt(agent)
-        assert "lean into it" in stable
-
-
 
     def test_gateway_rich_messages_integration_via_real_config(self, tmp_path, monkeypatch):
-        """End-to-end through the real config-resolution chain: a config.yaml
-        under HERMES_HOME with ``gateway.platforms.telegram.extra.rich_messages``
-        must activate the rich hint. ``load_config_readonly`` is NOT mocked here,
-        so this guards against the exact path-mismatch bug this PR fixes.
-        """
-        config_yaml = (
-            "gateway:\n"
-            "  platforms:\n"
-            "    telegram:\n"
-            "      extra:\n"
-            "        rich_messages: true\n"
-        )
         home = tmp_path / "hermes_home"
         home.mkdir()
-        (home / "config.yaml").write_text(config_yaml)
-
+        (home / "config.yaml").write_text(
+            "gateway:\n  platforms:\n    telegram:\n      extra:\n        rich_messages: true\n"
+        )
         monkeypatch.setenv("HERMES_HOME", str(home))
-        # Point config resolution at the temp file without mocking the loader:
-        # mirror the pattern used in test_config_env_expansion.py.
         from hermes_cli import config as _cfgmod
         monkeypatch.setattr(_cfgmod, "get_config_path", lambda: home / "config.yaml")
 
-        agent = _make_agent(platform="telegram")
-        stable = _stable_prompt(agent)
+        stable = _stable_prompt(_make_agent(platform="telegram"))
         assert "lean into it" in stable
-        assert "task lists" in stable
 
-    def test_malformed_extra_value_falls_back_to_base_hint(self, tmp_path, monkeypatch):
-        """A truthy non-mapping ``extra`` must not crash prompt construction —
-        it should fail open to the base hint (Tek's fail-open concern).
-        """
+    def test_malformed_extra_value_falls_back_to_base_hint(self):
         agent = _make_agent(platform="telegram")
         with patch("hermes_cli.config.load_config_readonly") as mock_cfg:
-            mock_cfg.return_value = {
-                "gateway": {"platforms": {"telegram": {"extra": "not-a-map"}}}
-            }
+            mock_cfg.return_value = {"gateway": {"platforms": {"telegram": {"extra": "not-a-map"}}}}
             stable = _stable_prompt(agent)
         assert "Standard Markdown auto-converts" in stable
-        assert "lean into it" not in stable
 
 
-_SKILLS = "SKILLS_INDEX_SENTINEL"
-_CONTEXT = "CONTEXT_FILES_SENTINEL"
+def _write_skill(skills_dir: Path, category: str, name: str, description: str) -> None:
+    path = skills_dir / category / name
+    path.mkdir(parents=True)
+    (path / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\nBody.\n", encoding="utf-8"
+    )
 
 
-def _build(builder, **overrides):
-    """Run a build_* function with skills + context files present."""
-    agent = _make_agent(valid_tool_names=["skills_list"], **overrides)
-    with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
-        patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value=_CONTEXT),
-        patch("model_tools.get_toolset_for_tool", return_value=None),
-        patch("agent.prompt_builder.build_skills_system_prompt", return_value=_SKILLS),
-    ):
-        return builder(agent)
+def test_skills_index_renders_inside_the_runtime_block(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    _write_skill(home / "skills", "workflow", "demo-skill", "Demo description.")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    agent = _make_agent(valid_tool_names={"skill_view", "skills_list"})
 
-
-class TestSkillsInVolatileBand:
-    """The skills index is runtime-mutable, so it lives in the volatile band,
-    not the stable band, to keep the cached stable prefix reusable when a
-    rebuild picks up a skill change."""
-
-    def test_skills_not_in_stable_band(self):
-        parts = _build(build_system_prompt_parts)
-        assert _SKILLS not in parts["stable"]
-
-    def test_skills_lead_the_volatile_band(self):
-        parts = _build(build_system_prompt_parts)
-        assert parts["volatile"].startswith(_SKILLS)
-
-    def test_full_order_is_stable_context_then_skills(self):
-        # build_system_prompt joins stable + context + volatile, so the skills
-        # index renders after the context files and before the per-turn
-        # memory/timestamp tail.
-        full = _build(build_system_prompt)
-        assert full.index(_CONTEXT) < full.index(_SKILLS)
-        assert full.index(_SKILLS) < full.index("Conversation started:")
+    parts = _prompt_parts(agent)
+    body = parts["stable"]
+    assert "<available_skills>" in body
+    assert "demo-skill: Demo description." in body
+    assert body.index("§ Runtime") < body.index("<available_skills>")
+    # One assembled body: the facade keeps no separate volatile band.
+    assert parts["volatile"] == ""
+    assert parts["context"] == ""
 
 
 class TestMemoryProviderSystemPromptGating:
-    """Issue #81014: the provider's ``system_prompt_block()`` must be gated
-    on the same ``memory_provider_tools_enabled`` check as tool injection.
-    Otherwise the agent receives instructions for tools that don't exist in
-    its tool surface.
-    """
-
     @staticmethod
-    def _make_fake_manager(prompt_block: str):
-        """Build a MemoryManager-like object exposing only what
-        ``build_system_prompt_parts`` touches."""
+    def _provider(block):
         from unittest.mock import MagicMock
-        mgr = MagicMock()
-        mgr.build_system_prompt.return_value = prompt_block
-        return mgr
+        manager = MagicMock()
+        manager.build_system_prompt.return_value = block
+        return manager
 
     def _agent(self, *, enabled_toolsets, disabled_toolsets, prompt_block):
         return _make_agent(
-            valid_tool_names=["skills_list"],
+            valid_tool_names={"skills_list"},
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
-            _memory_manager=self._make_fake_manager(prompt_block),
+            _memory_manager=self._provider(prompt_block),
+            _memory_store=SimpleNamespace(format_for_system_prompt=lambda _: ""),
         )
 
     def test_block_injected_when_memory_toolset_enabled(self):
         block = "PROVIDER_BLOCK_SENTINEL"
-        agent = self._agent(
-            enabled_toolsets=["memory"],
-            disabled_toolsets=None,
-            prompt_block=block,
-        )
-        full = _build(build_system_prompt, _memory_manager=agent._memory_manager,
-                      enabled_toolsets=["memory"], disabled_toolsets=None)
-        assert block in full
+        agent = self._agent(enabled_toolsets=["memory"], disabled_toolsets=None, prompt_block=block)
+        assert block in _stable_prompt(agent)
 
     def test_block_dropped_when_memory_toolset_disabled(self):
         block = "PROVIDER_BLOCK_SENTINEL"
-        agent = self._agent(
-            enabled_toolsets=None,
-            disabled_toolsets=["memory"],
-            prompt_block=block,
-        )
-        full = _build(build_system_prompt, _memory_manager=agent._memory_manager,
-                      enabled_toolsets=None, disabled_toolsets=["memory"])
-        assert block not in full
+        agent = self._agent(enabled_toolsets=None, disabled_toolsets=["memory"], prompt_block=block)
+        assert block not in _stable_prompt(agent)
 
     def test_block_dropped_when_memory_not_in_enabled_toolsets(self):
         block = "PROVIDER_BLOCK_SENTINEL"
-        agent = self._agent(
-            enabled_toolsets=["web_search"],
-            disabled_toolsets=None,
-            prompt_block=block,
+        agent = self._agent(enabled_toolsets=["web_search"], disabled_toolsets=None, prompt_block=block)
+        assert block not in _stable_prompt(agent)
+
+
+class TestMemoryBlockGating:
+    def test_memory_sections_come_from_files_under_the_agent_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        memories = home / "memories"
+        memories.mkdir(parents=True)
+        (memories / "USER.md").write_text("User prefers concise replies.", encoding="utf-8")
+        (memories / "MEMORY.md").write_text("Repo uses pytest.", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        agent = _make_agent(_memory_store=SimpleNamespace(format_for_system_prompt=lambda _: ""))
+        body = _stable_prompt(agent)
+        assert "User prefers concise replies." in body
+        assert "Repo uses pytest." in body
+
+    def test_memory_disabled_drops_the_whole_section(self, monkeypatch):
+        agent = _make_agent(_memory_store=None)
+        assert "§ Memories" not in _stable_prompt(agent)
+
+    def test_user_profile_flag_hides_only_the_user_tag(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        memories = home / "memories"
+        memories.mkdir(parents=True)
+        (memories / "USER.md").write_text("Profile fact.", encoding="utf-8")
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        agent = _make_agent(
+            _memory_store=SimpleNamespace(format_for_system_prompt=lambda _: ""),
+            _user_profile_enabled=False,
         )
-        full = _build(build_system_prompt, _memory_manager=agent._memory_manager,
-                      enabled_toolsets=["web_search"], disabled_toolsets=None)
-        assert block not in full
+        body = _stable_prompt(agent)
+        assert "§ Memories" in body
+        assert "Profile fact." not in body
 
 
-class TestSessionStartLike:
-    """'Conversation started:' must reference the session's real start, not
-    the date the system prompt was (re)built.  Builds happen on compression,
-    fresh-agent gateway turns, and resume paths; stamping build time made a
-    chat drift 'started' forward across midnight."""
-
-    def test_uses_session_id_embedded_timestamp(self):
-        from agent.system_prompt import _session_start_like
-
-        now = datetime(2026, 1, 2, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(
-            session_id="20260101_120000_abc123",
-            session_start=datetime(2026, 1, 1, 12, 0),
-        )
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-01-01"
-        assert start.tzinfo is not None
-
-    def test_prefers_lineage_root_over_rotated_segment_id(self):
-        """Compaction rotates session ids; each rotation embeds its own
-        mint time. The birth date must come from the lineage ROOT so a
-        Bot Mode forever-chat keeps knowing when it was first born
-        (#98426)."""
-        from agent.system_prompt import _session_start_like
-
-        class _Db:
-            def get_conversation_root(self, sid):
-                assert sid == "20260615_090000_seg9"
-                return "20260101_120000_root"
-
-        now = datetime(2026, 6, 16, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(
-            session_id="20260615_090000_seg9",
-            session_start=datetime(2026, 6, 15, 9, 0),
-            _session_db=_Db(),
-        )
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-01-01"
-
-    def test_lineage_walk_failure_falls_open_to_segment_id(self):
-        from agent.system_prompt import _session_start_like
-
-        class _Db:
-            def get_conversation_root(self, sid):
-                raise RuntimeError("db locked")
-
-        now = datetime(2026, 6, 16, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(
-            session_id="20260615_090000_seg9",
-            session_start=datetime(2026, 6, 15, 9, 0),
-            _session_db=_Db(),
-        )
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-06-15"
-
-    def test_nontimestamp_root_falls_through_to_segment_id(self):
-        """A root id without an embedded stamp (legacy/imported lineage)
-        must not break the ladder — rung 1 still applies."""
-        from agent.system_prompt import _session_start_like
-
-        class _Db:
-            def get_conversation_root(self, sid):
-                return "imported-legacy-root"
-
-        now = datetime(2026, 6, 16, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(
-            session_id="20260615_090000_seg9",
-            session_start=datetime(2026, 6, 15, 9, 0),
-            _session_db=_Db(),
-        )
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-06-15"
-
-    def test_falls_back_to_session_start(self):
-        from agent.system_prompt import _session_start_like
-
-        now = datetime(2026, 1, 2, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(session_id="", session_start=datetime(2026, 1, 1, 12, 0))
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-01-01"
-
-    def test_falls_back_to_now_when_no_start_known(self):
-        from agent.system_prompt import _session_start_like
-
-        now = datetime(2026, 1, 2, 9, 0, tzinfo=ZoneInfo("UTC"))
-        assert _session_start_like(SimpleNamespace(session_id=""), now) == now
-
-    def test_nonmatching_session_id_uses_session_start(self):
-        from agent.system_prompt import _session_start_like
-
-        now = datetime(2026, 1, 2, 9, 0, tzinfo=ZoneInfo("UTC"))
-        agent = SimpleNamespace(
-            session_id="plugin-section-test",
-            session_start=datetime(2026, 1, 1, 7, 30),
-        )
-        start = _session_start_like(agent, now)
-        assert start.strftime("%Y-%m-%d") == "2026-01-01"
-
-    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs a POSIX process timezone switch")
-    def test_stamp_from_other_dst_half_keeps_its_own_offset(self):
-        """A naive stamp takes the UTC offset in force at that stamp, not today's:
-        a January 00:30 London session read on a summer day rendered as January 14.
-        Both halves are checked so the test bites whichever season it runs in."""
-        from agent.system_prompt import _session_start_like
-
-        london = ZoneInfo("Europe/London")
-        original_tz = os.environ.get("TZ")
-        try:
-            os.environ["TZ"] = "Europe/London"
-            time.tzset()
-            for sid, now, expected in (
-                ("20260115_003000_jan", datetime(2026, 7, 16, 9, 0, tzinfo=london), "2026-01-15T00:30:00+00:00"),
-                ("20260715_003000_jul", datetime(2026, 12, 16, 9, 0, tzinfo=london), "2026-07-15T00:30:00+01:00"),
-            ):
-                start = _session_start_like(SimpleNamespace(session_id=sid), now)
-                assert start.isoformat() == expected
-        finally:
-            if original_tz is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = original_tz
-            time.tzset()
+def test_assembled_body_orders_role_runtime_tool_policy_and_the_tail():
+    agent = _make_agent(valid_tool_names={"read_file"}, platform="cli")
+    body = _stable_prompt(agent)
+    assert body.index("§ Role") < body.index("§ Runtime")
+    assert body.index("§ Runtime") < body.index("§ Workflow")
+    assert body.index("§ Delivery") < body.index("§ Critical")
 
 
-def test_conversation_start_uses_session_start_not_build_time(monkeypatch):
-    """Regression: a session that started on Jan 1 must still read
-    'Conversation started: Thursday, January 01' even when the prompt is
-    rebuilt on Jan 2 (the rebuild-drift bug)."""
-    from agent import system_prompt
-
+def test_autoload_skills_are_their_own_block_after_runtime(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "skills").mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(home))
     agent = _make_agent(
-        valid_tool_names=["read_file"],
-        _parallel_tool_call_guidance=False,
-        session_id="20260101_120000_abc123",
+        valid_tool_names={"skill_view"},
+        _auto_load_skills_result=("PINNED SKILL BODY", [], []),
     )
-    monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE", "HELP")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS", "HELP")
-    monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
-    monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
+    body = _stable_prompt(agent)
+    assert "PINNED SKILL BODY" in body
+    assert body.index("§ Runtime") < body.index("PINNED SKILL BODY") < body.index("§ Tool Policy")
+
+
+def test_bot_chat_capability_epoch_rides_outside_the_assembled_body(monkeypatch):
+    monkeypatch.setattr("tools.bot_mode_probe.get_bot_mode_protocol_section", lambda home: "protocol")
+    monkeypatch.setattr("tools.bot_mode_probe.epoch_line", lambda home: "Capability epoch: deadbeef")
+    agent = _make_agent(platform="desktop", _bot_mode_protocol=True, _session_title_hint="Bot Chat")
+    body = _stable_prompt(agent)
+    assert body.rstrip().endswith("Capability epoch: deadbeef")
+    assert "protocol" not in body
+
+
+def test_other_sessions_carry_no_capability_epoch():
+    agent = _make_agent(_bot_mode_protocol=True, _session_title_hint="Regular chat")
+    assert "Capability epoch:" not in _stable_prompt(agent)
+
+
+def test_project_context_is_the_final_assembled_block(monkeypatch, tmp_path):
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    agent = _make_agent(valid_tool_names={"read_file"}, platform="cli")
+    with patch("agent.prompt_builder.build_environment_hints", return_value=""):
+        body = build_system_prompt_parts(agent)["stable"]
+    tail = body[body.rindex("<project-context>"):]
+    assert tail.rstrip().endswith("</critical>")
+    assert tail.count("<project-context>") == 1
+
+
+def test_environment_probe_lands_in_workstation_notes(monkeypatch, tmp_path):
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    agent = _make_agent(valid_tool_names={"read_file"})
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("tools.env_probe.get_environment_probe_line", return_value="Python toolchain: 3.14"),
+    ):
+        body = build_system_prompt_parts(agent)["stable"]
+    assert "Python toolchain: 3.14" in body
 
     with (
-        patch("agent.prompt_builder.load_soul_md", return_value=""),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
-        patch("agent.prompt_builder.build_context_files_prompt", return_value="CONTEXT_FILES"),
-        patch(
-            "agent.coding_context.coding_system_prompt_parts",
-            return_value=([], [], []),
-        ),
-        patch("agent.file_safety._resolve_active_profile_name", return_value="default"),
-        # The system prompt is rebuilt a day LATER than the session start.
-        patch("hermes_time.now", return_value=datetime(2026, 1, 2, 9, 0)),
+        patch("tools.env_probe.get_environment_probe_line", return_value="Python toolchain: 3.14"),
     ):
-        prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
+        disabled = _make_agent(valid_tool_names={"read_file"}, _environment_probe=False)
+        assert "Python toolchain: 3.14" not in build_system_prompt_parts(disabled)["stable"]
 
-    assert "Conversation started: Thursday, January 01, 2026" in prompt
-    assert "Conversation started: Friday" not in prompt
 
-class TestConversationStartedTwoLine:
-    """Maintainer design on top of #96224's anchor: long-lived sessions get a
-    second 'as of the last context rebuild' line so a model in a forever-chat
-    (Bot Mode, messenger channels) is not led to believe it still lives on
-    the session's birth day. Same-day sessions keep the one-line shape."""
+def test_coding_instructions_ride_the_project_context_append_tail(monkeypatch, tmp_path):
+    from agent.coding_context import RuntimeMode, CODING_PROFILE
 
-    def _agent(self, session_id):
-        return _make_agent(
-            session_id=session_id, session_start=None,
-            _bot_chat_timeless_prompt=False,
-        )
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    mode = RuntimeMode(profile=CODING_PROFILE, surface="cli", cwd=tmp_path,
+                       instructions="PINNED CODING RULE")
+    monkeypatch.setattr("agent.coding_context.resolve_runtime_mode", lambda **_kwargs: mode)
+    captured = {}
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompts.renderer.render_project_context",
+              side_effect=lambda **kwargs: captured.update(kwargs) or ""),
+    ):
+        build_system_prompt_parts(_make_agent(valid_tool_names={"read_file"}))
+    assert captured["append_prompt"] == "PINNED CODING RULE"
 
-    def _volatile(self, agent):
-        import agent.system_prompt as sp
-        parts = sp.build_system_prompt_parts(agent)
-        return parts["volatile"]
 
-    def test_old_session_gets_rebuild_date_line(self):
-        vol = self._volatile(self._agent("20200110_090000_old"))
-        assert "Conversation started:" in vol
-        assert "as of the last context rebuild" in vol
+def test_disabled_skills_are_not_advertised(tmp_path, monkeypatch):
+    from agent.prompts import skills as skills_mod
 
-    def test_same_day_session_keeps_single_line(self):
-        from hermes_time import now as hermes_now
-        sid = hermes_now().strftime("%Y%m%d_%H%M%S_fresh")
-        vol = self._volatile(self._agent(sid))
-        assert "Conversation started:" in vol
-        assert "as of the last context rebuild" not in vol
+    home = tmp_path / "home"
+    _write_skill(home / "skills", "workflow", "demo-skill", "Demo description.")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(skills_mod, "get_disabled_skill_names", lambda _platform=None: {"demo-skill"})
+    agent = _make_agent(valid_tool_names={"skill_view"})
+    body = _stable_prompt(agent)
+    assert "demo-skill" not in body
 
-    def test_surrogate_zone_name_does_not_abort_prompt(self):
-        # Windows cp1252 zone name decoded under a UTF-8 LC_CTYPE; strftime("%Z") raised (#102910).
-        from datetime import timedelta, timezone
-        current = datetime(2026, 7, 14, 13, 5, tzinfo=timezone(timedelta(hours=2), "Paris, Madrid (heure d'\udce9t\udce9)"))
-        with patch("hermes_time.now", return_value=current):
-            vol = self._volatile(self._agent("20260714_090000_fresh"))
 
-        json.dumps(vol, ensure_ascii=False).encode("utf-8")
-        assert "Conversation started: Tuesday, July 14, 2026" in vol
-        assert "Paris, Madrid (heure d'" in vol and "UTC+02:00" in vol
+def test_build_stamps_prompt_schema_two_on_the_session_row():
+    calls = []
 
-    def test_timeless_bot_chat_unaffected(self):
-        agent = self._agent("20200110_090000_old")
-        agent._bot_chat_timeless_prompt = True
-        vol = self._volatile(agent)
-        assert "Conversation started:" not in vol
-        assert "as of the last context rebuild" not in vol
+    class _DB:
+        def patch_session_model_config(self, session_id, patch):
+            calls.append((session_id, patch))
+
+    agent = _make_agent(session_id="s1", _session_db=_DB())
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
+    ):
+        build_system_prompt(agent)
+    assert calls == [("s1", {"prompt_schema": 2})]
+
+
+def test_subagent_role_puts_the_shared_base_in_stable_and_the_role_block_in_context():
+    from agent.prompts.assembler import SubagentRole, assemble_subagent, assemble_main
+    from agent.system_prompt import _render_context as render_context
+
+    agent = _make_agent()
+    agent._subagent_role = SubagentRole(body="Review one diff.")
+    with (
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+        patch("agent.prompts.renderer.render_project_context", return_value=""),
+    ):
+        ctx = render_context(agent)
+        parts = build_system_prompt_parts(agent)
+        base = assemble_main(ctx)
+        full_expected = assemble_subagent(ctx, agent._subagent_role)
+
+    assert parts["stable"] == base
+    assert parts["context"].startswith("§ Subagent Role\nReview one diff.")
+    full = "\n\n".join((parts["stable"], parts["context"]))
+    assert full == full_expected
+    assert full.count("§ Role") == 1
+    assert full.count("§ Subagent Role") == 1
+    assert ctx.inputs.subagent is True

@@ -67,7 +67,7 @@ describe('libText catalog swap', () => {
     expect(formatSummary({ ...totals, descendantCount: 3 })).toContain('3 XX-agents')
 
     const [event] = toTranscriptMessages([
-      { role: 'user', text: 'x', display_kind: 'async_delegation_complete', display_metadata: { task_count: 3 } }
+      { role: 'custom', custom_type: 'async-delegation-complete', text: 'x', details: { task_count: 3 } }
     ])
 
     expect(event?.text).toBe('XX 3 done')

@@ -486,6 +486,15 @@ describe('resolveDurableRowId', () => {
     expect(await resolveDurableRowId(request, 'sid', 'real prompt', 0)).toBe(11)
   })
 
+  it('ignores synthetic user-role injections (synthetic_kind rows, ADR-10 P5)', async () => {
+    const request = gatewayWith([
+      { role: 'user', text: 'real prompt', row_id: 11 },
+      { role: 'user', text: 'real prompt', row_id: 12, synthetic_kind: 'auto_continue' }
+    ])
+
+    expect(await resolveDurableRowId(request, 'sid', 'real prompt', 0)).toBe(11)
+  })
+
   it('refuses ambiguous matches unless the target is provably the newest turn', async () => {
     const request = gatewayWith([
       { role: 'user', text: 'same text', row_id: 11 },

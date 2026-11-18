@@ -281,6 +281,22 @@ def test_guard_session_approval_short_circuits_prompt(gw_session):
             s.discard("execute_code")
 
 
+def test_guard_js_uses_js_heredoc(gw_session):
+    """A JS cell's approval payload is fenced as JS, not Python (D8 approval surface)."""
+    shown = _register_capturing_resolver(gw_session, "once")
+    res = A.check_execute_code_guard("console.log(1)", "local", language="js")
+    assert res["approved"] is True
+    assert shown["approval_data"]["command"].startswith("execute_code <<'JS'")
+    assert shown["approval_data"]["command"].rstrip().endswith("JS")
+
+
+def test_guard_python_keeps_py_heredoc(gw_session):
+    shown = _register_capturing_resolver(gw_session, "once")
+    res = A.check_execute_code_guard("print(1)", "local", language="py")
+    assert res["approved"] is True
+    assert shown["approval_data"]["command"].startswith("execute_code <<'PY'")
+
+
 def test_guard_gateway_missing_notify_is_pending(gw_session):
     # No notify callback registered → backward-compat pending approval.
     res = A.check_execute_code_guard("import os", "local")

@@ -88,9 +88,13 @@ The install also ships `hermes-agent`, a minimal runner that sends one query and
 | `hermes console` | Open the safe Hermes command console. |
 | `hermes pairing` | Approve or revoke messaging pairing codes. |
 | `hermes skills` | Browse, install, publish, audit, and configure skills. |
+| `hermes rules` | List, inspect, and validate rule files (Markdown + YAML frontmatter) across project, profile, and installation scopes. |
+| `hermes judgment` | Run typed side-channel judgments (`ask`), list routes/credentials/cache state offline (`doctor`), and inspect recent runs (`log`). |
 | `hermes bundles` | Group several skills under a single `/<name>` slash command. See [Skill Bundles](../user-guide/features/skills.md#skill-bundles). |
 | `hermes curator` | Background skill maintenance — status, run, pause, pin. See [Curator](../user-guide/features/curator.md). |
 | `hermes journey` (aliases `learning`, `memory-graph`) | Timeline of learned skills + memories over time. |
+| `hermes graph` | Local property graph: `status`, `schema`, `node`, `edge`, `query`, `neighbors`, `path`, `analyze`, `snapshot`, `backup`, `doctor`. Requires the optional `[graph]` extra. See [Graph](../user-guide/features/graph.md). |
+| `hermes code` | Code intelligence: `index`, `status`, `doctor`, `language`, `find`, `symbol`, `refs`, `callers`, `callees`, `path`, `types`, `impact`, `deps`, `cycles`, `tests`, `coverage`, `changes`, `diagnostics`, `context`, `prune`. Requires the optional `[graph]` and `[codegraph]` extras. See [Code intelligence](../user-guide/features/code-intelligence.md). |
 | `hermes memory` | Configure external memory provider. Plugin-specific subcommands (e.g. `hermes honcho`) register automatically when their provider is active. |
 | `hermes acp` | Run Hermes as an ACP server for editor integration. |
 | `hermes mcp` | Manage MCP server configurations. Running Hermes as an MCP server is the [mcp-serve plugin](../user-guide/features/mcp.md#running-hermes-as-an-mcp-server). |
@@ -720,6 +724,24 @@ hermes auth logout anthropic                             # Log out and clear sto
 ```
 
 Subcommands: `add`, `list`, `remove`, `reset`, `priority`, `refresh`, `status`, `logout`. Spotify login moved to the `spotify` catalog plugin's `hermes spotify login`. When called with no subcommand, launches the interactive management wizard.
+
+## `hermes judgment`
+
+Typed side-channel judgments over a JSON state. Native System One/Decisions routes are configured under `judgment.native`; without them, `mode: auto` uses `auxiliary.judge` (text, one-hot probabilities). Judgments never append transcript rows or change the system prompt.
+
+```bash
+hermes judgment ask --state-file state.json --questions-file questions.json
+hermes judgment ask --state "text" --questions-file questions.json --json
+hermes judgment ask --state-file state.json --questions-file box.json --image shot.png
+hermes judgment doctor
+hermes judgment log --limit 20 --purpose cli --json
+```
+
+- `ask` prints the answered candidates' `api/provider/model`, each answer, token usage, and cache hits. `--image` (repeatable) attaches images to the request and fixes the index `box` questions use. Exit codes: `0` success, `2` bad parameter/question file, `1` no candidate available.
+- `doctor` does not make network requests; it reports route/credential availability, each route's image/`box` support, the text and local (llama.cpp) routes, tool gating, image capability, and cache/audit state.
+- `log` reads `$HERMES_HOME/judgment/judgment.db`'s `runs` table. It reports counts, tokens, cost, latency, status, and error text only — never state, questions, or answer bodies.
+
+Question files infer the type from `criteria`: absent → yes/no; a list of at least two levels → score; only `true`/`false` keys → yes/no rubric; any other object → choice; an integer `image` index with no `criteria` → box. See [Judgment](../user-guide/configuration.md#judgment).
 
 ## `hermes usage`
 

@@ -746,7 +746,7 @@ class _Runtime:
         turn thread one session finishing stalls behind another session's long tool. One worker
         per runtime (= per profile); triggers landing while it runs coalesce into one more pass.
         """
-        from agent.memory_provider import spawn_context_thread
+        from hermes_threading import spawn_context_thread
 
         with self._flush_lock:
             self._flush_pending = True
@@ -1295,7 +1295,7 @@ class _Runtime:
         with self._send_lock:
             # One in-flight pass per process; the next hook fire picks up what is pending.
             if self._send_thread is None or not self._send_thread.is_alive():
-                from agent.memory_provider import spawn_context_thread
+                from hermes_threading import spawn_context_thread
 
                 # Context copy: the pass re-checks consent (still_consented) in THIS profile's scope.
                 self._send_thread = spawn_context_thread(

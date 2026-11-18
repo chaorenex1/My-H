@@ -535,8 +535,8 @@ The parent agent orchestrates its own running children with the same `delegate_t
 {"action": "stop",  "subagent_id": "sa-0-1a2b3c4d"}
 ```
 
-- **`list`** returns the conversation's live children: `subagent_id`, goal, status, `running_seconds`, `accepting_steer`, and the live transcript path. Ids also come back in the spawn dispatch response as `subagent_ids`.
-- **`steer`** queues a course correction into a running child without stopping it (delivery semantics below).
+- **`list`** returns the conversation's live children: `subagent_id`, goal, status, `running_seconds`, `accepting_steer`, and the live transcript path. Ids also come back in the spawn dispatch response as `subagent_ids`. A live `agent` run appears here under its `agent_session_id`.
+- **`steer`** queues a course correction into a running child without stopping it (delivery semantics below). The target may also be a named agent session's `agent_session_id`: a live run receives it at its next boundary, and a session with no live run stores it in its [inbox](agent-tool.md#steering-a-running-named-agent) instead of failing.
 - **`stop`** ends a child early at its next iteration boundary; the partial result still re-enters the conversation as a normal completion message.
 
 Control actions run synchronously in-turn (never backgrounded), are scoped to the caller's own spawn tree — a conversation can never see or control another session's children — and never consume the per-turn subagent spawn cap, so `stop` keeps working even after the cap is hit.

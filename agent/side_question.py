@@ -101,36 +101,20 @@ def _side_question_task_config() -> dict[str, Any]:
 
 def _answer_via_fork(parent_agent: Any, question: str, history: Optional[list[dict[str, Any]]],
                      on_fork: Optional[Callable[[Any], None]] = None) -> str:
-    """Answer via a cache-parity fork of ``parent_agent`` on the calling thread.
+    """Answer via an ephemeral cache-parity fork of ``parent_agent`` on the calling thread.
 
-    An empty thread-scoped tool whitelist denies every tool call at dispatch: ``tools[]``
-    stays byte-identical for cache parity, but the side question can never mutate anything.
-    ``on_fork(fork)`` publishes the built fork so an owner can interrupt it, and
-    ``on_fork(None)`` follows its teardown.
+    The shared fork skeleton (``agent/ephemeral_prompt.py``) denies every tool at dispatch while
+    ``tools[]`` stays byte-identical for cache parity; ``on_fork(fork)`` publishes the built fork
+    so an owner can interrupt it, and ``on_fork(None)`` follows its teardown.
     """
-    from agent.background_review import _digest_history, build_cache_parity_fork, release_cache_parity_fork
-    from hermes_cli.plugins import clear_thread_tool_whitelist, set_thread_tool_whitelist
+    from agent.ephemeral_prompt import run_ephemeral_prompt
 
-    fork, _rt, routed = build_cache_parity_fork(parent_agent, _side_question_task_config(),
-                                                max_iterations=_FORK_MAX_ITERATIONS, write_origin="side_question")
-    if on_fork is not None:
-        on_fork(fork)
-    try:
-        set_thread_tool_whitelist(set(), deny_msg_fmt=(
-            "Side question (/btw) denied tool call: {tool_name}. "
-            "Tools are disabled here — answer directly from the conversation context."))
-        snapshot = trim_snapshot_for_fork(history)
-        result = fork.run_conversation(user_message=f"{_FORK_PROMPT}\n\nSide question: {question}",
-                                       conversation_history=_digest_history(snapshot) if routed else snapshot)
-        answer = (result or {}).get("final_response", "") or ""
-        if not answer and result and result.get("error"):
-            raise RuntimeError(str(result["error"]))
-        return answer.strip()
-    finally:
-        clear_thread_tool_whitelist()
-        release_cache_parity_fork(parent_agent, fork, task=SIDE_QUESTION_TASK)
-        if on_fork is not None:
-            on_fork(None)
+    return run_ephemeral_prompt(
+        parent_agent, f"{_FORK_PROMPT}\n\nSide question: {question}", task=SIDE_QUESTION_TASK,
+        max_iterations=_FORK_MAX_ITERATIONS, history=history, on_fork=on_fork,
+        deny_message=("Side question (/btw) denied tool call: {tool_name}. "
+                      "Tools are disabled here — answer directly from the conversation context."),
+        task_cfg=_side_question_task_config())
 
 
 def _answer_via_oneshot(question: str, history: Optional[list[dict[str, Any]]], **run_kwargs: Any) -> str:
