@@ -2,6 +2,9 @@
 protocol (ADR-21 D4): the prompt is the registered ``title_system`` request template and replies
 are parsed by ``agent.title_parser`` (its own contract tests live in ``test_title_parser.py``)."""
 
+import logging
+from types import SimpleNamespace
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +21,33 @@ from agent.title_generator import (
     _title_language,
 )
 from hermes_state import SessionDB
+from hermes_yaml import safe_dump
+
+
+@pytest.fixture(autouse=True)
+def _title_plan_route(request, monkeypatch):
+    """The titler is plan-driven (ADR-21 D3): every case in this file names one candidate.
+
+    These are call-shape/guard tests, not route-selection tests (``tests/agent/test_title_router.py``
+    owns the ladder). Giving the module a pinned ``title_generation`` route keeps every existing
+    patched-``call_llm`` case exercising the request instead of short-circuiting on an empty plan.
+    A case that writes its own ``config.yaml`` opts out (``real_title_config``) so the real loader
+    and the real ``generator`` key are what run.
+    """
+    if request.node.get_closest_marker("real_title_config"):
+        return
+    config = {
+        "auxiliary": {
+            "title_generation": {
+                "enabled": True,
+                "model_upgrade_enabled": True,
+                "provider": "test",
+                "model": "title-model",
+                "timeout": 5,
+            }
+        }
+    }
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: config)
 
 
 class TestGenerateTitle:
@@ -308,7 +338,8 @@ class TestGenerateTitle:
             return resp
 
         captured: dict = {}
-        cfg = {"auxiliary": {"title_generation": {"language": "French"}}}
+        cfg = {"auxiliary": {"title_generation": {
+            "language": "French", "provider": "test", "model": "title-model"}}}
         with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
                 patch("agent.title_generator.call_llm", side_effect=capture):
             assert generate_title("question", "answer text") == "Prompt Provenance Check"
@@ -321,7 +352,9 @@ class TestGenerateTitle:
         assert captured["messages"][1]["role"] == "user"
 
         captured.clear()
-        with patch("hermes_cli.config.load_config_readonly", return_value={}), \
+        no_language = {"auxiliary": {"title_generation": {
+            "provider": "test", "model": "title-model"}}}
+        with patch("hermes_cli.config.load_config_readonly", return_value=no_language), \
                 patch("agent.title_generator.call_llm", side_effect=capture):
             generate_title("question", "answer text")
         assert captured["messages"][0]["content"] == render_request(
@@ -613,6 +646,7 @@ class TestMaybeAutoTitle:
         config = {
             "auxiliary": {"title_generation": {
                 "enabled": True, "model_upgrade_enabled": False,
+                "provider": "test", "model": "title-model",
             }}
         }
         with patch("hermes_cli.config.load_config_readonly", return_value=config), \
@@ -946,3 +980,127 @@ class TestModelSwitchMarkerNotTitleable:
         assert apply_instant_title(db, "sess-1", "南京市秦淮区 小时级天气预报") == (
             "南京市秦淮区 小时级天气预报"
         )
+
+
+# ── AS-1: the generator switch and the plan path ────────────────────────────────────────────
+
+
+class _PlanTransport:
+    """Stand-in for ``agent.title_router.call_llm``: records the route each candidate dials."""
+
+    def __init__(self, reply="<title>Investigate the flaky login test</title>"):
+        self.calls: list[dict] = []
+        self._reply = reply
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        content = self._reply
+        if isinstance(content, list):
+            content = content.pop(0)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+
+def _write_title_home(monkeypatch, tmp_path, auxiliary: dict):
+    """A real ``config.yaml`` under a temp HERMES_HOME: the real loader and gates run."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.yaml").write_text(
+        safe_dump({"auxiliary": auxiliary}), encoding="utf-8"
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    return home
+
+
+def _plan_auxiliary(**title_overrides) -> dict:
+    """The pinned title slot first, then a role candidate: the plan has a real second choice."""
+    title = {
+        "enabled": True,
+        "model_upgrade_enabled": True,
+        "provider": "openrouter",
+        "model": "title-model",
+        "timeout": 5,
+    }
+    title.update(title_overrides)
+    return {
+        "title_generation": title,
+        "tiny": {"provider": "openrouter", "model": "tiny-model", "timeout": 9},
+    }
+
+
+def _derived_session(tmp_path) -> SessionDB:
+    database = SessionDB(tmp_path / "state.db")
+    database.create_session(session_id="sess-1", source="cli")
+    assert database.set_auto_title("sess-1", "fix flaky login", source="derived")
+    return database
+
+
+@pytest.mark.real_title_config
+def test_as1_generator_plan_spends_only_the_first_successful_candidate(tmp_path, monkeypatch, caplog):
+    _write_title_home(monkeypatch, tmp_path, _plan_auxiliary(generator="plan"))
+    transport = _PlanTransport()
+    monkeypatch.setattr("agent.title_generator.call_llm", transport)
+    caplog.set_level(logging.DEBUG, logger="agent.title_generator")
+    database = _derived_session(tmp_path)
+
+    maybe_auto_title(database, "sess-1", "fix the flaky login test", [])
+    wait_for_title_upgrades(10)
+
+    assert database.get_session_title("sess-1") == "Investigate the flaky login test"
+    assert database.get_session_title_source("sess-1") == "llm"
+    # One call: the first candidate succeeded, so the role candidate is never dialled.
+    assert [(call["task"], call["provider"], call["model"]) for call in transport.calls] == [
+        ("title_generation", "openrouter", "title-model")
+    ]
+    # generator=plan is the implemented path: no degradation marker.
+    assert "normalised to the plan path" not in caplog.text
+    database.close()
+
+
+@pytest.mark.real_title_config
+def test_as1_unset_generator_normalises_to_plan_with_a_debug_marker(tmp_path, monkeypatch, caplog):
+    _write_title_home(monkeypatch, tmp_path, _plan_auxiliary())
+    transport = _PlanTransport()
+    monkeypatch.setattr("agent.title_generator.call_llm", transport)
+    caplog.set_level(logging.DEBUG, logger="agent.title_generator")
+    database = _derived_session(tmp_path)
+
+    maybe_auto_title(database, "sess-1", "fix the flaky login test", [])
+    wait_for_title_upgrades(10)
+
+    assert database.get_session_title("sess-1") == "Investigate the flaky login test"
+    assert database.get_session_title_source("sess-1") == "llm"
+    assert [call["task"] for call in transport.calls] == ["title_generation"]
+    assert "generator=fork normalised to the plan path" in caplog.text
+    database.close()
+
+
+@pytest.mark.real_title_config
+def test_as1_explicit_fork_normalises_to_the_same_plan_path(tmp_path, monkeypatch, caplog):
+    _write_title_home(monkeypatch, tmp_path, _plan_auxiliary(generator="fork"))
+    transport = _PlanTransport()
+    monkeypatch.setattr("agent.title_generator.call_llm", transport)
+    caplog.set_level(logging.DEBUG, logger="agent.title_generator")
+    database = _derived_session(tmp_path)
+
+    maybe_auto_title(database, "sess-1", "fix the flaky login test", [])
+    wait_for_title_upgrades(10)
+
+    assert database.get_session_title("sess-1") == "Investigate the flaky login test"
+    assert database.get_session_title_source("sess-1") == "llm"
+    assert [call["task"] for call in transport.calls] == ["title_generation"]
+    # The same marker as the unset case: both normalise, neither skips naming silently.
+    assert "generator=fork normalised to the plan path" in caplog.text
+    database.close()
+
+
+@pytest.mark.real_title_config
+def test_as1_the_generator_switch_never_loses_the_explicit_naming_path(tmp_path, monkeypatch):
+    """``retitle-skills`` style calls keep asking the model with the upgrade toggle off."""
+    _write_title_home(
+        monkeypatch, tmp_path, _plan_auxiliary(generator="plan", model_upgrade_enabled=False)
+    )
+    transport = _PlanTransport("<title>Repair startup memory routing</title>")
+    monkeypatch.setattr("agent.title_generator.call_llm", transport)
+
+    assert generate_title("repair startup memory routing") == "Repair startup memory routing"
+    assert len(transport.calls) == 1

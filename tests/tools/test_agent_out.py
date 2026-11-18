@@ -433,3 +433,32 @@ def test_inbox_roster_is_scoped_to_the_spawn_tree(monkeypatch):
         {"agent_session_id": "self"})
 
     assert [peer["agent_session_id"] for peer in payload["peers"]] == ["sibling"]
+
+
+# ── AS-6: the manifest owns the artifact identity ────────────────────────────────────────────
+
+
+def test_as6_identity_for_row_prefers_the_manifest_and_survives_a_label_change():
+    run = _run(agent_name="researcher", background=False,
+               user_prompts="## Target\nInvestigate pool exhaustion")
+    agent_session_id = run["agent_session_id"]
+    row = _row(agent_session_id)
+    manifest = row["artifact_manifest"]
+
+    identity = run_artifacts.identity_for_row(row)
+
+    assert identity["report_path"] == manifest["report_path"]
+    assert identity["ast_summary_path"] == manifest["ast_summary_path"]
+    assert identity["structured_output_path"] == manifest["structured_output_path"]
+    assert identity["tool_artifacts_dir"] == manifest["tool_artifacts_dir"]
+    assert identity["bundle_dir"] == manifest["bundle_dir"]
+
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        assert db.set_agent_session_title(agent_session_id, "Investigate pool exhaustion") is True
+    finally:
+        release_or_close(db)
+
+    assert run_artifacts.identity_for_row(_row(agent_session_id)) == identity

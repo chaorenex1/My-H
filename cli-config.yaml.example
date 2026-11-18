@@ -991,6 +991,7 @@ advisor:
 #   title_generation:
 #     enabled: true          # set false to disable auto-title generation
 #     model_upgrade_enabled: true  # set false to keep the instant derived title and skip the model call
+#     generator: fork        # plan | fork; fork is normalised to the plan path until it lands
 #     provider: "auto"
 #     model: ""
 #     timeout: 30

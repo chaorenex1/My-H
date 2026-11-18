@@ -34,7 +34,7 @@ rubric:
     weight: low
     threshold: 0.85
 max_iterations: 8
-status: active
+status: done
 ---
 
 # Sprint 3 Contract — title-consumers-and-addressing
@@ -249,7 +249,7 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1 (verdict pass; Fn 1.0 / Craft 0.9 / Consistency 0.92 / Documentation 0.9)
+- **Last commit**: (recorded in the outcome commit)
+- **Aborted reason** (if any): none
+- **PR**: (recorded after Step 8)

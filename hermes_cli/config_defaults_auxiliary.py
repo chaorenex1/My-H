@@ -92,6 +92,9 @@ def auxiliary_defaults() -> dict:
         "title_generation": {
             "enabled": True,
             "model_upgrade_enabled": True,  # False = keep the instant derived title, never call a model
+            # plan | fork (ADR-21 D6). fork runs the titling as a side turn and is the default;
+            # until the fork path lands, an unset key and explicit fork both normalise to plan.
+            "generator": "fork",
             # session_search no longer uses an aux LLM (#27590); leftover auxiliary.session_search is ignored.
             "provider": "auto",
             "model": "",

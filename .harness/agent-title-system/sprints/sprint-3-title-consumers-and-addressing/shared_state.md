@@ -27,7 +27,7 @@
   Format: `sprint-<N>-contract.md @ <SHA>`
 -->
 
-- _awaiting negotiation completion_
+- sprint-3 contract frozen @ 91aeb160fd94bbe0f6c138a96c681e690d529965
 
 ## Negotiation
 <!--
@@ -46,7 +46,7 @@
   Detailed per-iteration notes go to feedback/generator-<iter>.md.
 -->
 
-- _no iterations yet_
+- [2026-11-18T10:55:00Z] iter=1 agent=generator action=four consumers + agent_session.title migration + label-first addressing + drift gate fix; 7 evidence files green — see feedback/generator-1.md
 
 ## Evaluation
 <!--
@@ -56,7 +56,7 @@
   feedback/evaluator-<iter>.md and evidence/.
 -->
 
-- _no evaluations yet_
+- [2026-11-18T12:05:00Z] iter=1 agent=evaluator verdict=pass axes=functionality 1.0 / craft 0.9 / consistency 0.92 / documentation 0.9 evidence=evidence/iter-1/ (82/82 independent probe; 324 tests green) — see feedback/evaluator-1.md
 
 ## Decisions
 <!--

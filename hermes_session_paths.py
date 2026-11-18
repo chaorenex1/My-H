@@ -55,6 +55,9 @@ ADVISOR_STEM = "_advisor"
 RESERVED_SESSIONS_ENTRIES = frozenset({"sessions.json", ".mirror"})
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_-]")
+_ASCII_ALNUM_RE = re.compile(r"[A-Za-z0-9]")
+_TOPIC_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(\s|$)")
+_TOPIC_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 _ENCODED_SEPARATORS_RE = re.compile(r"[/\\:]")
 _TIMESTAMP_SEPARATOR_RE = re.compile(r"[/\\:.]")
 
@@ -156,6 +159,68 @@ def tool_component(tool_name: object) -> str:
 def topic_component(subject: object) -> str:
     """Bundle artifact stem for a stored agent subject (ADR-16 D4)."""
     return sanitize_component(subject, "agent")
+
+
+def _strip_html_comments(line: str, in_comment: bool) -> tuple[str, bool]:
+    """Drop HTML comments from one line; ``in_comment`` carries a block comment across lines."""
+    kept: list[str] = []
+    index = 0
+    while True:
+        if in_comment:
+            end = line.find("-->", index)
+            if end == -1:
+                return "".join(kept), True
+            index, in_comment = end + 3, False
+            continue
+        start = line.find("<!--", index)
+        if start == -1:
+            kept.append(line[index:])
+            return "".join(kept), False
+        kept.append(line[index:start])
+        index, in_comment = start + 4, True
+
+
+def _topic_first_line(assignment: object) -> str:
+    """First meaningful non-structure line: headings, fenced blocks and HTML comments are skipped.
+
+    A subagent assignment is a rendered task document (``# Target`` / ``# Change`` fences), so the
+    first raw line is structure, not the work. Comments are removed even mid-line (a ``<!-- note -->``
+    before the prose must not hide it) and a fence carries its whole body away.
+    """
+    in_fence = in_comment = False
+    for raw in str(assignment or "").splitlines():
+        line, in_comment = _strip_html_comments(raw, in_comment)
+        if in_comment and not line.strip():
+            continue
+        if _TOPIC_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        text = " ".join(line.split())
+        if not text or _TOPIC_HEADING_RE.match(text):
+            continue
+        return text
+    return ""
+
+
+def derive_topic(assignment: object, *, fallback: object = "") -> str:
+    """Path-safe artifact stem for a run, derived from its assignment (ADR-21 D8).
+
+    Composes the existing naming pipeline instead of re-deriving it: ``derive_title`` truncates at
+    its 48-char word boundary, ``sanitize_component`` maps to ``[A-Za-z0-9_-]`` and caps at 64.
+    A title with no ASCII alphanumeric left after sanitising (CJK/emoji prose becomes a run of
+    ``_``) is not discarded: it becomes ``topic-<8 hex of the title>``, stable for the same input.
+    *fallback* (the run's agent name) supplies the stem when the assignment is empty.
+    """
+    from agent.title_generator import derive_title
+
+    text = _topic_first_line(assignment) or _topic_first_line(fallback)
+    title = derive_title(text) if text else None
+    stem = sanitize_component(title, "")
+    if _ASCII_ALNUM_RE.search(stem):
+        return stem
+    return f"topic-{_digest8(title or text or 'agent')}"
 
 
 def file_safe_timestamp(started_at: object) -> str:

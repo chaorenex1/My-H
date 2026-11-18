@@ -956,6 +956,17 @@ class SessionSchemaMixin:
             )
         except sqlite3.OperationalError as exc:
             logger.debug("idx_agent_session_short_name create skipped: %s", exc)
+        # ``agent_session.title`` is a reconciler-added column too (ADR-21 D7), and the label is
+        # deliberately NOT unique: a historical store may already hold duplicate labels and the
+        # resolver must report them as ambiguous candidates rather than fail an index build.
+        # Lookups are exact ``title=?`` (``get_agent_sessions_by_title``), never a prefix scan.
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_session_title "
+                "ON agent_session(title)"
+            )
+        except sqlite3.OperationalError as exc:
+            logger.debug("idx_agent_session_title create skipped: %s", exc)
         self._execute_ddl_skipping_settled_triggers(cursor, DEFERRED_INDEX_SQL)  # same ordering constraint (``active``)
 
         # Heal NULL ``active`` rows on every startup: older reconciler builds added ``active``

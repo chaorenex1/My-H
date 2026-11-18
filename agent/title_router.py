@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from agent.auxiliary_client import (
     _DEFAULT_AUX_TIMEOUT,
@@ -169,6 +169,8 @@ class _Plan:
 
 def title_model_plan(
     main_runtime: Optional[dict[str, Any]] = None,
+    *,
+    require_model_upgrade: bool = True,
 ) -> list[TitleCandidate]:
     """Build the ordered, deduplicated title candidates for the live session (ADR-21 D3).
 
@@ -184,15 +186,19 @@ def title_model_plan(
     task, so a role pinned to the session's own route absorbs the trailing current-model candidate.
     A chain entry inherits the task and timeout of the candidate that expanded it.
 
-    Gating is evaluated per call (never at import): ``auxiliary.title_generation.enabled`` and
-    ``auxiliary.title_generation.model_upgrade_enabled`` both feed the plan, and either one off
+    Gating is evaluated per call (never at import): ``auxiliary.title_generation.enabled`` always
+    feeds the plan, and ``model_upgrade_enabled`` does too unless the caller is an explicit naming
+    request (``require_model_upgrade=False``, e.g. ``generate_title`` from ``hermes sessions
+    retitle-skills``, which is not the automatic upgrade the toggle silences). Either gate off
     yields ``[]``. An empty plan also covers "nothing usable to call": roles gate on ``provider``
     alone (``auto``/empty means unconfigured, even with a model filled in) and the current-model
     candidate needs both a provider and a model from ``main_runtime``. ``[]`` means zero calls.
     """
     from agent.title_generator import _auto_title_enabled, _model_title_upgrade_enabled
 
-    if not _auto_title_enabled() or not _model_title_upgrade_enabled():
+    if not _auto_title_enabled():
+        return []
+    if require_model_upgrade and not _model_title_upgrade_enabled():
         return []
     title_config = _get_auxiliary_task_config(_TITLE_TASK)
     title_timeout = _task_timeout(title_config)
@@ -219,7 +225,11 @@ def title_model_plan(
 
 
 def run_title_plan(
-    plan: Iterable[TitleCandidate], messages: list[dict[str, Any]]
+    plan: Iterable[TitleCandidate],
+    messages: list[dict[str, Any]],
+    *,
+    call: Optional[Callable[..., Any]] = None,
+    request_options: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
     """Run ``plan`` serially, one ``call_llm`` per candidate, and return the first accepted title.
 
@@ -229,17 +239,28 @@ def run_title_plan(
     raises, answers empty, or answers unusably falls through to the next one; a terminal decline
     (``<title/>`` or ``<title>none</title>``, parsed by ``agent.title_parser``) ends the attempt
     with ``None``. No retries, no concurrency, no best-of — ``None`` leaves stage 0 in place.
+
+    ``call`` is the transport seam (defaults to this module's ``call_llm``, so a test can stand in
+    one recorder) and ``request_options`` are the caller's own request settings — the session
+    titler's token ceiling, omitted temperature and disabled reasoning ride there rather than
+    being re-stated per candidate.
     """
+    invoke = call or call_llm
+    options = dict(request_options or {})
+    # A caller-supplied deadline (``generate_title(timeout=…)``) wins over the candidate's
+    # ``auxiliary.<task>.timeout``: it is the caller's budget, not a route property.
+    timeout_override = options.pop("timeout", None)
     for candidate in plan or ():
         try:
-            response = call_llm(
+            response = invoke(
                 task=candidate.task,
                 provider=candidate.provider,
                 model=candidate.model,
                 base_url=candidate.base_url,
                 messages=messages,
-                timeout=candidate.timeout,
+                timeout=timeout_override or candidate.timeout,
                 fallback=False,
+                **options,
             )
             parsed = parse_title_output(response.choices[0].message.content or "")
         except Exception as exc:  # health: allow BLE001 -- failure advances plan

@@ -224,3 +224,77 @@ class TestCaseCollision:
         )
         digest = hashlib.sha256(b"ABCDEF").hexdigest()[:8]
         assert allocated.name == paths.bundle_name(started, "ABCDEF") + "-" + digest
+
+
+class TestDeriveTopic:
+    """AS-5 (ADR-21 D8): the assignment -> artifact-stem pipeline.
+
+    ``derive_topic`` is a composition, not a second naming pipeline: it picks the first meaningful
+    line (skipping the task document's structure), hands it to ``derive_title`` for the 48-char
+    truncation, then sanitises into the shared component width. A stem with no ASCII alphanumeric
+    left keeps a stable digest address instead of an unreadable ``____`` component.
+    """
+
+    def test_leading_structure_is_skipped(self):
+        assignment = (
+            "## Target\n"
+            "```python\n"
+            "print('not the topic')\n"
+            "```\n"
+            "<!-- reviewer note -->\n"
+            "Investigate pool exhaustion\n"
+            "## Acceptance\n"
+            "It is fixed.\n"
+        )
+
+        assert paths.derive_topic(assignment) == "Investigate_pool_exhaustion"
+
+    def test_an_inline_comment_before_the_prose_does_not_hide_it(self):
+        assert paths.derive_topic("<!-- note --> Fix the flaky login test") \
+            == "Fix_the_flaky_login_test"
+
+    def test_the_derived_line_is_truncated_at_the_title_boundary(self):
+        assignment = "x" * 120
+
+        topic = paths.derive_topic(assignment)
+
+        # derive_title keeps 48 characters plus its ellipsis, which sanitising maps to '_'.
+        assert topic.rstrip("_") == "x" * 48
+        assert len(topic) == 49
+        assert paths.sanitize_component(topic, "agent") == topic
+
+    def test_the_sanitized_component_fits_the_shared_width(self):
+        assignment = "a b c d e f g h i j k l m n o p q r s t u v w x y z " * 3
+
+        topic = paths.derive_topic(assignment)
+
+        assert len(topic) <= paths.NAME_COMPONENT_CHARS
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", topic)
+        assert paths.sanitize_component(topic, "agent") == topic
+
+    def test_a_stem_without_ascii_alphanumerics_gets_a_stable_digest(self):
+        assignment = "修复登录按钮的并发问题"
+
+        topic = paths.derive_topic(assignment)
+
+        assert re.fullmatch(r"topic-[0-9a-f]{8}", topic)
+        assert topic == paths.derive_topic(assignment)  # same input, same address
+        assert topic != paths.derive_topic("修复会话标题的迁移问题")
+        digest = hashlib.sha256(assignment.encode("utf-8")).hexdigest()[:8]
+        assert topic == f"topic-{digest}"
+
+    def test_allocation_adds_an_eight_hex_suffix_for_a_collision(self, tmp_path):
+        topic = paths.derive_topic("Investigate the connection pool exhaustion")
+        first = paths.allocate_topic(tmp_path, topic, discriminator="run-1")
+        (tmp_path / f"{first}.jsonl").write_text("", encoding="utf-8")
+        second = paths.allocate_topic(tmp_path, topic, discriminator="run-2")
+
+        assert first == topic
+        assert re.fullmatch(rf"{re.escape(topic)}-[0-9a-f]{{8}}", second)
+        assert second != first
+
+    def test_an_empty_assignment_falls_back_to_the_run_name(self):
+        assert paths.derive_topic("   ", fallback="researcher") == "researcher"
+        assert paths.derive_topic("", fallback="code Reviewer") == "code_Reviewer"
+        assert paths.derive_topic("## Only structure\n```\nfenced\n```", fallback="researcher") \
+            == "researcher"

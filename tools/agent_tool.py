@@ -607,6 +607,10 @@ class _Run:
     tool_dir: Optional[Path] = None
     #: The collision-free artifact stem chosen at creation (``<topic>`` in every file name).
     topic: str = ""
+    #: Assignment-derived stem (ADR-21 D8) used when the caller passed no ``subject``; a caller's
+    #: explicit subject keeps naming the files, with ``begin_agent_session``'s collision suffix.
+    topic_seed: str = ""
+    explicit_subject: bool = False
 
 
 def _payload_dict(value: Any) -> dict[str, Any]:
@@ -715,20 +719,44 @@ def _record_transcript_path(agent_session_id: str, path: Path) -> None:
 
 
 def _finalize_run_paths(agent_session_id: str, run: _Run) -> _Run:
-    """Name the transcript/archive after the *stored* subject, not the requested one.
+    """Name the transcript/archive after the run's frozen topic (ADR-16 D4, ADR-21 D8).
 
-    A duplicate subject gains an `` (N)`` suffix inside ``begin_agent_session``; the file names
-    must follow the stored subject (ADR-16 D4) or two runs could share a topic.
+    An explicit ``subject`` keeps naming the files, using the *stored* subject: a duplicate gains
+    an `` (N)`` suffix inside ``begin_agent_session``, and the file names must follow it or two
+    runs could share a topic. Without one, ``derive_topic`` turned the assignment into a
+    path-safe stem at creation; either way the stem is allocated once, here, and every artifact
+    (transcript, report, ast, structured, tool dir) reuses it.
     """
     if run.bundle is None:
         return run
-    topic = session_paths.allocate_topic(run.bundle, run.subject,
+    seed = run.subject if run.explicit_subject else (run.topic_seed or run.subject)
+    topic = session_paths.allocate_topic(run.bundle, seed,
                                          discriminator=agent_session_id)
-    path = session_paths.transcript_path(run.bundle, run.subject, topic=topic)
-    tool_dir = session_paths.subagent_dir(run.bundle, run.subject, topic=topic)
+    path = session_paths.transcript_path(run.bundle, seed, topic=topic)
+    tool_dir = session_paths.subagent_dir(run.bundle, seed, topic=topic)
     if str(path) != str(run.path):
         _record_transcript_path(agent_session_id, path)
     return replace(run, path=path, tool_dir=tool_dir, topic=topic)
+
+
+def _start_task_label(run: _Run) -> None:
+    """Kick the write-once task label off the critical path (ADR-21 D7).
+
+    Called once the ``agent_session`` row exists (the label is a write to that row) and before
+    dispatch: the label thread is a daemon and is never joined, so neither the spawn nor the
+    turn waits for the model. Naming is metadata — a failure here never fails the run.
+    """
+    try:
+        from agent.task_label import maybe_start_task_label
+
+        maybe_start_task_label(
+            agent_session_id=run.agent_session_id,
+            assignment=run.user_prompt,
+            name=run.short_name,
+        )
+    except Exception:  # health: allow BLE001 -- naming must never break a spawn
+        logger.debug("agent: task label did not start for %s",
+                     run.agent_session_id, exc_info=True)
 
 
 def _settle(run: _Run, value: Any, error: Optional[BaseException]) -> tuple[str, str]:
@@ -1387,6 +1415,8 @@ def _execute_call(call: _Call, args: dict[str, Any], *, session_id: str, depth: 
                short_name=short_name,
                user_prompt=call.user_prompt,
                system_prompt=call.definition.body, prompt_source=call.definition.source,
+               topic_seed=session_paths.derive_topic(call.user_prompt, fallback=name),
+               explicit_subject=bool(call.subject),
                context=context, context_count=len(context_inputs),
                context_inputs=context_inputs,
                provider_name=call.provider_name, model_name=call.model_name,
@@ -1412,6 +1442,7 @@ def _execute_call(call: _Call, args: dict[str, Any], *, session_id: str, depth: 
                batch_independent=(batch[2] if batch else True))
     subject = _begin_session_row(agent_session_id, run)
     run = _finalize_run_paths(agent_session_id, replace(run, subject=subject))
+    _start_task_label(run)
     params = _params(run, history)
 
     if not call.background:
@@ -1685,7 +1716,10 @@ AGENT_SCHEMA: dict[str, Any] = {
                 "type": "string",
                 "description": (
                     "One-line topic for this agent session; unique, and how agent_out finds it. "
-                    "Defaults to the first line of user_prompts."
+                    "Defaults to the topic derived from user_prompts: leading Markdown headings, "
+                    "fenced blocks and HTML comments are skipped, the first meaningful line is "
+                    "truncated at 48 characters and sanitised into the 64-character artifact stem "
+                    "shared by the transcript, report and ast summary."
                 ),
             },
             "name": {

@@ -29,7 +29,12 @@ async def test_gateway_titles_original_request_without_changing_model_input(tmp_
         {"name": name, "content": payloads[name]}, tmp_path / name, name,
     ))
     monkeypatch.setattr("gateway.run._load_gateway_config", dict)
-    monkeypatch.setattr("hermes_cli.config.load_config_readonly", dict)
+    # The titler spends the plan (ADR-21 D3); this case is about the title *input*, so pin one
+    # candidate instead of leaving the config empty (an empty plan makes no model call).
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
+        "auxiliary": {"title_generation": {
+            "enabled": True, "model_upgrade_enabled": True,
+            "provider": "test", "model": "title-model", "timeout": 5}}})
     source = SessionSource(platform=Platform.DISCORD, chat_id="channel", user_id="user", user_name="Example")
     event = MessageEvent(text=question, source=source, auto_skill=skills,
                          channel_context="[Discord channel context: synthetic metadata]")

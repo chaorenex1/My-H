@@ -22,6 +22,9 @@ from typing import Optional
 MAX_TITLE_CHARS = 80
 MAX_TITLE_WORDS = 12
 
+#: A task label is a UI row name and a chat address, so it is tighter than a session title.
+MAX_LABEL_WORDS = 9
+
 # The decline sentinel the prompt prescribes. ``<title>none</title>`` in tag form terminates the
 # naming attempt; a bare prose "none" is rejected the same way but is not a declared decline.
 _NONE_SENTINEL = "none"
@@ -71,6 +74,34 @@ def clean_title(text: str) -> Optional[str]:
     if not words or len(title) > MAX_TITLE_CHARS or len(words) > MAX_TITLE_WORDS:
         return None
     return title
+
+
+def _echoes_handle(label: str, handle: str) -> bool:
+    """True when *label* is the run's own handle, including the ``name-2`` spawn form (omp's
+    ``labelEchoesHandle``): a label equal to the address it decorates adds nothing and would
+    shadow the name in ``agent_message.to``."""
+    folded = label.casefold()
+    own = str(handle or "").strip().casefold()
+    if not own:
+        return False
+    return folded == own or re.fullmatch(rf"{re.escape(own)}(?:[- ]\d+)?", folded) is not None
+
+
+def clean_label(text: str, *, handle: str = "") -> Optional[str]:
+    """Task-label guard (ADR-21 D7): the shared title guard plus the label's own bounds.
+
+    ``clean_title`` already collapses whitespace, drops quotes/``Title:``/trailing sentence
+    punctuation and refuses anything over 80 characters or 12 words. A label is capped tighter at
+    ``MAX_LABEL_WORDS`` and must not echo the run's own name/handle. Rejection, never truncation.
+    """
+    label = clean_title(text)
+    if not label:
+        return None
+    if len(_TITLE_WORD_RE.findall(label)) > MAX_LABEL_WORDS:
+        return None
+    if _echoes_handle(label, handle):
+        return None
+    return label
 
 
 def parse_title_output(raw: str) -> TitleParse:

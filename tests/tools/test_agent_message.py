@@ -307,3 +307,140 @@ def test_the_envelope_switch_reads_the_config_key(monkeypatch):
                         lambda: {"agent_messages": {"envelope": False}})
 
     assert agent_inbox._envelope_enabled() is False
+
+
+# ── AS-7: label-first addressing over the real store ───────────────────────────────────────
+
+
+def _seed_session(agent_session_id, *, name, subject, title="", status="running"):
+    """One ``agent_session`` row in the temp HERMES_HOME, optionally already labelled."""
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        db.begin_agent_session(
+            agent_session_id=agent_session_id, agent_name="researcher", subject=subject,
+            transcript_path=f"{agent_session_id}.jsonl", short_name=name,
+        )
+        if title:
+            assert db.set_agent_session_title(agent_session_id, title) is True
+        if status != "running":
+            db._execute_write(lambda conn: conn.execute(
+                "UPDATE agent_session SET status=? WHERE agent_session_id=?",
+                (status, agent_session_id)))
+    finally:
+        release_or_close(db)
+
+
+def _title_map():
+    from hermes_state_registry import acquire, release_or_close
+
+    db = acquire()
+    try:
+        return {
+            row["agent_session_id"]: row["title"]
+            for row in db.list_agent_sessions(limit=50)
+        }
+    finally:
+        release_or_close(db)
+
+
+def test_as7_label_writes_get_a_suffix_while_the_duplicate_is_live():
+    _seed_session("run-alpha", name="alpha", subject="alpha work", title="Investigate alpha")
+    _seed_session("run-beta-1", name="beta1", subject="beta work one", title="Investigate beta")
+    _seed_session("run-beta-2", name="beta2", subject="beta work two", title="Investigate beta")
+    _seed_session("run-beta-3", name="beta3", subject="beta work three", title="Investigate beta")
+
+    titles = _title_map()
+
+    assert titles["run-alpha"] == "Investigate alpha"
+    assert titles["run-beta-1"] == "Investigate beta"
+    assert titles["run-beta-2"] == "Investigate beta 2"
+    assert titles["run-beta-3"] == "Investigate beta 3"
+
+
+def test_as7_to_resolves_the_label_first_casefolded(monkeypatch):
+    _seed_session("run-alpha", name="alpha", subject="alpha work", title="Investigate alpha")
+    # A second row whose short name is the label verbatim: the label must still win.
+    _seed_session("run-named", name="Investigate alpha", subject="named work")
+
+    assert agent_message_tool._resolve_target({"to": "  INVESTIGATE ALPHA "})[
+        "agent_session_id"] == "run-alpha"
+    assert agent_message_tool._resolve_target({"to": "investigate ALPHA"})[
+        "agent_session_id"] == "run-alpha"
+
+
+def test_as7_missing_label_falls_back_to_id_name_and_subject(monkeypatch):
+    _seed_session("run-plain", name="plain", subject="plain work")
+
+    assert agent_message_tool._resolve_target({"to": "run-plain"})[
+        "agent_session_id"] == "run-plain"
+    assert agent_message_tool._resolve_target({"to": "plain"})[
+        "agent_session_id"] == "run-plain"
+    assert agent_message_tool._resolve_target({"to": "plain work"})[
+        "agent_session_id"] == "run-plain"
+
+
+def test_as7_an_ambiguous_historical_label_is_refused_with_its_candidates(monkeypatch):
+    from hermes_state_registry import acquire, release_or_close
+
+    _seed_session("run-dup-1", name="dup1", subject="first duplicate")
+    _seed_session("run-dup-2", name="dup2", subject="second duplicate")
+    db = acquire()
+    try:
+        # A hand-edited/legacy store bypasses the write-once suffix rule.
+        for row_id in ("run-dup-1", "run-dup-2"):
+            db._execute_write(lambda conn, row_id=row_id: conn.execute(
+                "UPDATE agent_session SET title='Shared label' WHERE agent_session_id=?",
+                (row_id,)))
+    finally:
+        release_or_close(db)
+
+    delivered: list[str] = []
+    monkeypatch.setattr(agent_inbox, "deliver_peer_message",
+                        lambda target, *a, **k: delivered.append(target) or {})
+
+    raw = registry.dispatch("agent_message", {"to": "shared LABEL", "content": "hi"},
+                            session_id="parent")
+    payload = _json(raw)
+
+    assert "ambiguous task label" in payload["error"]
+    assert {candidate["agent_session_id"] for candidate in payload["candidates"]} == {
+        "run-dup-1", "run-dup-2"}
+    assert {candidate["name"] for candidate in payload["candidates"]} == {"dup1", "dup2"}
+    assert {candidate["subject"] for candidate in payload["candidates"]} == {
+        "first duplicate", "second duplicate"}
+    assert delivered == []
+
+
+def test_as7_a_label_target_is_delivered_without_blocking(monkeypatch):
+    _seed_session("run-alpha", name="alpha", subject="alpha work", title="Investigate alpha")
+    delivered: list[str] = []
+
+    def deliver(target, content, *, sender_session_id, progress, reply_to):
+        delivered.append(target)
+        return {"status": "delivered", "agent_session_id": target}
+
+    monkeypatch.setattr(agent_inbox, "deliver_peer_message", deliver)
+
+    raw = registry.dispatch("agent_message", {"to": "investigate alpha", "content": "status?"},
+                            session_id="parent")
+
+    assert _json(raw)["status"] == "delivered"
+    assert delivered == ["run-alpha"]
+
+
+def test_as7_explicit_identity_parameters_keep_their_precedence(monkeypatch):
+    _seed_session("run-alpha", name="alpha", subject="alpha work", title="Investigate alpha")
+    _seed_session("run-other", name="other", subject="other work")
+    delivered: list[str] = []
+    monkeypatch.setattr(agent_inbox, "deliver_peer_message",
+                        lambda target, *a, **k: delivered.append(target) or {
+                            "status": "delivered", "agent_session_id": target})
+
+    raw = registry.dispatch("agent_message", {
+        "to": "investigate alpha", "agent_session_id": "run-other", "content": "hi"},
+        session_id="parent")
+
+    assert _json(raw)["status"] == "delivered"
+    assert delivered == ["run-other"]
