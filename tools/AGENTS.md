@@ -149,7 +149,9 @@ it is never the first signal a live parent receives.
 unique `subject`, returns only those, and writes `<parent bundle>/<topic>.jsonl`. No implicit
 continuation (`continue_from` seeds it). The `agent_session` row is inserted pre-dispatch and
 settled by the finishing thread; `agent_out` reads history / artifact / ast_summary / inbox (no
-`final_response`).
+`final_response`). Its `title` column is the write-once task label, generated asynchronously from the
+assignment and never naming files; `agent_message.to` resolves label → id → name → subject
+(strip+casefold, exact) and refuses an ambiguous label with its candidate list.
 
 ## Delegation (`tools/delegate_tool.py`)
 

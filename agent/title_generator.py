@@ -19,7 +19,6 @@ from agent.auxiliary_client import call_llm
 from agent.context_compressor import LEGACY_SUMMARY_PREFIX
 from agent.delegation_context import is_dispatcher_owned_worker_context
 from agent.message_content import flatten_message_text
-from agent.title_parser import parse_title_output
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +126,30 @@ def _auto_title_enabled() -> bool:
     except Exception:
         logger.debug("Failed to read title_generation.enabled", exc_info=True)
         return True
+
+
+def _title_generator() -> str:
+    """``auxiliary.title_generation.generator``, normalised onto the one implemented path.
+
+    ADR-21 D6 names two generators: ``fork`` (the default) runs the titling as a side turn sharing
+    the main reply's prefix, and ``plan`` spends the ordered candidate plan. Sprint 3 implements
+    the plan path only, so ``fork`` — and an unset key, which resolves to the same default — is
+    normalised here rather than skipping naming silently. The marker is DEBUG because ``fork`` is
+    the default: a WARNING would fire on every ordinary run. Sprint 4 replaces the normalisation.
+    """
+    requested = ""
+    try:
+        requested = str(_title_config().get("generator") or "").strip().lower()
+    except Exception:
+        logger.debug("Failed to read title_generation.generator", exc_info=True)
+    if requested == "plan":
+        return "plan"
+    logger.debug(
+        "title generation: generator=%s normalised to the plan path (the fork side turn lands "
+        "in a later sprint)",
+        requested or "unset",
+    )
+    return "plan"
 
 
 def _model_title_upgrade_enabled() -> bool:
@@ -399,39 +422,56 @@ def generate_title(
         return None
     try:
         from agent.prompts.renderer import render_request
+        from agent.title_router import run_title_plan, title_model_plan
+
+        # ADR-21 D6/D3: the titler is a consumer of the sprint-2 plan — it resolves the route
+        # ladder once (cheap lane first, session model last) and spends at most one call per
+        # candidate. An empty plan (both gates off, or nothing configured) means zero calls.
+        _title_generator()  # leaves the fork→plan degradation marker when it normalises
+        plan = title_model_plan(main_runtime, require_model_upgrade=False)
+        if not plan:
+            logger.debug("Title generation skipped: no title-model candidate is configured")
+            return None
         # The prompt is the registered `title_system` request template (ADR-21 D5); the language
         # rule rides the template's `{% if title_language %}` line, not string surgery.
         prompt = render_request("title_system", {"title_language": _title_language()})
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_snippet},
+        ]
+
+        def _call(**kwargs):
+            try:
+                return call_llm(**kwargs)
+            except Exception as exc:  # the plan advances; the caller still hears about it
+                _report_failure(failure_callback, exc, "Title generation")
+                raise
+
         # Use the provider's default temperature instead of forcing 0.3.
         # Some models (e.g. GPT-5.6) only accept their server-side default
         # and reject explicit temperature values, causing the daemon title
         # thread to fail with "Unsupported value: 'temperature'".
         # See: #72351, #51083, #51157
-        response = call_llm(
-            task="title_generation",
-            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": user_snippet}],
-            # A title is a handful of tokens, but a low ceiling was cut off by reasoning models whose
-            # thinking survives the disable below (#83903, #82291). A model that honours the marker
-            # contract stops after ~15 tokens regardless, so the ceiling only costs on replies that
-            # would have been garbage anyway. temperature=None: omitted from the wire so default-only
-            # reasoning models accept the first request (#72351).
-            max_tokens=TITLE_MAX_TOKENS, temperature=None, timeout=timeout, main_runtime=main_runtime,
-            # The module contract above promises thinking-disabled operation,
-            # but nothing enforced it: with the aux default reasoning_effort
-            # "" (provider default), Gemini enables internal thinking and
-            # bills thought tokens against a small max_tokens — the marker
-            # never lands, and the prose fallback stores stray thinking text
-            # as the session title (#91927).
-            reasoning_config={"enabled": False},
-        )
-        # The marker parser owns the shared guard (quotes / `Title:` / punctuation stripped; an
-        # answer-shaped output — >80 chars, >12 words or zero words — is rejected, not truncated)
-        # and the `<title/>` / `<title>none</title>` decline, which ends this naming attempt.
-        parsed = parse_title_output(response.choices[0].message.content or "")
-        if parsed.terminal:
-            logger.debug("Title model declined to name this turn; naming attempt ends")
-            return None
-        return parsed.title
+        # A title is a handful of tokens, but a low ceiling was cut off by reasoning models whose
+        # thinking survives the disable below (#83903, #82291). A model that honours the marker
+        # contract stops after ~15 tokens regardless, so the ceiling only costs on replies that
+        # would have been garbage anyway. temperature=None: omitted from the wire so default-only
+        # reasoning models accept the first request (#72351).
+        # The module contract above promises thinking-disabled operation, but nothing enforced it:
+        # with the aux default reasoning_effort "" (provider default), Gemini enables internal
+        # thinking and bills thought tokens against a small max_tokens — the marker never lands,
+        # and the prose fallback stores stray thinking text as the session title (#91927).
+        options = {
+            "max_tokens": TITLE_MAX_TOKENS,
+            "temperature": None,
+            "reasoning_config": {"enabled": False},
+        }
+        if timeout is not None:
+            options["timeout"] = timeout
+        # The marker parser (inside the executor) owns the shared guard (quotes / `Title:` /
+        # punctuation stripped; an answer-shaped output is rejected, not truncated) and the
+        # `<title/>` / `<title>none</title>` decline, which ends this naming attempt.
+        return run_title_plan(plan, messages, call=_call, request_options=options)
     except Exception as e:
         # WARNING so it shows in agent.log without debug mode; stack at debug.
         logger.warning("Title generation failed: %s", e)
@@ -906,6 +946,11 @@ def maybe_refresh_title_drift(agent, session_db, session_id, messages, *, final_
         interval = _title_refresh_after_prompts()
         if interval <= 0:
             return None
+        # ADR-21 D3: ``model_upgrade_enabled=false`` closes every stage-1 path, drift included —
+        # otherwise the judge and a regeneration would spend the two calls the switch just saved.
+        if not _model_title_upgrade_enabled():
+            logger.debug("title drift: model_upgrade_enabled=false; keeping the derived title")
+            return None
         if _terminal_title_status(final_status):
             return None
         if agent is None or session_db is None or not session_id:
@@ -958,6 +1003,8 @@ def start_title_drift_check(agent, messages, *, final_status) -> Optional[thread
     """
     try:
         if _title_refresh_after_prompts() <= 0 or _terminal_title_status(final_status):
+            return None
+        if not _model_title_upgrade_enabled():  # ADR-21 D3: no stage-1 calls while the switch is off
             return None
         session_db = getattr(agent, "_session_db", None)
         session_id = getattr(agent, "session_id", None)

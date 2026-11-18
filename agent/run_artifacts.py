@@ -350,9 +350,11 @@ def _bundle_from_transcript(transcript: Optional[Path], row: dict[str, Any]) -> 
 def identity_for_row(row: dict[str, Any]) -> dict[str, Any]:
     """``bundle_dir`` / ``report_path`` / ``ast_summary_path`` for ``agent_out`` (ADR-16 D5).
 
-    The manifest is the authoritative mapping; a pre-P2 row falls back to deriving the bundle
-    from its recorded transcript path, and if that is a legacy path the artifact paths are
-    ``None`` (the files were never written).
+    The manifest is the authoritative mapping (ADR-21 D8): the artifact stem is frozen at creation
+    and settle, so a resumed read must echo the settled paths verbatim rather than re-deriving
+    them from ``subject`` — a task label or a session rename never moves a file. A pre-P2 row
+    falls back to deriving the bundle from its recorded transcript path, and if that is a legacy
+    path the artifact paths are ``None`` (the files were never written).
     """
     raw_manifest = row.get("artifact_manifest")
     manifest: dict[str, Any] = raw_manifest if isinstance(raw_manifest, dict) else {}
@@ -369,8 +371,16 @@ def identity_for_row(row: dict[str, Any]) -> dict[str, Any]:
         tool_dir = Path(str(manifest["tool_artifacts_dir"]))
     elif bundle is not None:
         tool_dir = session_paths.subagent_dir(bundle, subject)
-    report = session_paths.report_path(bundle, subject) if bundle is not None else None
-    ast = session_paths.ast_summary_path(bundle, subject) if bundle is not None else None
+    report: Optional[Path] = None
+    if manifest.get("report_path"):
+        report = Path(str(manifest["report_path"]))
+    elif bundle is not None:
+        report = session_paths.report_path(bundle, subject)
+    ast: Optional[Path] = None
+    if manifest.get("ast_summary_path"):
+        ast = Path(str(manifest["ast_summary_path"]))
+    elif bundle is not None:
+        ast = session_paths.ast_summary_path(bundle, subject)
     structured: Optional[Path] = None
     if manifest.get("structured_output_path"):
         structured = Path(str(manifest["structured_output_path"]))

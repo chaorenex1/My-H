@@ -1417,3 +1417,116 @@ def test_batch_agents_accept_a_peer_message_and_expose_results(monkeypatch):
     artifact = json.loads(agent_out_tool.agent_out_tool(
         {"agent_session_id": target, "mode": "artifact"}))
     assert artifact["content"] == "the answer"
+
+
+# ── AS-5 / AS-6: assignment-derived topic, frozen artifact identity ──────────────────────────
+
+
+def test_as5_a_markdown_assignment_names_the_files_after_its_first_meaningful_line():
+    """The task document's structure is not the topic: headings, fences and comments are skipped."""
+    assignment = (
+        "## Target\n"
+        "```python\n"
+        "print('structure, not topic')\n"
+        "```\n"
+        "<!-- reviewer note -->\n"
+        "Investigate pool exhaustion\n"
+        "## Acceptance\n"
+        "No leaks remain.\n"
+    )
+
+    run = _call(agent_name="researcher", user_prompts=assignment, background=False)
+
+    assert Path(run["transcript_path"]).name == "Investigate_pool_exhaustion.jsonl"
+    assert "Target" not in Path(run["transcript_path"]).name
+    assert "structure" not in Path(run["transcript_path"]).name
+
+
+def test_as5_an_explicit_subject_keeps_naming_the_files():
+    run = _call(agent_name="researcher", user_prompts="## Target\nInvestigate pool exhaustion",
+                background=False, subject="pool exhaustion analysis")
+
+    assert Path(run["transcript_path"]).name == "pool_exhaustion_analysis.jsonl"
+
+
+def test_as5_an_empty_assignment_falls_back_to_the_run_name():
+    """``_finalize_run_paths`` is the only allocator; its seed is the run's agent name."""
+    from tools import agent_tool
+
+    run = agent_tool._Run(
+        agent="researcher", session_key="s1", agent_session_id="researcher-empty",
+        subject="", short_name="alice", user_prompt="   ", system_prompt="", prompt_source="",
+        context="", context_count=0, context_inputs=(), provider_name="", model_name="",
+        toolsets=[], all_tools=False, project_dir="", path=Path("unused.jsonl"), goal="",
+        depth=1, enable_tools=[], max_iterations=1, reasoning_effort=None, worktree=False,
+        shadowed=False,
+        bundle=Path("bundle"), topic_seed="researcher",
+    )
+
+    finalized = agent_tool._finalize_run_paths("researcher-empty", run)
+
+    assert finalized.topic == "researcher"
+    assert Path(finalized.path).name == "researcher.jsonl"
+
+
+def test_as6_the_settled_bundle_shares_one_stem_and_the_identity_is_frozen():
+    from agent import run_artifacts
+    from hermes_state_registry import acquire, release_or_close
+
+    run = _call(agent_name="researcher", background=False,
+                user_prompts="## Target\n```\nnot the topic\n```\nInvestigate pool exhaustion")
+    agent_session_id = run["agent_session_id"]
+
+    db = acquire()
+    try:
+        row = db.get_agent_session(agent_session_id)
+        manifest = row["artifact_manifest"]
+        before_identity = run_artifacts.identity_for_row(row)
+        bundle = Path(manifest["bundle_dir"])
+        before_files = sorted(entry.name for entry in bundle.iterdir())
+        stem = Path(manifest["transcript_path"]).stem
+
+        # Metadata changes a run may legitimately see afterwards: a task label and a session title.
+        assert db.set_agent_session_title(agent_session_id, "Investigate pool exhaustion") is True
+        db.create_session(session_id="s1", source="cli")
+        assert db.set_auto_title("s1", "Pool exhaustion", source="derived") is True
+        assert db.refresh_auto_title("s1", "Pool exhaustion investigation", source="derived",
+                                     expected_title="Pool exhaustion") is True
+
+        after_row = db.get_agent_session(agent_session_id)
+        after_identity = run_artifacts.identity_for_row(after_row)
+        after_files = sorted(entry.name for entry in bundle.iterdir())
+    finally:
+        release_or_close(db)
+
+    assert stem == "Investigate_pool_exhaustion"
+    assert Path(manifest["transcript_path"]).name == f"{stem}.jsonl"
+    assert Path(manifest["report_path"]).name == f"{stem}.md"
+    assert Path(manifest["ast_summary_path"]).name == f"{stem}_ast.json"
+    assert Path(manifest["tool_artifacts_dir"]).name == stem
+    # Nothing was recomputed, renamed or moved by the metadata changes.
+    assert after_files == before_files
+    assert after_identity == before_identity
+    assert Path(after_identity["report_path"]) == Path(manifest["report_path"])
+
+    # ``agent_out`` reads the same frozen manifest paths.
+    raw = registry.dispatch("agent_out", {"mode": "artifact", "kind": "all",
+                                          "agent_session_id": agent_session_id})
+    files = json.loads(raw)["files"]
+    assert {Path(item["path"]).name for item in files if item.get("path")} >= {
+        f"{stem}.jsonl", f"{stem}.md", f"{stem}_ast.json"}
+
+
+def test_as6_the_transcript_never_carries_the_task_label(monkeypatch):
+    """Labels are metadata: the transcript written at creation has no trace of one."""
+    import threading
+
+    run = _call(agent_name="researcher", user_prompts="Investigate pool exhaustion",
+                background=False, name="alice")
+    for thread in threading.enumerate():
+        if thread.name == "task-label":
+            thread.join(10)
+
+    text = Path(run["transcript_path"]).read_text(encoding="utf-8")
+    assert "Investigate pool exhaustion" in text  # the assignment itself is there
+    assert "task-label" not in text

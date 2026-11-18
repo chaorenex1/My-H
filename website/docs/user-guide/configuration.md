@@ -1621,6 +1621,12 @@ No background `auto-title` thread starts and no automatic title-model request is
 explicit repair command `hermes sessions retitle-skills` still calls the model. `enabled: false`
 still disables both stages.
 
+`auxiliary.title_generation.generator` selects how a session title is generated: `plan` walks the
+ordered title-model candidates, `fork` (the default) runs a forked side turn that shares the
+reply's prefix. The fork path is not implemented yet, so `fork` — and an unset key — is normalised
+to the `plan` path and records a debug-level degradation marker instead of leaving the session
+unnamed.
+
 On a `custom` main provider (llama.cpp, Ollama, vLLM, LM Studio and other self-hosted
 OpenAI-compatible servers) the title model call is sent **after** the turn's reply has
 arrived, not concurrently with it, unless `auxiliary.title_generation` is pinned to another

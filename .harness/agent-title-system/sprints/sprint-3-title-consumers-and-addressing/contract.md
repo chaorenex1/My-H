@@ -23,18 +23,18 @@ acceptance_scenarios:
 rubric:
   - axis: Functionality
     weight: high
-    threshold: "?"
+    threshold: 1.0
   - axis: Craft
     weight: std
-    threshold: "?"
+    threshold: 0.85
   - axis: Consistency
     weight: std
-    threshold: "?"
+    threshold: 0.9
   - axis: Documentation
     weight: low
-    threshold: "?"
-max_iterations: "?"
-status: pending-negotiation
+    threshold: 0.85
+max_iterations: 8
+status: done
 ---
 
 # Sprint 3 Contract — title-consumers-and-addressing
@@ -91,12 +91,15 @@ Then  四条路径都不发起模型调用、不创建标签线程、agent_sessi
 ### AS-4: legacy 迁移与 write-once 写入
 
 ```text
-Given 一个按旧 DDL 建好的 store（agent_session 无 title 列、含若干既有行与一个预置非空 title 的行）
-When  用 SessionDB/reconcile 连续打开两次，再依次调用标签写入（第一次、第二次不同标签、一次空标签）
-Then  首次打开补出 title TEXT NOT NULL DEFAULT '' 与非唯一索引 idx_agent_session_title；
-      既有行 title=''（不回填），预置非空值保持原样；
-      第二次打开不产生新的 schema 变更（幂等）；
-      第一次写成功，第二次与空标签均不改变列值；PRAGMA index_list(agent_session) 中该索引 unique=0
+Given 一个按旧 DDL 建好的 store（agent_session 无 title 列，含若干既有行，且不含任何非空 title）
+When  用 SessionDB/reconcile 打开一次；随后经原始 SQL 把其中一行 title 置为 'keep me'；
+      连续再打开两次；最后依次调用标签写入（第一次、第二次不同标签、一次空标签）
+Then  首次打开补出 title TEXT NOT NULL DEFAULT ''（PRAGMA table_info：notnull=1、dflt_value="''"）
+      与非唯一索引 idx_agent_session_title；此刻所有既有行 title=''（不回填）；
+      'keep me' 只由测试自身写入，不作为 reconciler 的证据；
+      第 2、3 次打开不产生新的 schema 变更（幂等），且 'keep me' 原样保留；
+      第一次写成功，第二次与空标签均不改变列值；
+      PRAGMA index_list(agent_session) 中该索引 unique=0
 ```
 
 - Surface：新增 `tests/hermes_state/test_agent_session_title.py`（复用现有 `tests/hermes_state/conftest.py` 的构造方式）
@@ -152,14 +155,28 @@ Then  strip()+casefold() 后精确匹配，label 优先于 id/name/subject；
 
 本 sprint 的验收一律按 plan 路径判定。任何"为让 `generator=fork` 看起来可用"而提前实现副回合、卡片解析或 `keepTitleCard` 的行为都属越界；sprint 4 的契约再补 fork 路径与卡片。
 
+## Scope additions (negotiated, round 1→2)
+
+- **新增配置键 `auxiliary.title_generation.generator`**（默认 `fork`）：必须在
+  `hermes_cli/config_defaults_auxiliary.py` 的 `title_generation` 块中登记，否则
+  `_validate_schema_key`（`hermes_cli/config.py:2985+`）会拒绝该子键；同时补
+  `website/docs/user-guide/configuration.md` 标题小节一句与 `cli-config.yaml.example`
+  一行，避免 `scripts/ci/check_docs_drift.py` 产生新的（sprint 可归因的）缺口。
+  P4 的成篇散文仍留在 sprint 5。`card_icons` 本 sprint 不登记。
+- **`tools/AGENTS.md` §"Named agents"** 增加一条子句，说明 `agent_session.title` 与
+  `agent_message.to` 的 label-first 语义；子句 ≤600 字符（root + area 链上限 30,000，
+  当前 28,999），改后必须重跑 `scripts/ci/check_agents_md_size.py`。
+- **降级标记为 DEBUG 级**：`generator=fork` 是默认值，WARNING 会在每次普通运行触发；
+  AS-1 的未设置分支通过归一化断言覆盖（未设置与显式 `fork` 都有标记，`plan` 无标记）。
+
 ## Rubric Detail
 
 | Axis | Weight | Threshold | Scoring notes |
 |---|---|---|---|
-| Functionality | high | TBD (negotiation) | 七条 AS 的 pytest 断言全部通过；schema/写入/寻址/路径冻结按行为而非实现命名判定 |
-| Craft | std | TBD (negotiation) | 复用既有 `title_model_plan`、`spawn_context_thread`、reconciler、`allocate_topic`；无重复命名逻辑；无对真实 store 的写入 |
-| Consistency | std | TBD (negotiation) | 沿用 `short_name` 列/索引与 `_resolve` 身份优先级；错误文本与既有 `tool_error` 风格一致；命名标记与 sprint 1 契约一致 |
-| Documentation | low | TBD (negotiation) | `AGENT_MESSAGE_SCHEMA.to` 描述与新增列/索引注释同步；不写超出本 sprint 范围的文档 |
+| Functionality | high | 1.0 | 七条 AS 的 pytest 断言全部通过；schema/写入/寻址/路径冻结按行为而非实现命名判定 |
+| Craft | std | 0.85 | 复用既有 `title_model_plan`、`spawn_context_thread`、reconciler、`allocate_topic`；无重复命名逻辑；无对真实 store 的写入 |
+| Consistency | std | 0.9 | 沿用 `short_name` 列/索引与 `_resolve` 身份优先级；错误文本与既有 `tool_error` 风格一致；命名标记与 sprint 1 契约一致 |
+| Documentation | low | 0.85 | `AGENT_MESSAGE_SCHEMA.to` 描述与新增列/索引注释同步；不写超出本 sprint 范围的文档 |
 
 Total pass condition: **every axis meets its threshold**。weight 只影响 Evaluator 报告失败时的排序（high 先报）。
 
@@ -168,7 +185,7 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 ### 测试环境
 
 - 所有新测试用临时 `HERMES_HOME`（`monkeypatch.setenv`，复用 `tests/conftest.py` 既有 fixture 模式）；不得读写操作者真实 store。
-- 测试入口一律 `scripts/run_tests.sh <test paths> [-- pytest 参数]`（仓库规则：禁止裸 `pytest`，见 `AGENTS.md` / `docs/coding-rules.md`）；sprint-local 的 `eval-<feature>.sh` 必须调用该 runner，并把输出与退出码落到 `evidence/`。路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
+- 测试入口：优先 `scripts/run_tests.sh <test paths> [-- pytest 参数]`（仓库规则：禁止裸 `pytest`，见 `AGENTS.md` / `docs/coding-rules.md`）。在本工作站上该 wrapper 从 bash 调用不可用（`pwd` 返回 `C:\…`，`_activation.sh` 找不到，re-exec 把 `/mnt/c` 映射成 `C:\mnt\c`），因此以 `scripts/run_tests_parallel.py` 在固定 test 环境解释器下直接运行等价于同一 runner（沿用其 `TZ`/`LANG`/`PYTHONHASHSEED`）；sprint-local 的 `eval-<feature>.sh` 必须调用实际可用的入口，并把输出与退出码落到 `evidence/`。路径断言用 `Path` 比较，不写死分隔符；断言中避免依赖 mtime。
 - 证据写入 `evidence/AS-<n>-pytest.txt`，至少包含所涉测试文件的 `-q` 汇总与失败时的断言原文。
 
 ### 迁移（AS-4）
@@ -213,26 +230,26 @@ Total pass condition: **every axis meets its threshold**。weight 只影响 Eval
 
 ### Round 1
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `counter` — Functionality 1.0, Craft 0.85, Consistency 0.9, Documentation 0.85, max_iterations 8; migration and async commitments recorded (title column after `_reconcile_columns`, `spawn_context_thread(daemon=True)`, gates before thread, event-based ordering proof). (`feedback/generator-neg-1.md`)
+- **Evaluator**: `counter` — thresholds and max_iterations accepted unchanged; counter is on scope only: the new `auxiliary.title_generation.generator` key needs a `DEFAULT_CONFIG` entry (else `_validate_schema_key` refuses it) plus `configuration.md` + example-config lines to avoid a sprint-attributable docs-drift gap, and `tools/AGENTS.md` §"Named agents" needs one clause. AS-4 five-step replacement approved. (`feedback/evaluator-neg-1.md`)
 
 ### Round 2
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: `accept` — both scope additions accepted; chain-cap correction recorded (root + area = 28,999 of 30,000, so the AGENTS clause is ≤600 chars); DEBUG-level degradation marker; AS-4 body frozen verbatim from the Evaluator. (`feedback/generator-neg-2.md`)
+- **Evaluator**: not required — Generator `accept` resolves the round; the Evaluator's round-1 proposal is the accepted delta.
 
 ### Round 3
 
-- **Generator**:
-- **Evaluator**:
+- **Generator**: not required.
+- **Evaluator**: not required.
 
 ### Ruling
 
-- **Planner**: pending — `threshold` 与 `max_iterations` 由本轮协商填写。
+- **Planner**: not required — mutual agreement in round 2. pending — `threshold` 与 `max_iterations` 由本轮协商填写。
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1 (verdict pass; Fn 1.0 / Craft 0.9 / Consistency 0.92 / Documentation 0.9)
+- **Last commit**: 7eaad6cbbb14ee4791444148de286ed36e7ee24e (iter-1 checkpoint)
+- **Aborted reason** (if any): none
+- **PR**: (recorded after Step 8)

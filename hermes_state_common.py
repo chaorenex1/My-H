@@ -926,6 +926,9 @@ CREATE TABLE IF NOT EXISTS agent_session (
     parent_session_id TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL,
     short_name TEXT NOT NULL DEFAULT '',  -- profile-unique address (agent_message/agent_out)
+    -- Write-once task label (ADR-21 D7): the generated display name and ``agent_message.to``
+    -- alias. ``''`` means "not labelled yet"; no reconciler backfill, the first label wins.
+    title TEXT NOT NULL DEFAULT '',
     transcript_path TEXT NOT NULL,
     artifact_manifest TEXT,
     final_response TEXT,

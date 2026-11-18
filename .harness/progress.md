@@ -146,3 +146,77 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T09:30:36Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/evaluator-1.md
 [2026-11-18T09:34:31Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.95 documentation=0.9"
 - 2026-11-18T09:36:23Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-2.md
+[2026-11-18T09:38:08Z] decision: sprint-2 PR opened https://github.com/chaorenex1/My-H/pull/10
+[2026-11-18T09:38:48Z] decision: sprint-2 done (PR #10); transition to sprint-3-title-consumers-and-addressing; backend pinned: omp (source: contract.md frontmatter)
+[2026-11-18T09:39:18Z] branch: harness/agent-title-system/sprint-3-title-consumers-and-addressing (created) from harness/agent-title-system/sprint-2-title-model-plan
+- 2026-11-18T09:48:08Z | agent=omp | phase=negotiation | write | agent://NegSprint3R1
+- 2026-11-18T09:49:45Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-neg-1.md
+- 2026-11-18T09:49:49Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-neg-1-report.json
+[2026-11-18T09:50:39Z] negotiation: round=1 agent=generator signal=counter delta=Fn=1.0,Craft=0.85,Cons=0.9,Doc=0.85,max_iter=8,AS-4-fix file=feedback/generator-neg-1.md
+- 2026-11-18T09:59:16Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/evaluator-neg-1.md
+[2026-11-18T09:59:41Z] negotiation: round=1 agent=evaluator signal=counter delta=thresholds unchanged; scope += generator key defaults/docs/example + tools/AGENTS.md file=feedback/evaluator-neg-1.md
+- 2026-11-18T10:03:23Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-neg-2.md
+- 2026-11-18T10:03:30Z | agent=omp | phase=negotiation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-neg-2-report.json
+[2026-11-18T10:05:41Z] negotiation: round=2 agent=generator signal=accept delta=scope accepted; AS-4 frozen file=feedback/generator-neg-2.md
+[2026-11-18T10:05:56Z] decision: sprint-3 contract frozen @ 91aeb160fd94bbe0f6c138a96c681e690d529965
+- 2026-11-18T10:08:53Z | agent=omp | phase=impl | write | agent://ImplSprint3Iter1
+- 2026-11-18T10:17:51Z | agent=omp | phase=impl | edit | hermes_state_common.py
+- 2026-11-18T10:18:05Z | agent=omp | phase=impl | edit | hermes_state_schema.py
+- 2026-11-18T10:18:27Z | agent=omp | phase=impl | edit | hermes_state_agent_sessions.py
+- 2026-11-18T10:18:51Z | agent=omp | phase=impl | edit | hermes_session_paths.py
+- 2026-11-18T10:19:03Z | agent=omp | phase=impl | edit | hermes_session_paths.py
+- 2026-11-18T10:20:10Z | agent=omp | phase=impl | edit | agent/title_parser.py
+- 2026-11-18T10:20:14Z | agent=omp | phase=impl | edit | agent/title_parser.py
+- 2026-11-18T10:20:24Z | agent=omp | phase=impl | edit | agent/title_parser.py
+- 2026-11-18T10:20:34Z | agent=omp | phase=impl | edit | agent/title_parser.py
+- 2026-11-18T10:20:45Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T10:20:54Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T10:21:00Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T10:21:32Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:21:39Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:21:52Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:22:09Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:22:18Z | agent=omp | phase=impl | edit | agent/title_router.py
+- 2026-11-18T10:22:35Z | agent=omp | phase=impl | write | agent/task_label.py
+- 2026-11-18T10:22:43Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:22:52Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:00Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:10Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:15Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:21Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:31Z | agent=omp | phase=impl | edit | tools/agent_tool.py
+- 2026-11-18T10:23:44Z | agent=omp | phase=impl | edit | agent/run_artifacts.py
+- 2026-11-18T10:24:04Z | agent=omp | phase=impl | edit | tools/agent_message_tool.py
+- 2026-11-18T10:24:11Z | agent=omp | phase=impl | edit | tools/agent_message_tool.py
+- 2026-11-18T10:24:19Z | agent=omp | phase=impl | edit | tools/agent_message_tool.py
+- 2026-11-18T10:24:29Z | agent=omp | phase=impl | edit | tools/agent_message_tool.py
+- 2026-11-18T10:24:39Z | agent=omp | phase=impl | edit | hermes_cli/config_defaults_auxiliary.py
+- 2026-11-18T10:24:46Z | agent=omp | phase=impl | edit | cli-config.yaml.example
+- 2026-11-18T10:24:52Z | agent=omp | phase=impl | edit | website/docs/user-guide/configuration.md
+- 2026-11-18T10:25:01Z | agent=omp | phase=impl | edit | tools/AGENTS.md
+- 2026-11-18T10:26:22Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T10:26:37Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T10:26:51Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T10:32:32Z | agent=omp | phase=impl | edit | pyproject.toml
+- 2026-11-18T10:32:40Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T10:32:53Z | agent=omp | phase=impl | edit | tests/agent/test_title_generator.py
+- 2026-11-18T10:34:41Z | agent=omp | phase=impl | write | tests/hermes_state/test_agent_session_title.py
+- 2026-11-18T10:36:02Z | agent=omp | phase=impl | write | tests/agent/test_task_label.py
+- 2026-11-18T10:37:11Z | agent=omp | phase=impl | edit | tests/agent/test_task_label.py
+- 2026-11-18T10:38:28Z | agent=omp | phase=impl | edit | tests/test_session_paths.py
+- 2026-11-18T10:38:37Z | agent=omp | phase=impl | edit | tests/test_session_paths.py
+- 2026-11-18T10:40:38Z | agent=omp | phase=impl | edit | tests/tools/test_agent_tool.py
+- 2026-11-18T10:41:20Z | agent=omp | phase=impl | write | agent://ImplSprint3Iter1
+- 2026-11-18T10:41:50Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:41:59Z | agent=omp | phase=impl | edit | agent/title_generator.py
+- 2026-11-18T10:42:51Z | agent=omp | phase=impl | edit | tests/tools/test_agent_message.py
+- 2026-11-18T10:43:17Z | agent=omp | phase=impl | edit | tests/gateway/test_auto_skill_title_input.py
+- 2026-11-18T10:48:41Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/eval-title-consumers-and-addressing.sh
+- 2026-11-18T10:49:07Z | agent=omp | phase=impl | edit | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/eval-title-consumers-and-addressing.sh
+- 2026-11-18T10:51:03Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-1.md
+- 2026-11-18T10:51:12Z | agent=omp | phase=impl | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/generator-1-report.json
+[2026-11-18T10:52:31Z] agent=generator | phase=impl | omp-done | thread=unknown files=24 status=done
+- 2026-11-18T11:03:20Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/evidence/iter-1/probe_title_consumers.py
+- 2026-11-18T11:43:08Z | agent=omp | phase=evaluation | write | proc://bg_164/kill
+- 2026-11-18T11:56:04Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-3-title-consumers-and-addressing/feedback/evaluator-1.md
+[2026-11-18T11:57:55Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.92 documentation=0.9"

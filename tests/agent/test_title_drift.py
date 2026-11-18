@@ -396,3 +396,125 @@ def test_refresh_auto_title_never_bumps_a_higher_authority_or_a_user_name(db):
         "s2", "Downgraded", source=SessionDB.TITLE_SOURCE_DERIVED, expected_title="Upgraded"
     )
     assert db.get_session_title("s2") == "Upgraded"
+
+
+# ── AS-1: drift regeneration reuses the configured generator and the CAS ────────────────────
+
+
+def test_as1_drift_regeneration_uses_the_configured_generator_and_the_expected_title_cas(
+    monkeypatch, tmp_path, db, caplog,
+):
+    """A drifted ``llm`` title is regenerated through the plan generator (fork normalised) and
+    replaced with ``refresh_auto_title(expected_title=…)`` — never an unconditional write."""
+    import logging
+    from types import SimpleNamespace
+
+    from hermes_yaml import safe_dump
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        safe_dump({"auxiliary": {"title_generation": {
+            "enabled": True,
+            "model_upgrade_enabled": True,
+            "generator": "fork",
+            "provider": "openrouter",
+            "model": "title-model",
+            "timeout": 5,
+            "refresh_after_prompts": 1,
+        }}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    sid = _seeded_session(db)
+    calls: list[dict] = []
+
+    def transport(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="<title>Design settings page layout</title>"))])
+
+    monkeypatch.setattr(title_generator, "call_llm", transport)
+    monkeypatch.setattr(agent.judgment, "judge", lambda request, **kwargs: _judge_result(0.1))
+    refresh_calls: list[dict] = []
+    original_refresh = db.refresh_auto_title
+
+    def spy_refresh(*args, **kwargs):
+        refresh_calls.append(dict(kwargs))
+        return original_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(db, "refresh_auto_title", spy_refresh)
+    caplog.set_level(logging.DEBUG, logger="agent.title_generator")
+
+    result = maybe_refresh_title_drift(
+        _agent(db, sid), db, sid,
+        _messages(
+            ("user", "Design the settings page layout"),
+            ("assistant", "Here is the grid plan"),
+        ),
+        final_status="completed",
+    )
+
+    assert result == "Design settings page layout"
+    assert db.get_session_title(sid) == "Design settings page layout"
+    assert db.get_session_title_source(sid) == SessionDB.TITLE_SOURCE_LLM
+    assert [(call["task"], call["provider"], call["model"]) for call in calls] == [
+        ("title_generation", "openrouter", "title-model")
+    ]
+    assert refresh_calls == [{"source": "llm", "expected_title": "Fix parser crash on empty input"}]
+    assert "generator=fork normalised to the plan path" in caplog.text
+
+
+def test_as1_model_upgrade_off_closes_the_drift_path(monkeypatch, tmp_path, db):
+    """``model_upgrade_enabled=false`` keeps the derived title: no judge, no regeneration, no thread.
+
+    ADR-21 D3 closes every stage-1 path on that switch. Drift is one of them — otherwise the
+    interval would spend a judgment plus a title call the operator just opted out of.
+    """
+    from hermes_yaml import safe_dump
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        safe_dump({"auxiliary": {"title_generation": {
+            "enabled": True,
+            "model_upgrade_enabled": False,
+            "provider": "openrouter",
+            "model": "title-model",
+            "timeout": 5,
+            "refresh_after_prompts": 1,
+        }}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    sid = _seeded_session(db)
+    judged: list[object] = []
+    monkeypatch.setattr(
+        agent.judgment, "judge",
+        lambda request, **kwargs: judged.append(request) or _judge_result(0.1),
+    )
+    model_calls: list[dict] = []
+
+    def transport(**kwargs):
+        model_calls.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content="<title>Should not be used</title>"))])
+
+    monkeypatch.setattr(title_generator, "call_llm", transport)
+    messages = _messages(
+        ("user", "Design the settings page layout"),
+        ("assistant", "Here is the grid plan"),
+    )
+
+    assert maybe_refresh_title_drift(_agent(db, sid), db, sid, messages,
+                                     final_status="completed") is None
+    assert judged == []
+    assert model_calls == []
+    assert db.get_session_title(sid) == "Fix parser crash on empty input"
+
+    spawned: list[object] = []
+    monkeypatch.setattr("hermes_threading.spawn_context_thread",
+                        lambda *args, **kwargs: spawned.append(args))
+    assert start_title_drift_check(_agent(db, sid), messages, final_status="completed") is None
+    assert spawned == []

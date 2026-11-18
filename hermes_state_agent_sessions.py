@@ -100,6 +100,64 @@ class SessionAgentSessionsMixin:
             (str(path or ""), time.time(), str(agent_session_id)),
         ))
 
+    def set_agent_session_title(self, agent_session_id: str, title: str) -> bool:
+        """Write the task label once (ADR-21 D7): ``''`` -> *title*, never *title* -> *title'*.
+
+        The single write path is ``UPDATE … SET title=? WHERE agent_session_id=? AND title=''``;
+        ``rowcount == 0`` means the row was already labelled (or vanished) and the label is kept.
+        A live run already holding the same label (case-insensitive) makes this write take the
+        next `` 2`` / `` 3`` suffix — decided and applied inside this one write transaction, so
+        two concurrent labellers can never both settle on the same address. An empty label is
+        refused before SQL: ``title=''`` is the unlabelled sentinel, not a name.
+        """
+        label = " ".join(str(title or "").split())
+        if not label:
+            return False
+
+        def _write(conn) -> bool:
+            row = conn.execute(
+                "SELECT title FROM agent_session WHERE agent_session_id=?",
+                (str(agent_session_id),),
+            ).fetchone()
+            if row is None or str(row[0] or "").strip():
+                return False
+            candidate, suffix = label, 1
+            while conn.execute(
+                "SELECT 1 FROM agent_session WHERE agent_session_id<>? AND title<>'' "
+                "AND lower(title)=lower(?) AND status IN ('running', 'parked') LIMIT 1",
+                (str(agent_session_id), candidate),
+            ).fetchone() is not None:
+                suffix += 1
+                candidate = f"{label} {suffix}"
+            cursor = conn.execute(
+                "UPDATE agent_session SET title=? WHERE agent_session_id=? AND title=''",
+                (candidate, str(agent_session_id)),
+            )
+            return cursor.rowcount > 0
+
+        return bool(self._execute_write(_write))
+
+    def get_agent_sessions_by_title(self, title: str) -> list[dict[str, Any]]:
+        """Every session addressed by *title*, exact match first, then a case-insensitive pass.
+
+        ``agent_message.to`` resolves labels by exact ``title=?`` (the index), and only when that
+        misses does it compare non-empty labels casefolded in Python — the run count is bounded
+        by the profile, so no second index is worth keeping (ADR-21 D7). More than one row is
+        the caller's ambiguity to report, never a reason to guess the first.
+        """
+        label = " ".join(str(title or "").split())
+        if not label:
+            return []
+        rows = self._read_all("SELECT * FROM agent_session WHERE title=?", (label,))
+        if rows:
+            return [_decode(row) for row in rows]
+        folded = label.casefold()
+        return [
+            _decode(row)
+            for row in self._read_all("SELECT * FROM agent_session WHERE title<>''")
+            if str(row["title"] or "").casefold() == folded
+        ]
+
     def finish_agent_session(
         self, agent_session_id: str, *, status: str, final_response: Optional[str] = None,
         transcript_path: Optional[str] = None, artifact_manifest: Any = None,
