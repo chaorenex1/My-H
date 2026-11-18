@@ -145,3 +145,4 @@ Written by the harness hook and by agents; never rewritten.
 - 2026-11-18T09:24:59Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/evidence/iter-1/probe_title_model_plan.py
 - 2026-11-18T09:30:36Z | agent=omp | phase=evaluation | write | .harness/agent-title-system/sprints/sprint-2-title-model-plan/feedback/evaluator-1.md
 [2026-11-18T09:34:31Z] evaluation: iter=1 verdict=pass axes="functionality=1.0 craft=0.9 consistency=0.95 documentation=0.9"
+- 2026-11-18T09:36:23Z | agent=omp | phase=pr | write | C:/Users/zarag/AppData/Local/Temp/pr-body-sprint-2.md

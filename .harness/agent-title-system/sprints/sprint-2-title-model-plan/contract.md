@@ -37,7 +37,7 @@ rubric:
     threshold: 0.85
     description: 公共入口 docstring 说明顺序、去重键、门控与终止语义；本 sprint 不新增用户文档。
 max_iterations: 8
-status: active
+status: done
 ---
 
 # Sprint 2 Contract — title-model-plan
