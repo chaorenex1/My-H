@@ -39,7 +39,9 @@ LLM生成的候选词+Judgment决策的工具组合，执行工具调用
 - 请求级模板（`irc_incoming`、`eager_task`、`eager_todo`、`subagent_*` reminder、
   `session_tool_search_notice`、`session_skill_search_notice`、
   `background_review_skill_reminder`、`background_review_memory_reminder`、
-  `title_system`（ADR-21 D5 命名提示词，`title_language` 变量）、`task_label`）保持
+  `title_system`（ADR-21 D5 命名提示词，`title_language` 变量）、`title_fork`（命名副回合，
+  `card`/`title_language`/`nerd_fonts`）、`title_card`（卡片补请求，`nerd_fonts`）、
+  `task_label`）保持
   `scope: request`，只由 `renderer.render_request(key, context)` 渲染（拒绝 `system` 键），
   不进入系统提示。`subagent_system_prompt` 是例外：它是子代理角色块，经同一入口渲染后由
   `assemble_subagent` 追加在共享 base 之后。新模板的注入时机与数据契约见

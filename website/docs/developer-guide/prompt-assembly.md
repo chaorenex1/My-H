@@ -68,9 +68,10 @@ keeps the bare-prompt contract: no role block is built and `context` is appended
 Request-level templates (`scope: request` — `irc_incoming`, `eager_task`, `eager_todo`, the
 `subagent_*` reminders, the session notices `session_tool_search_notice`,
 `session_skill_search_notice`, `background_review_skill_reminder`,
-`background_review_memory_reminder`, and the naming pair `title_system` (carries the optional
-`title_language`) / `task_label`, ADR-21 D5) render only through `renderer.render_request(key,
-context)`.
+`background_review_memory_reminder`, and the naming templates `title_system` (carries the
+optional `title_language`), `title_fork` (the naming side turn: `card`, `title_language`,
+`nerd_fonts`), `title_card` (the card top-up: `nerd_fonts`) and `task_label`, ADR-21 D5) render
+only through `renderer.render_request(key, context)`.
 It rejects a `system` key and the assembler's block sequence never calls it, so those bytes ride a
 user/tool row. `subagent_system_prompt` is the one request-scope template that is part of the system
 prompt: `agent_run` renders it through the same entry, and `system_prompt` places it in the

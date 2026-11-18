@@ -636,8 +636,10 @@ def test_manifest_scope_splits_system_and_request_sections():
         "background_review_skill_reminder",
         "background_review_memory_reminder",
         "workpool_batch",
-        # ADR-21 D5: the naming service's request-level prompt and task label.
+        # ADR-21 D5: the naming service's request-level prompts (system, fork, card) and label.
         "title_system",
+        "title_fork",
+        "title_card",
         "task_label",
     }
     system = {key for key, section in sections.items() if section.scope == "system"}
@@ -759,6 +761,91 @@ def test_task_label_renders_without_variables_and_rejects_undeclared_ones():
     assert "{" not in out and "}" not in out  # no undeclared-variable residue
     with pytest.raises(ps.PromptSectionError):
         renderer.render_request("task_label", {"assignment": "Fix the login bug"})
+
+
+def test_title_card_and_title_fork_are_request_scope_templates():
+    """AS-2: both card templates are registered ``scope=request`` with the same manifest shape as
+    ``title_system`` and their own declared context keys."""
+    sections = ps.load_sections()
+    baseline = sections["title_system"]
+
+    card = sections["title_card"]
+    assert card.path == "title-card.md"
+    assert card.context_keys == ("nerd_fonts",)
+    assert dict(card.context_types) == {"nerd_fonts": "bool"}
+
+    fork = sections["title_fork"]
+    assert fork.path == "title-fork.md"
+    assert fork.context_keys == ("card", "title_language", "nerd_fonts")
+    assert dict(fork.context_types) == {
+        "card": "bool", "title_language": "str", "nerd_fonts": "bool",
+    }
+
+    for section in (card, fork):
+        assert section.scope == "request"
+        assert section.tier == baseline.tier
+        assert section.gate == baseline.gate
+        assert section.budget == baseline.budget
+        assert section.truncate == baseline.truncate
+        assert section.override == baseline.override
+        assert section.renderer == baseline.renderer
+
+
+def test_title_card_and_title_fork_render_every_naming_variant():
+    """AS-2: the Go→Jinja conversion renders under StrictUndefined for both ``title_language``
+    bytes, with the card/plain guidance and the language line exactly before ``</title-request>``."""
+    from agent.prompts import renderer
+
+    card_prompt = renderer.render_request("title_card", {"nerd_fonts": False})
+    plain = renderer.render_request(
+        "title_fork", {"card": False, "title_language": "", "nerd_fonts": False}
+    )
+    carded = renderer.render_request(
+        "title_fork", {"card": True, "title_language": "", "nerd_fonts": False}
+    )
+    french = renderer.render_request(
+        "title_fork", {"card": True, "title_language": "French", "nerd_fonts": False}
+    )
+
+    assert card_prompt and "emoji" in card_prompt and "code" in card_prompt
+    assert plain and carded and french
+    assert "<title emoji=" in carded and "- code:" in carded
+    assert "<title>Fix flaky park tests</title>" in plain
+    assert "emoji=" not in plain
+    assert "Write the title in" not in plain
+
+    lines = french.splitlines()
+    closing = max(index for index, line in enumerate(lines) if line.strip() == "</title-request>")
+    assert [line for line in lines[:closing] if line.strip()][-1] == "- Write the title in French."
+
+    for rendered in (card_prompt, plain, carded, french):
+        assert "{{#if" not in rendered
+        assert "{{else" not in rendered
+        assert "{{/if}}" not in rendered
+    for rendered in (card_prompt, plain, carded, french):
+        for nerd_font_marker in ("nf:", "nf-", "Nerd Fonts"):
+            assert nerd_font_marker not in rendered
+
+
+def test_card_templates_fail_loudly_when_a_declared_key_is_missing():
+    """AS-2: a declared-but-missing key fails the render (ADR-18 D13), never a silently empty
+    section, and both keys stay rejected by the system-scope entry."""
+    from agent.prompts import renderer
+
+    with pytest.raises(ps.PromptSectionError):
+        renderer.render_request("title_card", {})
+    with pytest.raises(ps.PromptSectionError):
+        renderer.render_request("title_fork", {"card": True, "nerd_fonts": False})
+    with pytest.raises(ps.PromptSectionError):
+        renderer.render_request("title_fork", {"title_language": "", "nerd_fonts": False})
+    with pytest.raises(ps.PromptSectionError):
+        ps.render_section("title_card", {"nerd_fonts": False}, scope="system")
+    with pytest.raises(ps.PromptSectionError):
+        ps.render_section(
+            "title_fork",
+            {"card": True, "title_language": "", "nerd_fonts": False},
+            scope="system",
+        )
 
 
 def test_title_marker_instruction_stays_unregistered():

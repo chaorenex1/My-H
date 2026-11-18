@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, Optional
 
 from agent.message_sanitization import _sanitize_surrogates
+from agent.title_card import split_card_title
 from hermes_state_common import (
     _COMPRESSION_CHILD_SQL, _RECOVERABLE_END_REASONS, _RECOVERABLE_END_REASONS_SQL,
     _non_continuation_child_sql, escape_like as _escape_like,
@@ -308,7 +309,13 @@ class SessionTitlesMixin:
         return None if released else session
 
     def resolve_session_by_title(self, title: str) -> Optional[str]:
-        """Resolve a title to a session ID, preferring the latest "title #N" continuation."""
+        """Resolve a title to a session ID, preferring the latest "title #N" continuation.
+
+        Exact → ``<title> #N`` → de-carded: a user who types the plain half of a carded title
+        (``Fix flaky park tests``) still reaches ``🅿️ PARK: Fix flaky park tests``. The card scan
+        runs only after both exact lookups miss, so a real session named exactly the query always
+        wins.
+        """
         exact = self.get_session_by_title(title)
         # Exception to the "#N continuation" preference: the canonical Bot Chat's identity
         # IS its exact title (Bot Mode re-resolves it by name on every open, no id pointer).
@@ -326,7 +333,27 @@ class SessionTitlesMixin:
             "SELECT id, title, started_at FROM sessions "
             "WHERE title LIKE ? ESCAPE '\\' ORDER BY started_at DESC",
             (f"{_escape_like(title)} #%",))
-        return numbered[0]["id"] if numbered else (exact["id"] if exact else None)
+        if numbered:
+            return numbered[0]["id"]
+        return exact["id"] if exact is not None else self._resolve_card_stripped_title(title)
+
+    def _resolve_card_stripped_title(self, plain: str) -> Optional[str]:
+        """A row whose title is *plain* with a card in front (ADR-21 D11 lookup fallback).
+
+        The LIKE is a bounded prefilter (``title LIKE '%: ' || escaped_plain``): ``%``/``_`` in
+        *plain* are escaped, newest first, and each candidate is re-checked with
+        ``split_card_title`` in Python so a title that merely ends in the same words is not a hit.
+        """
+        if not plain:
+            return None
+        rows = self._read_all(
+            "SELECT id, title FROM sessions WHERE title LIKE ? ESCAPE '\\' "
+            "ORDER BY started_at DESC",
+            (f"%: {_escape_like(plain)}",))
+        for row in rows:
+            if split_card_title(row["title"])[1] == plain:
+                return row["id"]
+        return None
 
     def get_next_title_in_lineage(self, base_title: str) -> str:
         """Next title in a lineage ("my session" -> "my session #2")."""

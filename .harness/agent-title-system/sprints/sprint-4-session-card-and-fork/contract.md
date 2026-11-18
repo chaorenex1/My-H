@@ -39,7 +39,7 @@ rubric:
     threshold: 0.85
     description: Docstrings and template comments describe the shipped card/fork behavior, not the retired paths
 max_iterations: 8
-status: active
+status: done
 ---
 
 # Sprint 4 Contract — session-card-and-fork
@@ -377,8 +377,8 @@ request-scope 键集；本 sprint 恰好新增 `title_card` 与 `title_fork` 两
 
 ## Sprint Outcome
 
-- **Final iteration**:
-- **Last commit**:
-- **Aborted reason** (if any):
-- **PR**:
+- **Final iteration**: 1 (verdict pass; Fn 1.0 / Craft 0.9 / Consistency 0.9 / Documentation 0.9)
+- **Last commit**: (recorded in the outcome commit)
+- **Aborted reason** (if any): none
+- **PR**: (recorded after Step 8)
 

@@ -41,6 +41,10 @@ def _title_plan_route(request, monkeypatch):
             "title_generation": {
                 "enabled": True,
                 "model_upgrade_enabled": True,
+                # These cases patch ``generate_title``/``call_llm`` to exercise the plan path's
+                # guards; pin the generator so no fork/card request joins the single expected call
+                # (the fork default and its top-up predicate live in test_title_fork.py).
+                "generator": "plan",
                 "provider": "test",
                 "model": "title-model",
                 "timeout": 5,
@@ -1051,13 +1055,17 @@ def test_as1_generator_plan_spends_only_the_first_successful_candidate(tmp_path,
     assert [(call["task"], call["provider"], call["model"]) for call in transport.calls] == [
         ("title_generation", "openrouter", "title-model")
     ]
-    # generator=plan is the implemented path: no degradation marker.
-    assert "normalised to the plan path" not in caplog.text
+    # generator=plan never runs the fork and never tops the card up.
+    assert "title-card" not in caplog.text
     database.close()
 
 
 @pytest.mark.real_title_config
-def test_as1_unset_generator_normalises_to_plan_with_a_debug_marker(tmp_path, monkeypatch, caplog):
+def test_as1_unset_generator_runs_the_fork_default_and_tops_up_the_card(
+    tmp_path, monkeypatch, caplog
+):
+    """AS-4(c): an unset ``generator`` behaves like ``fork``. No parent is passed here, so the plan
+    runs, and its plain title earns the single ``title-card`` request."""
     _write_title_home(monkeypatch, tmp_path, _plan_auxiliary())
     transport = _PlanTransport()
     monkeypatch.setattr("agent.title_generator.call_llm", transport)
@@ -1069,13 +1077,17 @@ def test_as1_unset_generator_normalises_to_plan_with_a_debug_marker(tmp_path, mo
 
     assert database.get_session_title("sess-1") == "Investigate the flaky login test"
     assert database.get_session_title_source("sess-1") == "llm"
-    assert [call["task"] for call in transport.calls] == ["title_generation"]
-    assert "generator=fork normalised to the plan path" in caplog.text
+    # The plan candidate plus one card request, both billed to title_generation.
+    assert [call["task"] for call in transport.calls] == ["title_generation", "title_generation"]
+    assert "normalised to the plan path" not in caplog.text
     database.close()
 
 
 @pytest.mark.real_title_config
-def test_as1_explicit_fork_normalises_to_the_same_plan_path(tmp_path, monkeypatch, caplog):
+def test_as1_explicit_fork_without_a_parent_falls_back_to_the_plan(
+    tmp_path, monkeypatch, caplog
+):
+    """AS-4(a): an unavailable session model (no parent) is a fork fallback, not a silent skip."""
     _write_title_home(monkeypatch, tmp_path, _plan_auxiliary(generator="fork"))
     transport = _PlanTransport()
     monkeypatch.setattr("agent.title_generator.call_llm", transport)
@@ -1087,9 +1099,7 @@ def test_as1_explicit_fork_normalises_to_the_same_plan_path(tmp_path, monkeypatc
 
     assert database.get_session_title("sess-1") == "Investigate the flaky login test"
     assert database.get_session_title_source("sess-1") == "llm"
-    assert [call["task"] for call in transport.calls] == ["title_generation"]
-    # The same marker as the unset case: both normalise, neither skips naming silently.
-    assert "generator=fork normalised to the plan path" in caplog.text
+    assert [call["task"] for call in transport.calls] == ["title_generation", "title_generation"]
     database.close()
 
 

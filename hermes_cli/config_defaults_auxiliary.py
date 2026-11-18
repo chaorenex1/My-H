@@ -92,9 +92,13 @@ def auxiliary_defaults() -> dict:
         "title_generation": {
             "enabled": True,
             "model_upgrade_enabled": True,  # False = keep the instant derived title, never call a model
-            # plan | fork (ADR-21 D6). fork runs the titling as a side turn and is the default;
-            # until the fork path lands, an unset key and explicit fork both normalise to plan.
+            # plan | fork (ADR-21 D6). fork runs the titling as a side turn over the main reply's
+            # prefix and is the default: an unset key and an unknown value keep it, and a fork
+            # failure falls back to the candidate plan.
             "generator": "fork",
+            # emoji | boring (ADR-21 D11). The card (icon + code) heads the stored title; boring
+            # stores the plain title, sends no card request and asks for no card.
+            "card_icons": "emoji",
             # session_search no longer uses an aux LLM (#27590); leftover auxiliary.session_search is ignored.
             "provider": "auto",
             "model": "",

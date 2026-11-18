@@ -25,7 +25,7 @@
 - AS-2 `title-card.md`/`title-fork.md` Go→Jinja + `scope=request` 注册（`title_card` / `title_fork`）
 - AS-3 fork 副回合前缀一致性与 transcript/leaf 隔离；usage 记 `title_generation`
 - AS-4 fork 失败矩阵回落 `title_model_plan`；`generator=fork` 且 `card_icons != boring` 时补一次卡片请求
-- AS-5 `card_icons=boring`：不请求、不解析卡片
+- AS-5 `card_icons=boring` 是命名管线的门（`split_card_title` 仍解析）：不请求卡片、存储去卡文本、重生成不恢复旧卡
 - AS-6 卡片保留、`<title/>` 终止、去卡比较/漂移/检索
 - AS-7 手工标题不触发模型/卡片；命名路径不消费 Nerd Font
 
@@ -35,7 +35,8 @@
   Format: `sprint-<N>-contract.md @ <SHA>`
 -->
 
-- _awaiting negotiation completion_
+- sprint-4-contract.md @ 747baf507fa794384e042bdc4f1a190eaddb9750
+- frozen: Functionality 1.0 / Craft 0.85 / Consistency 0.9 / Documentation 0.85; max_iterations 8
 
 ## Negotiation
 <!--
@@ -43,7 +44,10 @@
   live in feedback/{role}-<iter>.md. Keep this terse: round, outcome.
 -->
 
-- _awaiting round 1_
+- [2026-11-18T13:27:06Z] round=1 agent=generator signal=counter delta="F1.0/C0.85/K0.9/D0.85, iter 8" file=feedback/generator-neg-1.md
+- [2026-11-18T13:37:39Z] round=1 agent=evaluator signal=counter delta="thresholds+iter accepted; body AS-2/3/5/6, test set, docs surface counter" file=feedback/evaluator-neg-1.md
+- [2026-11-18T13:47:14Z] round=2 agent=generator signal=accept delta="counter adopted verbatim + P1-P6 precision notes" file=feedback/generator-neg-2.md
+- [2026-11-18T13:56:39Z] round=2 agent=evaluator signal=skipped delta="round resolved on accept; round-1 proposal adopted"
 
 ## WorkLog
 <!--
@@ -52,7 +56,7 @@
   Detailed per-iteration notes go to feedback/generator-<iter>.md.
 -->
 
-- _no iterations yet_
+- [2026-11-18T15:30:00Z] iter=1 agent=generator action="title_card parser + Jinja card/fork templates + fork-first naming with plan fallback, one-shot card top-up, card-preserving drift, de-carded lookup" files=29
 
 ## Evaluation
 <!--
@@ -62,7 +66,7 @@
   feedback/evaluator-<iter>.md and evidence/.
 -->
 
-- _no evaluations yet_
+- [2026-11-18T15:24:31Z] iter=1 agent=evaluator verdict=pass axes="fn=1.0 craft=0.9 consistency=0.9 documentation=0.9" evidence=evidence/iter-1/
 
 ## Decisions
 <!--
@@ -73,6 +77,9 @@
     - Human escalations (pending_human set, who approved, when resumed)
 -->
 
-- _no decisions yet_
+- [2026-11-18T13:56:39Z] decision: sprint-4 contract frozen @ 747baf507fa794384e042bdc4f1a190eaddb9750
 - [2026-11-18T13:28:50Z] round=1 agent=generator signal=counter delta="Functionality 1.0 / Craft 0.85 / Consistency 0.9 / Documentation 0.85, max_iterations 8" file=feedback/generator-neg-1.md
 - [2026-11-18T13:41:09Z] round=1 agent=evaluator signal=counter delta="thresholds 1.0/0.85/0.9/0.85 + iter 8 accepted; counter on AS-2/3/5/6 body contradictions, manifest test set, docs surface" file=feedback/evaluator-neg-1.md
+
+- [2026-11-18T15:30:00Z] decision: sprint-4 iter-1 verdict pass (all axes >= threshold); contract status done, phase pr
+- [2026-11-18T15:30:00Z] decision: PR opened: sprint-4 (pending URL) (bundling=split)
